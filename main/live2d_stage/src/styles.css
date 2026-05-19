@@ -78,14 +78,79 @@ body {
 
 .live2d-canvas {
   position: absolute;
-  inset: var(--stage-inset) var(--stage-inset) var(--stage-control-safe);
+  inset: var(--stage-inset);
   z-index: 1;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.live2d-canvas.is-dragging {
+  cursor: grabbing;
 }
 
 .live2d-canvas canvas {
   display: block;
   width: 100% !important;
   height: 100% !important;
+}
+
+.model-scale-panel {
+  position: absolute;
+  left: 50%;
+  top: 18%;
+  z-index: 5;
+  width: min(260px, calc(100% - 44px));
+  padding: 12px 14px;
+  border: 1px solid rgba(17, 24, 20, 0.14);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.93);
+  box-shadow: 0 16px 44px rgba(40, 52, 44, 0.16);
+}
+
+.model-scale-close {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  width: 26px;
+  height: 26px;
+  border: 1px solid rgba(17, 24, 20, 0.10);
+  border-radius: 999px;
+  color: var(--ink);
+  font-size: 18px;
+  font-weight: 900;
+  line-height: 1;
+  background: rgba(255, 255, 255, 0.86);
+  cursor: pointer;
+}
+
+.model-scale-panel label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-right: 30px;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.model-scale-panel input {
+  width: 100%;
+  accent-color: var(--green);
+}
+
+.model-scale-panel button:not(.model-scale-close) {
+  width: 100%;
+  margin-top: 8px;
+  border: 0;
+  border-radius: 999px;
+  padding: 9px 12px;
+  color: white;
+  font-weight: 900;
+  background: var(--green);
+  cursor: pointer;
 }
 
 .reply-bubble {
@@ -594,6 +659,26 @@ button:nth-child(2) {
   color: var(--ink);
   background: rgba(255, 255, 255, 0.82);
   border: 1px solid var(--line);
+}
+
+.audio-transcript {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid rgba(17, 24, 20, 0.10);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.audio-transcript span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.audio-transcript strong {
+  color: var(--ink);
+  line-height: 1.55;
 }
 
 .camera-window {

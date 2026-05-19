@@ -28,6 +28,19 @@ const STAGE_MODEL_FIT = {
     centerY: 0.98,
   },
 };
+const MODEL_TRANSFORM_STORAGE_KEY = "visual-companion.live2d-model-transform";
+const MODEL_TRANSFORM_LIMITS = {
+  scaleMin: 0.4,
+  scaleMax: 2.6,
+  offsetXMin: -1.2,
+  offsetXMax: 1.2,
+  offsetYMin: -1.1,
+  offsetYMax: 1.1,
+};
+const MODEL_WHEEL_ZOOM_STEP = 0.0015;
+const MODEL_CLICK_MOVE_TOLERANCE_PX = 6;
+const SPEECH_RECOGNITION_LANG = "zh-CN";
+const SPEECH_RECOGNITION_RESTART_DELAY_MS = 500;
 const CAMERA_DEFAULT_STORAGE_KEY = "visual-companion.default-camera-id";
 const CAMERA_WINDOW_POSITION_STORAGE_KEY = "visual-companion.camera-window-position";
 const CAMERA_WINDOW_WIDTH_STORAGE_KEY = "visual-companion.camera-window-width";
@@ -163,6 +176,12 @@ const modelState = {
   voiceRuntimeRequestId: 0,
   fitModelFrame: 0,
   stageResizeObserver: null,
+  modelTransform: {
+    scale: 1,
+    offsetX: 0,
+    offsetY: 0,
+  },
+  modelDrag: null,
   cameraDevices: [],
   selectedCameraId: "",
   defaultCameraId: "",
@@ -179,6 +198,12 @@ const modelState = {
   audioLevelData: null,
   audioLevelFrame: 0,
   audioDrag: null,
+  audioRecognition: null,
+  audioRecognitionActive: false,
+  audioRecognitionRestartTimer: 0,
+  audioRecognitionPausedForSpeech: false,
+  audioRecognitionDraft: "",
+  chatRequestInFlight: false,
 };
 
 const statusEl = document.getElementById("stageStatus");
@@ -194,6 +219,11 @@ const chatForm = document.getElementById("chatForm");
 const chatInput = document.getElementById("chatInput");
 const speechRateInput = document.getElementById("speechRateInput");
 const speechRateValue = document.getElementById("speechRateValue");
+const modelScalePanel = document.getElementById("modelScalePanel");
+const modelScaleCloseButton = document.getElementById("modelScaleCloseButton");
+const modelScaleInput = document.getElementById("modelScaleInput");
+const modelScaleValue = document.getElementById("modelScaleValue");
+const modelTransformResetButton = document.getElementById("modelTransformResetButton");
 const actionPanel = document.getElementById("actionPanel");
 const voicePanel = document.getElementById("voicePanel");
 const skinPanel = document.getElementById("skinPanel");
@@ -223,6 +253,7 @@ const audioStartButton = document.getElementById("audioStartButton");
 const audioStopButton = document.getElementById("audioStopButton");
 const audioDefaultButton = document.getElementById("audioDefaultButton");
 const audioStatusEl = document.getElementById("audioStatus");
+const audioTranscriptEl = document.getElementById("audioTranscript");
 const audioWindowEl = document.getElementById("audioWindow");
 const audioWindowStatusEl = document.getElementById("audioWindowStatus");
 const controlLogEl = document.getElementById("controlLog");
@@ -405,9 +436,11 @@ async function initStage() {
 
   const model = await PIXI.live2d.Live2DModel.from(MODEL_URL, { autoInteract: false });
   modelState.model = model;
+  modelState.modelTransform = loadModelTransform();
   app.stage.addChild(model);
   resetDisplayParameters();
   fitModel();
+  syncModelScaleControl();
 
   window.addEventListener("resize", handleViewportResize);
   if ("ResizeObserver" in window) {
@@ -415,11 +448,86 @@ async function initStage() {
     modelState.stageResizeObserver.observe(canvasHost);
   }
   setupPointerTracking();
+  setupModelTransformControls();
   app.ticker.add(updateModelParameters);
   setStatus("Live2D 模型已加载", "可以直接在下方输入框对话，或从右侧动作盘手动测试动作。");
   await loadVoiceModels();
   await loadInitialControl();
   scheduleIdleAction();
+}
+
+function defaultModelTransform() {
+  return {
+    scale: 1,
+    offsetX: 0,
+    offsetY: 0,
+  };
+}
+
+function sanitizeModelTransform(value) {
+  const fallback = defaultModelTransform();
+  const source = value && typeof value === "object" ? value : fallback;
+  return {
+    scale: clamp(Number(source.scale) || fallback.scale, MODEL_TRANSFORM_LIMITS.scaleMin, MODEL_TRANSFORM_LIMITS.scaleMax),
+    offsetX: clamp(Number(source.offsetX) || fallback.offsetX, MODEL_TRANSFORM_LIMITS.offsetXMin, MODEL_TRANSFORM_LIMITS.offsetXMax),
+    offsetY: clamp(Number(source.offsetY) || fallback.offsetY, MODEL_TRANSFORM_LIMITS.offsetYMin, MODEL_TRANSFORM_LIMITS.offsetYMax),
+  };
+}
+
+function loadModelTransform() {
+  const storedValue = readStoredValue(MODEL_TRANSFORM_STORAGE_KEY);
+  if (!storedValue) {
+    return defaultModelTransform();
+  }
+
+  try {
+    return sanitizeModelTransform(JSON.parse(storedValue));
+  } catch (error) {
+    writeStoredValue(MODEL_TRANSFORM_STORAGE_KEY, "");
+    addControlLog("人物位置配置已重置", { error: error.message });
+    return defaultModelTransform();
+  }
+}
+
+function persistModelTransform() {
+  const transform = sanitizeModelTransform(modelState.modelTransform);
+  modelState.modelTransform = transform;
+  const shouldClear =
+    transform.scale === 1
+    && transform.offsetX === 0
+    && transform.offsetY === 0;
+  if (shouldClear) {
+    writeStoredValue(MODEL_TRANSFORM_STORAGE_KEY, "");
+    return;
+  }
+
+  writeStoredValue(
+    MODEL_TRANSFORM_STORAGE_KEY,
+    JSON.stringify({
+      scale: Number(transform.scale.toFixed(4)),
+      offsetX: Number(transform.offsetX.toFixed(4)),
+      offsetY: Number(transform.offsetY.toFixed(4)),
+    }),
+  );
+}
+
+function setModelTransform(nextTransform, options = {}) {
+  modelState.modelTransform = sanitizeModelTransform(nextTransform);
+  fitModel();
+  syncModelScaleControl();
+  if (options.save) {
+    persistModelTransform();
+  }
+}
+
+function syncModelScaleControl() {
+  if (!modelScaleInput || !modelScaleValue) {
+    return;
+  }
+
+  const transform = sanitizeModelTransform(modelState.modelTransform);
+  modelScaleInput.value = String(transform.scale.toFixed(2));
+  modelScaleValue.textContent = `${Math.round(transform.scale * 100)}%`;
 }
 
 function fitModel() {
@@ -437,15 +545,40 @@ function fitModel() {
   const safeWidth = Math.max(bounds.width, 1);
   const safeHeight = Math.max(bounds.height, 1);
   const fit = STAGE_VIEW_MODE === "fullbody" ? STAGE_MODEL_FIT.fullbody : STAGE_MODEL_FIT.portrait;
-  const baseScale = Math.min((width * fit.widthRatio) / safeWidth, (height * fit.heightRatio) / safeHeight);
-  const scale = STAGE_VIEW_MODE === "portrait" ? baseScale * 2.35 : baseScale;
+  const fitFrame = modelFitFrame(width, height);
+  const baseScale = Math.min((fitFrame.width * fit.widthRatio) / safeWidth, (fitFrame.height * fit.heightRatio) / safeHeight);
+  const fitScale = STAGE_VIEW_MODE === "portrait" ? baseScale * 2.35 : baseScale;
+  const transform = sanitizeModelTransform(modelState.modelTransform);
+  modelState.modelTransform = transform;
+  const scale = fitScale * transform.scale;
   model.scale.set(scale);
-  model.x = width * fit.centerX - (bounds.x + safeWidth / 2) * scale;
+  model.x = fitFrame.x + fitFrame.width * fit.centerX - (bounds.x + safeWidth / 2) * scale + width * transform.offsetX;
   if (STAGE_VIEW_MODE === "fullbody") {
-    model.y = height * fit.bottomY - (bounds.y + safeHeight) * scale;
+    model.y = fitFrame.y + fitFrame.height * fit.bottomY - (bounds.y + safeHeight) * scale + height * transform.offsetY;
     return;
   }
-  model.y = height * fit.centerY - (bounds.y + safeHeight / 2) * scale;
+  model.y = fitFrame.y + fitFrame.height * fit.centerY - (bounds.y + safeHeight / 2) * scale + height * transform.offsetY;
+}
+
+function modelFitFrame(width, height) {
+  const canvasRect = canvasHost.getBoundingClientRect();
+  const chatRect = chatForm.getBoundingClientRect();
+  const chatTop = chatRect.top - canvasRect.top;
+  if (Number.isFinite(chatTop) && chatTop > height * 0.45) {
+    return {
+      x: 0,
+      y: 0,
+      width,
+      height: Math.min(height, chatTop),
+    };
+  }
+
+  return {
+    x: 0,
+    y: 0,
+    width,
+    height,
+  };
 }
 
 function requestFitModel() {
@@ -483,6 +616,208 @@ function setupPointerTracking() {
       resetPointerTarget();
     }
   });
+}
+
+function setupModelTransformControls() {
+  canvasHost.addEventListener("pointerdown", startModelDrag);
+  canvasHost.addEventListener("pointermove", moveModelDrag);
+  canvasHost.addEventListener("pointerup", finishModelDrag);
+  canvasHost.addEventListener("pointercancel", finishModelDrag);
+  canvasHost.addEventListener("lostpointercapture", finishModelDrag);
+  canvasHost.addEventListener("wheel", zoomModelFromWheel, { passive: false });
+  canvasHost.addEventListener("dblclick", resetModelTransformFromPointer);
+  document.addEventListener("pointerdown", hideModelScalePanelFromOutside);
+  modelScaleCloseButton.addEventListener("click", hideModelScalePanel);
+  modelScaleInput.addEventListener("input", updateModelScaleFromControl);
+  modelTransformResetButton.addEventListener("click", resetModelTransformFromControl);
+}
+
+function startModelDrag(event) {
+  if (event.button !== 0 || !event.isPrimary) {
+    return;
+  }
+
+  if (!isPointInsideDisplayedModel(event.clientX, event.clientY)) {
+    hideModelScalePanel();
+    return;
+  }
+
+  event.preventDefault();
+  markUserActivity();
+  modelState.modelDrag = {
+    pointerId: event.pointerId,
+    startClientX: event.clientX,
+    startClientY: event.clientY,
+    startTransform: { ...modelState.modelTransform },
+    moved: false,
+  };
+  canvasHost.classList.add("is-dragging");
+  try {
+    canvasHost.setPointerCapture(event.pointerId);
+  } catch (error) {
+    addControlLog("人物拖放捕获失败", { error: error.message });
+  }
+}
+
+function moveModelDrag(event) {
+  const drag = modelState.modelDrag;
+  if (!drag || drag.pointerId !== event.pointerId) {
+    return;
+  }
+
+  event.preventDefault();
+  updatePointerTargetFromEvent(event);
+  const rect = canvasHost.getBoundingClientRect();
+  const distance = Math.hypot(event.clientX - drag.startClientX, event.clientY - drag.startClientY);
+  drag.moved = drag.moved || distance > MODEL_CLICK_MOVE_TOLERANCE_PX;
+  setModelTransform({
+    ...drag.startTransform,
+    offsetX: drag.startTransform.offsetX + (event.clientX - drag.startClientX) / Math.max(rect.width, 1),
+    offsetY: drag.startTransform.offsetY + (event.clientY - drag.startClientY) / Math.max(rect.height, 1),
+  });
+}
+
+function finishModelDrag(event) {
+  const drag = modelState.modelDrag;
+  if (!drag || (event.pointerId && drag.pointerId !== event.pointerId)) {
+    return;
+  }
+
+  modelState.modelDrag = null;
+  canvasHost.classList.remove("is-dragging");
+  persistModelTransform();
+  if (!drag.moved) {
+    showModelScalePanel(event.clientX, event.clientY);
+  }
+  if (event.pointerId) {
+    try {
+      canvasHost.releasePointerCapture(event.pointerId);
+    } catch (error) {
+      addControlLog("人物拖放释放失败", { error: error.message });
+    }
+  }
+}
+
+function zoomModelFromWheel(event) {
+  if (!isPointInsideDisplayedModel(event.clientX, event.clientY)) {
+    return;
+  }
+
+  event.preventDefault();
+  markUserActivity();
+  const rect = canvasHost.getBoundingClientRect();
+  const current = sanitizeModelTransform(modelState.modelTransform);
+  const nextScale = clamp(
+    current.scale * Math.exp(-event.deltaY * MODEL_WHEEL_ZOOM_STEP),
+    MODEL_TRANSFORM_LIMITS.scaleMin,
+    MODEL_TRANSFORM_LIMITS.scaleMax,
+  );
+  if (Math.abs(nextScale - current.scale) < 0.001) {
+    return;
+  }
+
+  const cursorX = clamp((event.clientX - rect.left) / Math.max(rect.width, 1) - 0.5, -0.5, 0.5);
+  const cursorY = clamp((event.clientY - rect.top) / Math.max(rect.height, 1) - 0.5, -0.5, 0.5);
+  const scaleRatio = nextScale / current.scale;
+  setModelTransform({
+    scale: nextScale,
+    offsetX: cursorX - (cursorX - current.offsetX) * scaleRatio,
+    offsetY: cursorY - (cursorY - current.offsetY) * scaleRatio,
+  }, { save: true });
+  showModelScalePanel(event.clientX, event.clientY);
+}
+
+function resetModelTransformFromPointer(event) {
+  if (!isPointInsideDisplayedModel(event.clientX, event.clientY)) {
+    return;
+  }
+
+  event.preventDefault();
+  markUserActivity();
+  setModelTransform(defaultModelTransform(), { save: true });
+  showModelScalePanel(event.clientX, event.clientY);
+  addControlLog("人物位置已重置", modelState.modelTransform);
+}
+
+function displayedModelBounds() {
+  const { model } = modelState;
+  if (!model) {
+    return null;
+  }
+
+  const bounds = model.getLocalBounds();
+  const scale = model.scale?.x || 1;
+  return {
+    left: model.x + bounds.x * scale,
+    top: model.y + bounds.y * scale,
+    right: model.x + (bounds.x + bounds.width) * scale,
+    bottom: model.y + (bounds.y + bounds.height) * scale,
+  };
+}
+
+function clientPointToCanvasPoint(clientX, clientY) {
+  const rect = canvasHost.getBoundingClientRect();
+  return {
+    x: clientX - rect.left,
+    y: clientY - rect.top,
+    width: rect.width,
+    height: rect.height,
+  };
+}
+
+function isPointInsideDisplayedModel(clientX, clientY) {
+  const bounds = displayedModelBounds();
+  if (!bounds) {
+    return false;
+  }
+
+  const point = clientPointToCanvasPoint(clientX, clientY);
+  const padding = 28;
+  return point.x >= bounds.left - padding
+    && point.x <= bounds.right + padding
+    && point.y >= bounds.top - padding
+    && point.y <= bounds.bottom + padding;
+}
+
+function showModelScalePanel(clientX, clientY) {
+  syncModelScaleControl();
+  const cardRect = canvasHost.parentElement.getBoundingClientRect();
+  const panelWidth = Math.min(260, Math.max(1, cardRect.width - 44));
+  const left = clamp(clientX - cardRect.left + 14, 18, Math.max(18, cardRect.width - panelWidth - 18));
+  const top = clamp(clientY - cardRect.top - 78, 18, Math.max(18, cardRect.height - 128));
+  modelScalePanel.style.left = `${left}px`;
+  modelScalePanel.style.top = `${top}px`;
+  modelScalePanel.hidden = false;
+}
+
+function hideModelScalePanel() {
+  modelScalePanel.hidden = true;
+}
+
+function hideModelScalePanelFromOutside(event) {
+  if (modelScalePanel.hidden) {
+    return;
+  }
+
+  if (modelScalePanel.contains(event.target) || canvasHost.contains(event.target)) {
+    return;
+  }
+
+  hideModelScalePanel();
+}
+
+function updateModelScaleFromControl() {
+  markUserActivity();
+  setModelTransform({
+    ...modelState.modelTransform,
+    scale: Number(modelScaleInput.value),
+  }, { save: true });
+}
+
+function resetModelTransformFromControl() {
+  markUserActivity();
+  setModelTransform(defaultModelTransform(), { save: true });
+  addControlLog("人物位置已重置", modelState.modelTransform);
 }
 
 function updatePointerTargetFromEvent(event) {
@@ -908,6 +1243,7 @@ function stopSpeechPlayback() {
     URL.revokeObjectURL(modelState.audioUrl);
     modelState.audioUrl = "";
   }
+  resumeSpeechRecognitionAfterPlayback();
   stopThinkingAnimation({ restoreMotion: false, clearRoulette: false });
   stopMouthSync();
 }
@@ -956,6 +1292,7 @@ async function playExternalAudio(audioBlob, plan, rate, requestId) {
     if (requestId !== modelState.speechRequestId) {
       return;
     }
+    pauseSpeechRecognitionForPlayback();
     applyPlanVisualsForSpeech(plan).catch((error) => {
       addControlLog("语音同步动作失败", { error: error.message });
     });
@@ -981,6 +1318,7 @@ async function playExternalAudio(audioBlob, plan, rate, requestId) {
     if (requestId === modelState.speechRequestId) {
       stopMouthSync();
       finishReplyStream();
+      resumeSpeechRecognitionAfterPlayback();
       setSpeechStatus(requestId, `${currentBackendLabel()} 音频播放完成`, "可以继续对话，或等待她做待机动作。");
       scheduleIdleAction();
     }
@@ -990,6 +1328,7 @@ async function playExternalAudio(audioBlob, plan, rate, requestId) {
       return;
     }
     stopMouthSync();
+    resumeSpeechRecognitionAfterPlayback();
     setReplyText(plan.text);
     setStatus(`${currentBackendLabel()} 音频播放失败`, "已收到音频数据，但浏览器解码或播放失败；请先点参考音频确认浏览器音频可用。");
   };
@@ -1003,6 +1342,7 @@ async function playExternalAudio(audioBlob, plan, rate, requestId) {
     URL.revokeObjectURL(audioUrl);
     modelState.audio = null;
     modelState.audioUrl = "";
+    resumeSpeechRecognitionAfterPlayback();
     console.warn("TTS 音频播放失败。", error);
     return false;
   }
@@ -1505,6 +1845,24 @@ function audioContextCtor() {
   return window.AudioContext || window.webkitAudioContext || null;
 }
 
+function speechRecognitionAvailable() {
+  return Boolean(window.SpeechRecognition || window.webkitSpeechRecognition);
+}
+
+function createSpeechRecognition() {
+  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!Recognition) {
+    return null;
+  }
+
+  const recognition = new Recognition();
+  recognition.lang = SPEECH_RECOGNITION_LANG;
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  recognition.maxAlternatives = 1;
+  return recognition;
+}
+
 function audioDeviceLabel(device, index) {
   return device.label || `麦克风 ${index + 1}`;
 }
@@ -1513,6 +1871,10 @@ function setAudioStatus(message, hint = "") {
   const fullText = hint ? `${message} ${hint}` : message;
   audioStatusEl.textContent = fullText;
   audioWindowStatusEl.textContent = fullText;
+}
+
+function setAudioTranscript(text) {
+  audioTranscriptEl.textContent = text || "等待语音输入。";
 }
 
 function renderAudioControls() {
@@ -1530,7 +1892,12 @@ function renderAudioControls() {
     option.textContent = "当前浏览器不支持麦克风 API";
     audioSelectEl.appendChild(option);
     setAudioStatus("听觉模块不可用。", "请使用支持 getUserMedia 与 Web Audio 的浏览器。");
+    setAudioTranscript("当前浏览器无法读取麦克风。");
     return;
+  }
+
+  if (!speechRecognitionAvailable()) {
+    setAudioTranscript("当前浏览器不支持语音转文字；音量监听可用，但不能自动对话。");
   }
 
   if (!modelState.audioDevices.length) {
@@ -1647,7 +2014,8 @@ async function startAudioMonitor() {
     }
     await refreshAudioDevices({ requestPermission: false });
     setAudioStatus("麦克风监听已打开。", selectedAudioLabel());
-    setStatus("麦克风监听已打开", "听觉模块将优先使用当前选择的麦克风。");
+    startSpeechRecognition();
+    setStatus("麦克风监听已打开", "听觉模块会把最终识别到的语音自动发送给 Live2D 对话。");
     addControlLog("打开麦克风监听", {
       deviceId: modelState.selectedAudioId,
       label: selectedAudioLabel(),
@@ -1682,6 +2050,7 @@ function updateAudioLevelLoop() {
 }
 
 function stopAudioMonitor(options = {}) {
+  stopSpeechRecognition({ quiet: options.quiet });
   if (modelState.audioLevelFrame) {
     window.cancelAnimationFrame(modelState.audioLevelFrame);
     modelState.audioLevelFrame = 0;
@@ -1706,10 +2075,154 @@ function stopAudioMonitor(options = {}) {
   }
   if (!options.quiet) {
     setAudioStatus("麦克风监听已关闭。");
+    setAudioTranscript("听觉模块已关闭。");
     setStatus("麦克风监听已关闭", "听觉模块暂时不会读取麦克风输入。");
     addControlLog("关闭麦克风监听", {});
   }
   renderAudioControls();
+}
+
+function startSpeechRecognition() {
+  if (!speechRecognitionAvailable()) {
+    setAudioTranscript("当前浏览器不支持语音转文字；请使用 Chrome/Edge 并允许麦克风权限。");
+    addControlLog("语音识别不可用", { userAgent: navigator.userAgent });
+    return;
+  }
+
+  clearSpeechRecognitionRestart();
+  stopSpeechRecognition({ quiet: true, keepActive: true });
+  const recognition = createSpeechRecognition();
+  if (!recognition) {
+    return;
+  }
+
+  modelState.audioRecognition = recognition;
+  modelState.audioRecognitionActive = true;
+  modelState.audioRecognitionPausedForSpeech = false;
+  modelState.audioRecognitionDraft = "";
+
+  recognition.onstart = () => {
+    setAudioTranscript("正在听你说话，识别完成后会自动发送。");
+    addControlLog("语音识别已启动", { lang: SPEECH_RECOGNITION_LANG });
+  };
+  recognition.onresult = handleSpeechRecognitionResult;
+  recognition.onerror = (event) => {
+    const message = event.error || "unknown";
+    setAudioTranscript(`语音识别异常：${message}`);
+    addControlLog("语音识别异常", { error: message });
+    if (["not-allowed", "service-not-allowed"].includes(message)) {
+      modelState.audioRecognitionActive = false;
+    }
+  };
+  recognition.onend = () => {
+    if (modelState.audioRecognition !== recognition) {
+      return;
+    }
+
+    modelState.audioRecognition = null;
+    if (modelState.audioRecognitionActive && modelState.audioStream && !modelState.audioRecognitionPausedForSpeech) {
+      scheduleSpeechRecognitionRestart();
+    }
+  };
+
+  try {
+    recognition.start();
+  } catch (error) {
+    setAudioTranscript(`语音识别启动失败：${error.message}`);
+    addControlLog("语音识别启动失败", { error: error.message });
+  }
+}
+
+function stopSpeechRecognition(options = {}) {
+  clearSpeechRecognitionRestart();
+  if (!options.keepActive) {
+    modelState.audioRecognitionActive = false;
+    modelState.audioRecognitionPausedForSpeech = false;
+  }
+  const recognition = modelState.audioRecognition;
+  modelState.audioRecognition = null;
+  if (!recognition) {
+    return;
+  }
+
+  recognition.onstart = null;
+  recognition.onresult = null;
+  recognition.onerror = null;
+  recognition.onend = null;
+  try {
+    recognition.stop();
+  } catch (error) {
+    addControlLog("语音识别停止失败", { error: error.message });
+  }
+}
+
+function clearSpeechRecognitionRestart() {
+  if (modelState.audioRecognitionRestartTimer) {
+    window.clearTimeout(modelState.audioRecognitionRestartTimer);
+    modelState.audioRecognitionRestartTimer = 0;
+  }
+}
+
+function scheduleSpeechRecognitionRestart() {
+  clearSpeechRecognitionRestart();
+  modelState.audioRecognitionRestartTimer = window.setTimeout(() => {
+    modelState.audioRecognitionRestartTimer = 0;
+    if (modelState.audioRecognitionActive && modelState.audioStream && !modelState.audioRecognition) {
+      startSpeechRecognition();
+    }
+  }, SPEECH_RECOGNITION_RESTART_DELAY_MS);
+}
+
+function pauseSpeechRecognitionForPlayback() {
+  if (!modelState.audioRecognitionActive || !modelState.audioStream) {
+    return;
+  }
+
+  modelState.audioRecognitionPausedForSpeech = true;
+  stopSpeechRecognition({ quiet: true, keepActive: true });
+  setAudioTranscript("兔兔正在说话，暂时暂停语音识别，避免把外放声音误当成你的输入。");
+}
+
+function resumeSpeechRecognitionAfterPlayback() {
+  if (!modelState.audioRecognitionActive || !modelState.audioStream || !modelState.audioRecognitionPausedForSpeech) {
+    return;
+  }
+
+  modelState.audioRecognitionPausedForSpeech = false;
+  scheduleSpeechRecognitionRestart();
+}
+
+function handleSpeechRecognitionResult(event) {
+  let interimText = "";
+  const finalTexts = [];
+  for (let index = event.resultIndex; index < event.results.length; index += 1) {
+    const result = event.results[index];
+    const transcript = String(result[0]?.transcript || "").trim();
+    if (!transcript) {
+      continue;
+    }
+    if (result.isFinal) {
+      finalTexts.push(transcript);
+    } else {
+      interimText += transcript;
+    }
+  }
+
+  if (interimText) {
+    modelState.audioRecognitionDraft = interimText;
+    setAudioTranscript(`正在识别：${interimText}`);
+  }
+
+  finalTexts.forEach((text) => {
+    if (modelState.speaking || modelState.generatingSpeech) {
+      addControlLog("语音输入已忽略", { text, reason: "robot_speaking" });
+      return;
+    }
+
+    setAudioTranscript(`已识别并发送：${text}`);
+    addControlLog("语音输入", { text });
+    submitChatText(text, { source: "speech" });
+  });
 }
 
 function saveDefaultAudio() {
@@ -2306,6 +2819,52 @@ async function requestChatPlan(userText) {
   return payload;
 }
 
+function submitChatText(rawText, options = {}) {
+  const userText = String(rawText || "").trim();
+  if (!userText) {
+    setStatus("请输入对话内容", "空输入不会发送给 LLM。");
+    return Promise.resolve(false);
+  }
+
+  if (modelState.chatRequestInFlight) {
+    const message = "上一轮对话仍在处理中，请等兔兔回复完再说下一句。";
+    setStatus("对话处理中", message);
+    if (options.source === "speech") {
+      setAudioTranscript(message);
+    }
+    addControlLog("对话请求已跳过", { text: userText, source: options.source || "text" });
+    return Promise.resolve(false);
+  }
+
+  const previousReply = replyEl.textContent;
+  modelState.chatRequestInFlight = true;
+  markUserActivity();
+  clearScheduledActions();
+  startThinkingAnimation();
+  chatInput.value = "";
+  setReplyThinking();
+  setStatus("正在请求 LLM", "本地控制服务会调用 DeepSeek，并返回结构化 Live2D 控制计划。");
+  addControlLog(options.source === "speech" ? "语音转文字输入" : "用户输入", { text: userText });
+
+  return requestChatPlan(userText)
+    .then((plan) => {
+      addChatHistory(userText, plan.text, plan);
+      return applyPlan(plan, { speak: true });
+    })
+    .catch((error) => {
+      stopThinkingAnimation({ restoreMotion: true, clearRoulette: true });
+      setReplyText(previousReply);
+      addChatHistory(userText, "", null, error.message);
+      addControlLog("LLM 回复失败", { error: error.message });
+      setStatus("LLM 回复失败", error.message);
+      scheduleIdleAction();
+      return false;
+    })
+    .finally(() => {
+      modelState.chatRequestInFlight = false;
+    });
+}
+
 populateActionDisk();
 document.getElementById("actionDiskButton").addEventListener("click", () => openSidePanel(actionPanel));
 document.getElementById("voiceModelButton").addEventListener("click", () => openSidePanel(voicePanel));
@@ -2370,32 +2929,7 @@ chatInput.addEventListener("keydown", (event) => {
 });
 chatForm.addEventListener("submit", (event) => {
   event.preventDefault();
-  const userText = chatInput.value.trim();
-  if (!userText) {
-    setStatus("请输入对话内容", "空输入不会发送给 LLM。");
-    return;
-  }
-  const previousReply = replyEl.textContent;
-  markUserActivity();
-  clearScheduledActions();
-  startThinkingAnimation();
-  chatInput.value = "";
-  setReplyThinking();
-  setStatus("正在请求 LLM", "本地控制服务会调用 DeepSeek，并返回结构化 Live2D 控制计划。");
-  addControlLog("用户输入", { text: userText });
-  requestChatPlan(userText)
-    .then((plan) => {
-      addChatHistory(userText, plan.text, plan);
-      return applyPlan(plan, { speak: true });
-    })
-    .catch((error) => {
-      stopThinkingAnimation({ restoreMotion: true, clearRoulette: true });
-      setReplyText(previousReply);
-      addChatHistory(userText, "", null, error.message);
-      addControlLog("LLM 回复失败", { error: error.message });
-      setStatus("LLM 回复失败", error.message);
-      scheduleIdleAction();
-    });
+  submitChatText(chatInput.value, { source: "text" });
 });
 
 setupCameraWindowDrag();

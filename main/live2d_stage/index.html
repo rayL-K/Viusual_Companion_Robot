@@ -11,6 +11,15 @@
   <main class="app-shell">
     <section class="stage-card">
       <div id="live2dCanvas" class="live2d-canvas" aria-label="Live2D 真实模型展示区"></div>
+      <div id="modelScalePanel" class="model-scale-panel" hidden>
+        <button id="modelScaleCloseButton" class="model-scale-close" type="button" aria-label="关闭人物大小面板">×</button>
+        <label for="modelScaleInput">
+          <span>人物大小</span>
+          <strong id="modelScaleValue">100%</strong>
+        </label>
+        <input id="modelScaleInput" type="range" min="0.4" max="2.6" step="0.01" value="1">
+        <button id="modelTransformResetButton" type="button">重置位置</button>
+      </div>
       <div id="replyBubble" class="reply-bubble" aria-live="polite">
         <span>草莓兔兔</span>
         <p id="replyText">等待控制数据...</p>
@@ -141,6 +150,10 @@
             <button id="audioStartButton" type="button">开始监听</button>
             <button id="audioStopButton" type="button">停止监听</button>
             <button id="audioDefaultButton" type="button">设为默认</button>
+          </div>
+          <div class="audio-transcript">
+            <span>语音识别</span>
+            <strong id="audioTranscript">开启监听后会自动把你的语音转成文字并发送。</strong>
           </div>
           <p id="audioStatus">尚未检测麦克风。</p>
         </div>
