@@ -1,0 +1,18 @@
+{
+  "text": "你好，我是草莓兔兔。现在我会用更自然的女声说话，并让 Live2D 表情跟着回答变化。",
+  "emotion": "happy",
+  "expression": "star_eyes",
+  "motion": "scene1",
+  "actions": [],
+  "speech": {
+    "voice": "female_zh",
+    "rate": 1.02,
+    "pitch": 1.18
+  },
+  "parameters": {
+    "ParamAngleX": 5,
+    "ParamAngleY": 3,
+    "ParamBodyAngleX": 4,
+    "ParamMouthForm": 0.35
+  }
+}

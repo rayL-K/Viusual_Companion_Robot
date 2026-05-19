@@ -1,0 +1,17 @@
+{
+  "text": "主人，你好呀！我是草莓兔兔，今天好开心见到你！",
+  "emotion": "happy",
+  "expression": "blush",
+  "motion": "scene1",
+  "actions": [],
+  "speech": {
+    "voice": "female_zh",
+    "rate": 1.0,
+    "pitch": 1.18
+  },
+  "parameters": {
+    "ParamAngleX": 4.0,
+    "ParamAngleY": 2.0,
+    "ParamMouthForm": 0.3
+  }
+}

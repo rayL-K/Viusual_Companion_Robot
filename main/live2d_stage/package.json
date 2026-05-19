@@ -1,0 +1,13 @@
+{
+  "name": "visual-companion-live2d-stage",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5174",
+    "check": "node scripts/check-stage.mjs"
+  },
+  "devDependencies": {
+    "vite": "^8.0.12"
+  }
+}
