@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+win/generated/
+main/reports/
+main/data/
+main/config/local.env
+node_modules/
+dist/
+.playwright-mcp/
+live2d-stage*.png

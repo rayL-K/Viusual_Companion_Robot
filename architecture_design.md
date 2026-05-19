@@ -44,7 +44,7 @@
 
 ## 4. 标准代码目录结构
 ```text
-ec_i3588_companion/
+main/
 ├── main.py                     # 程序入口，初始化 5 个进程与 Queue，设定 CPU 绑核逻辑
 ├── config.yaml                 # 统筹配置 (硬件设配号, 角色 Prompt, 记忆库路径)
 ├── core/

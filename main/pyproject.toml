@@ -1,0 +1,25 @@
+[project]
+name = "visual-companion-robot"
+version = "0.1.0"
+description = "Firefly/RK3588 side visual companion robot application."
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+  "PyYAML>=6.0,<7.0",
+]
+
+[project.optional-dependencies]
+voxcpm = [
+  "voxcpm==2.0.3",
+  "torch==2.11.0",
+  "torchaudio==2.11.0",
+  "fsspec==2025.3.0",
+  "typing_extensions>=4.14.1",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+

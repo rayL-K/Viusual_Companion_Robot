@@ -1,0 +1,12 @@
+[project]
+name = "visual-companion-robot"
+version = "0.1.0"
+description = "基于 Firefly/RK3588 的多模态虚拟陪伴机器人"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "PyYAML>=5.3",
+]
+
+[tool.visual-companion-robot.python]
+target-version = "3.11"
+reason = "VoxCPM2 本地推理要求 Python 3.10 及以上；开发环境统一使用 Python 3.11，Firefly 迁移时通过 conda 环境保持一致。"

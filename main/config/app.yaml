@@ -1,0 +1,30 @@
+# 板端应用的基础配置。当前阶段先把模块开关和资源路径固定下来，
+# 后续接入真实摄像头、麦克风、模型推理和显示窗口时再逐项扩展。
+app:
+  name: visual_companion_robot
+  mode: development
+
+# 运行环境配置。DISPLAY=:0 表示默认使用 Firefly 本机图形桌面。
+runtime:
+  display: ":0"
+  log_level: INFO
+
+# 模块开关。除 Live2D 资源测试外，其他业务模块先保持关闭，避免
+# 未接硬件或模型时启动失败。
+modules:
+  vision:
+    enabled: false
+  audio_input:
+    enabled: false
+  speech_recognition:
+    enabled: false
+  brain:
+    enabled: false
+  speech_synthesis:
+    enabled: false
+  live2d_display:
+    enabled: true
+    model_name: Strawberry_Rabbit
+    model_path: assets/live2d/Strawberry_Rabbit/Strawberry_Rabbit.model3.json
+    manifest_path: assets/live2d/Strawberry_Rabbit/manifest.json
+
