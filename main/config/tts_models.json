@@ -1,0 +1,75 @@
+{
+  "active": "voxcpm_hf_space_test",
+  "active_reference": "soft_girl",
+  "models": {
+    "voxcpm_hf_space_test": {
+      "backend": "voxcpm_hf_space",
+      "display_name": "公网 API 模式",
+      "space_url": "https://openbmb-voxcpm-demo.hf.space",
+      "api_name": "generate",
+      "control_instruction": "年轻女性，温柔甜美，语气自然",
+      "cfg_value": 2.0,
+      "do_normalize": true,
+      "denoise": false,
+      "description": "Hugging Face VoxCPM-Demo 测试后端。会上传所选参考音频；公网 Space 可能排队、限流或变更接口，不作为最终后端。"
+    },
+    "voxcpm_local": {
+      "backend": "voxcpm_project_local",
+      "display_name": "项目内本地推理模式",
+      "model_path": "main/models/voxcpm/VoxCPM2",
+      "device": "auto",
+      "enable_denoiser": false,
+      "optimize": false,
+      "control_instruction": "年轻女性，温柔甜美，语气自然",
+      "cfg_value": 2.0,
+      "inference_timesteps": 10,
+      "do_normalize": true,
+      "denoise": false,
+      "description": "项目内 Python 模块直接加载 VoxCPM2。模型默认放在 main/models/voxcpm/VoxCPM2，也可用 VOXCPM_MODEL_PATH 覆盖；迁移到 Firefly 时沿用这个入口。"
+    },
+    "voxcpm_local_gradio": {
+      "backend": "voxcpm_local_gradio",
+      "display_name": "本地 Gradio 桥接模式",
+      "endpoint": "http://127.0.0.1:7860",
+      "api_name": "generate",
+      "control_instruction": "年轻女性，温柔甜美，语气自然",
+      "cfg_value": 2.0,
+      "inference_timesteps": 10,
+      "do_normalize": true,
+      "denoise": false,
+      "description": "可选兼容模式，仅用于临时对接外部 VoxCPM Gradio 服务；正式本地推理请使用项目内本地推理模式。"
+    }
+  },
+  "references": {
+    "clear_young_girl": {
+      "audio_path": "main/assets/tts/voxcpm_samples/clear_young_girl.mp3",
+      "content_type": "audio/mpeg",
+      "display_name": "清脆少女",
+      "prompt_text": "你是否会停下脚步，在结束忙碌的一天后，认真感受身边的世界？"
+    },
+    "soft_girl": {
+      "audio_path": "main/assets/tts/voxcpm_samples/soft_girl.mp3",
+      "content_type": "audio/mpeg",
+      "display_name": "软软女孩",
+      "prompt_text": "很高兴认识你哦，我刚刚买了杯珍珠奶茶，我们一起去公园长椅上坐坐吧。"
+    },
+    "sweet_female": {
+      "audio_path": "main/assets/tts/voxcpm_samples/sweet_female.mp3",
+      "content_type": "audio/mpeg",
+      "display_name": "甜美女声",
+      "prompt_text": "有时候我的心里会有很多话想说，可是到了嘴边就变得笨拙了，好像总也说不好。"
+    },
+    "warm_young_girl": {
+      "audio_path": "main/assets/tts/voxcpm_samples/warm_young_girl.mp3",
+      "content_type": "audio/mpeg",
+      "display_name": "温暖少女",
+      "prompt_text": "或许今天的你并不完美，或许你还在寻找那个属于自己的方向，但不要急，再给自己一点时间吧。"
+    },
+    "gentle_senior_girl": {
+      "audio_path": "main/assets/tts/voxcpm_samples/gentle_senior_girl.mp3",
+      "content_type": "audio/mpeg",
+      "display_name": "温柔学姐",
+      "prompt_text": "只要心中有坚定的目标，我相信前方的路总会越来越明朗的。"
+    }
+  }
+}
