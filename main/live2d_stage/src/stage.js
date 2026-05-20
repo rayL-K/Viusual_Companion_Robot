@@ -620,12 +620,12 @@ function setupPointerTracking() {
 
 function setupModelTransformControls() {
   canvasHost.addEventListener("pointerdown", startModelDrag);
-  canvasHost.addEventListener("pointermove", moveModelDrag);
-  canvasHost.addEventListener("pointerup", finishModelDrag);
-  canvasHost.addEventListener("pointercancel", finishModelDrag);
   canvasHost.addEventListener("lostpointercapture", finishModelDrag);
   canvasHost.addEventListener("wheel", zoomModelFromWheel, { passive: false });
   canvasHost.addEventListener("dblclick", resetModelTransformFromPointer);
+  document.addEventListener("pointermove", moveModelDrag);
+  document.addEventListener("pointerup", finishModelDrag);
+  document.addEventListener("pointercancel", finishModelDrag);
   document.addEventListener("pointerdown", hideModelScalePanelFromOutside);
   modelScaleCloseButton.addEventListener("click", hideModelScalePanel);
   modelScaleInput.addEventListener("input", updateModelScaleFromControl);

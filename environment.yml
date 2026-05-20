@@ -6,6 +6,7 @@ dependencies:
   - pip
   - pyyaml>=5.3
   - pip:
+      - pytest>=8.0
       - voxcpm==2.0.3
       - torch==2.11.0
       - torchaudio==2.11.0
