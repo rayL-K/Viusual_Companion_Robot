@@ -1,283 +1,224 @@
-# 视觉感知模块 — 工作移交 & 头脑风暴文档
+# Visual Companion Robot — 交接手册
 
-## 一、当前进度
+文档版本：2026-05-24
+交接目标：让新线程或后续开发者在不读取旧聊天记录的情况下，快速接上当前比赛项目。
 
-### 1.1 已完成：浏览器端面部追踪 (perception-client.js)
+## 1. 当前仓库状态
 
-位于 `main/live2d_stage/src/perception-client.js`，完全在浏览器中运行。
+| 项目 | 状态 |
+| --- | --- |
+| 当前本地路径 | `E:\CODE\Visual_Companion_Robot` |
+| 当前分支 | `dev/rebuild-firefly-board-structure` |
+| 最近已知基线提交 | `842e294 docs: 视觉感知模块移交文档 (HANDBOOK.md)` |
+| 已合并 PR | PR #1 `完善 Live2D 控制台与多模态交互`，PR #2 `聊天气泡交互优化：拖拽/缩放/字体 + 角色右键拖拽 + 文件拖拽回画布` |
+| 当前主开发区域 | `main/live2d_stage/` |
+| 目标运行环境 | Windows 本机开发，Firefly/RK3588 板端迁移 |
 
-**技术栈：**
-- MediaPipe FaceLandmarker (Tasks-Vision API) — 478 个 3D 面部关键点
-- 52 组 ARKit FACS blendshapes — 表情测量
-- 所有模型已下载到 `public/mediapipe/`，完全离线加载
+当前已确认的资源整理项：
 
-**输入：** `<video>` 元素（摄像头预览）
-**输出：** `getLive2DParams()` 返回:
-
-| 参数 | 来源 | 用途 |
-|------|------|------|
-| `angleX/Y` | 鼻尖相对人脸框偏移 | Live2D ParamAngleX/Y |
-| `bodyAngleZ` | 双眼外角连线角度 | Live2D ParamBodyAngleZ |
-| `mouthSmile` | mouthSmile blendshape | Live2D ParamMouthSmile |
-| `mouthOpen` | jawOpen blendshape | Live2D ParamMouthOpenY |
-| `browRaise` | browInnerUp + browOuterUp | (预留) |
-| `eyeOpen` | 1 - eyeBlink | Live2D ParamEyeLOpen/ROpen |
-| `emotion` | 加权打分 → 7 类 | 状态栏显示 |
-| `fullScores` | 7 类情绪完整分数 | 后续 AI 决策 |
-
-**情绪检测：** 基于 52 组 Blendshapes 的加权打分系统
-
-| 情绪 | 正向指标 | 反向抑制 |
-|------|---------|---------|
-| happy | mouthSmile + cheekSquint ×1.0 | mouthFrown + browDown ×0.5 |
-| sad | browDown + mouthFrown + mouthShrugUpper ×1.0 | smile ×0.7 |
-| surprise | browUp + jawOpen + eyeWide + mouthStretch ×1.0 | smile + browDown ×0.3 |
-| angry | browDown + mouthPress + eyeSquint ×1.0 | smile ×0.5 |
-| fear | browUp + eyeWide + jawOpen + mouthShrugUpper ×1.0 | smile + browDown ×0.3 |
-| disgust | noseSneer + upperLipRaise + cheekPuff ×1.0 | — |
-
-平滑：5 帧滑动平均，减少 jitter。
-
-### 1.2 Live2D 参数映射 (stage.js)
-
-在 `updateModelParameters()` 中：
-
-```
-有摄像头追踪时：
-  ParamAngleX/Y      ← 鼻尖偏移（鼠标禁用）
-  ParamBodyAngleZ    ← 歪头（鼠标禁用）
-  ParamMouthSmile    ← blendshape
-  ParamMouthOpenY    ← jawOpen blendshape（覆盖音频口型）
-  ParamEyeLOpen/ROpen ← eyeBlink blendshape
-  ParamEyeBallX/Y    ← 归零（鼠标禁用）
-  ParamBodyAngleX/Y  ← 归零（鼠标禁用）
-
-无摄像头追踪时：
-  applyPointerParameters() ← 鼠标跟随（含眼球方向）
-  音频口型同步 ParamMouthOpenY
+```text
+D main/live2d_stage/public/mediapipe/vision_bundle.mjs
 ```
 
-### 1.3 构架示意
+`vision_bundle.mjs` 是历史遗留的重复静态包。当前实际运行代码使用的是：
 
-```
-index.html
-  └─ /src/stage.js          — Live2D 主循环, Pixi.js 渲染
-       ├─ /src/perception-client.js  — MediaPipe 面部追踪
-       │    └─ import("./mediapipe/vision_bundle.js")  — 动态加载
-       │         └─ /mediapipe/wasm/vision_wasm_internal.* — WASM 引擎
-       │         └─ /mediapipe/model/face_landmarker.task  — 3.7MB 模型
-       └─ live2dcubismcore.min.js  — Cubism SDK (CDN)
-       └─ pixi.js + pixi-live2d-display (CDN)
+```text
+main/live2d_stage/src/mediapipe/vision_bundle.js
+main/live2d_stage/public/mediapipe/vision_bundle.js
 ```
 
----
+仓库内当前没有代码引用 `vision_bundle.mjs`，因此可以把它作为重复资源清理提交。
 
-## 二、优化历程 & 难点
+## 2. 项目一句话
 
-### 2.1 第一轮：Python 后端方案 (放弃)
+这是一个基于 Firefly/RK3588 的多模态虚拟陪伴机器人：浏览器端负责 Live2D 展示、摄像头、麦克风和交互 UI；本地控制服务负责 LLM、VoxCPM2 TTS、记忆和控制计划；后续迁移到 Firefly 时逐步替换为端侧模型。
 
-**目标：** Python WebSocket 服务，用 ONNX 模型做人脸+情绪+姿态
-**问题：** 每个模型都需要单独下载和验证下载链接
+## 3. 快速启动
 
-| 模型 | 下载链接 | 状态 |
-|------|---------|------|
-| SCRFD (人脸检测) | 用户已下载 `scrfd_person_2.5g.onnx` | ✅ 可用 |
-| PFLD-106 (关键点) | GitHub 仓库已删/改名 → 404 | ❌ 链接失效 |
-| Mini-Xception (情绪) | DeepFace 仓库路径变更 → 404 | ❌ 链接失效 |
-| MoveNet (姿态) | TF Hub URL 需要翻墙 | ❌ 网络限制 |
+Windows 本地终端默认使用 PowerShell 7+ 的 `pwsh`。
 
-**结论：** 手动验证模型下载链接成本高，不可靠。Python 端还要搞定摄像头权限冲突（浏览器已占摄像头）。
+统一启动入口：
 
-### 2.2 第二轮：Python MediaPipe (放弃)
-
-**尝试：** `pip install mediapipe`，用 Python 的 `mp.solutions.face_mesh`
-**问题：** 依赖地狱
-
-```
-mediapipe 0.10.35
-  └─ import mediapipe.tasks.python
-       └─ import tensorflow.tools.docs   ← 仅为 doc_controls！
-            └─ import keras → import scipy
-                 └─ scipy.special._multiufuncs 崩溃
-                      └─ numpy 版本 ABI 不匹配 → RecursionError
+```bat
+tools\launchers\live2d_stage.bat
 ```
 
-**修复尝试：**
-1. 升级 scipy → 新版本仍不兼容 ❌
-2. 降级 scipy → 1.10.1 可行 ✅
-3. 但 `pip install mediapipe` 被锁定到特定版本，升级 scipy 导致其他包损坏
-4. 最终方案：修改 `mediapipe/tasks/python/core/optional_dependencies.py`，把 `except ModuleNotFoundError` 改为 `except (ModuleNotFoundError, Exception)` 使其在递归崩溃时静默降级
+手动启动前端：
 
-**🔴 隐藏难点：** Python 端的 Camera 与浏览器端 Camera 冲突。Windows 下 `cv2.VideoCapture(0)` 和 `navigator.mediaDevices.getUserMedia()` 同时访问同一摄像头可能失败（取决于驱动）。Firefly 上同为 Linux 系统，这个冲突会更加严重（v4l2 不允许同时打开设备）。
-
-### 2.3 第三轮：浏览器端 MediaPipe (当前方案)
-
-**切换原因：** 彻底消除 Python 依赖 + 摄像头进程冲突。
-
-| 尝试方案 | 结果 |
-|---------|------|
-| `@mediapipe/tasks-vision` npm 包 → Vite import | Vite 无法正确处理 WASM 模块 |
-| CDN `<script>` 加载 → 全局 `Vision` 对象 | 下载的文件为 ESM 格式，`<script>` 加载时报 `Unexpected token 'export'` |
-| 存入 `public/` → dynamic `import()` | Vite 阻止从 `/public` import |
-| 存入 `src/mediapipe/` → `import("./mediapipe/vision_bundle.js")` | **✅ 最终方案** |
-
-**🔴 隐藏难点：** `FaceDetector` (浏览器原生 API) 在 Chrome/Edge 中可能被策略禁用。本项目中用户浏览器不支持，所以必须用 MediaPipe。
-
-### 2.4 第四轮：集成调优
-
-| 问题 | 原因 | 解决方案 |
-|------|------|---------|
-| 角色仍然朝向鼠标 | `applyPointerParameters()` 在感知前执行 | 把感知检测提升到鼠标跟随前，追踪时清空眼/体参数 |
-| MediaPipe 内部日志刷屏 | WASM C++ 日志通过 Emscripten stdout 输出 | 在 `<script>` 中 hook `console.warn`/`console.log` 过滤 |
-| 打开摄像头时闪烁 | 视频流未稳定就启动检测，状态栏频繁更新 | +500ms 启动延迟 + 情绪变化才更新状态栏 |
-| `bs is not iterable` | `faceBlendshapes[0]` 是 `{categories: [...]}` 而非数组 | 改为 `faceBlendshapes[0]?.categories` |
-| 情绪不准确/抖动 | 阈值法太粗糙 | 加权打分 + 5 帧滑动平均 + 互斥抑制 |
-
----
-
-## 三、隐藏难点 & 边界
-
-### 3.1 尚未解决的问题
-
-1. **❌ 情绪精度有限** — 当前基于 Blendshapes 加权规则，远不如端到端 CNN 模型（如 Mini-Xception ONNX）准确。建议引入 `onnxruntime-web` + Mini-Xception ONNX 模型做真正 CNN 推理。
-
-2. **⚠️ WASM 兼容性** — MediaPipe vision_bundle.js 依赖 WebAssembly + WebGL 2.0。部分老设备可能不支持。建议加 fallback 到 OpenCV Haar。
-
-3. **⚠️ MediaPipe 版本锁定** — `vision_bundle.js` 和 `wasm/` 已下载到本地，如果升级 MediaPipe 版本需要重新下载。
-
-4. **⚠️ `public/mediapipe/vision_bundle.js` 和 `src/mediapipe/vision_bundle.js` 是同一文件的两个副本** — 前者用于静态服务，后者用于 Vite import。如果更新其中一个需要同步另一个。
-
-### 3.2 已知边界
-
-- **单人追踪：** `numFaces: 1`，只追踪第一个人脸
-- **光照敏感：** MediaPipe FaceLandmarker 在强背光/全黑环境下检测率下降
-- **大角度转头：** 侧脸 > 45° 时关键点精度下降
-- **速度：** 15fps 检测间隔（66ms），不影响 60fps Live2D 渲染
-
----
-
-## 四、未来规划 & 优先级 (Codex 任务)
-
-### 4.1 Firefly 迁移架构建议
-
-```
-Firefly (RK3588, 6 TOPS NPU)
-  ┌─────────────────────────────────────┐
-  │  Web Browser (Chromium, 硬件加速)     │
-  │  ├─ MediaPipe FaceLandmarker (GPU)   │ ← 当前功能
-  │  ├─ Live2D 渲染 (WebGL)             │
-  │  └─ onnxruntime-web 推理             │
-  │       ├─ Mini-Xception ONNX (情绪)   │ ← 待接入
-  │       └─ YOLOv8n ONNX (物体检测)     │ ← 待接入
-  │                                     │
-  │  Web Worker                          │
-  │  ├─ 音频采集 → Whisper base STT      │ ← 待接入
-  │  └─ TinyLLaMA 1.1B (推理对话)        │ ← 待接入
-  └─────────────────────────────────────┘
+```powershell
+Push-Location -LiteralPath .\main\live2d_stage
+npm install
+npm run dev
+Pop-Location
 ```
 
-### 4.2 优先级列表
+控制服务由统一启动脚本菜单管理。开发时如果只看前端静态页面，可以先只跑 Vite；如果要 LLM、TTS、语音回复，需要同时启动本地控制服务。
+
+## 4. 验证命令
+
+前端静态检查：
+
+```powershell
+Push-Location -LiteralPath .\main\live2d_stage
+npm run check
+Pop-Location
+```
+
+Python 测试：
+
+```powershell
+$env:PYTHONIOENCODING = "utf-8"
+$env:PYTHONUTF8 = "1"
+conda run -n visual-companion-robot python -m pytest main\tests -q
+```
+
+说明：Windows 上 `conda run` 遇到中文或异常字符输出时可能触发 GBK 编码问题，所以测试前显式设置 UTF-8 环境变量。
+
+## 5. 当前模块边界
+
+| 模块 | 位置 | 当前用途 |
+| --- | --- | --- |
+| Live2D 舞台 | `main/live2d_stage/src/stage.js` | 主渲染循环、UI 状态、动作盘、摄像头/麦克风入口、LLM/TTS 请求。 |
+| 浏览器视觉感知 | `main/live2d_stage/src/perception-client.js` | MediaPipe FaceLandmarker，输出头部角度、眨眼、嘴部、微笑和情绪，并向 LLM 提供视觉上下文。 |
+| ONNX 情绪适配 | `main/live2d_stage/src/emotion-onnx-client.js` | 预留浏览器端 ONNX 情绪分类入口；模型缺失时自动沿用 blendshape 规则。 |
+| MediaPipe 本地资源 | `main/live2d_stage/src/mediapipe/` 与 `main/live2d_stage/public/mediapipe/` | 离线加载 Tasks Vision JS、WASM 和 face_landmarker 模型。 |
+| 控制服务 | `main/scripts/live2d_control_server.py` | 提供 `/chat`、`/tts`、`/voices` 等接口。 |
+| VoxCPM2 本地推理 | `main/src/visual_companion_robot/voice/voxcpm_local.py` | 项目内本地 TTS 推理入口，Firefly 迁移时优先沿用。 |
+| 记忆模块 | `main/src/visual_companion_robot/brain/memory.py` | SQLite 对话记忆骨架。 |
+| 旧 Python 视觉参考 | `main/visual-perception/` | 保留为参考，不是当前主路径。 |
+
+## 6. 视觉感知当前实现
+
+当前视觉方案已经从 Python 后端转为浏览器端 MediaPipe，原因是可以避开 Python 依赖地狱和摄像头占用冲突。
+
+### 6.1 数据流
+
+```text
+浏览器摄像头 video
+  -> perception-client.js
+  -> MediaPipe FaceLandmarker
+  -> getLive2DParams()
+  -> stage.js updateModelParameters()
+  -> Live2D 参数
+```
+
+### 6.2 输出字段
+
+`perceptionClient.getLive2DParams()` 返回：
+
+| 字段 | 来源 | 映射目标 |
+| --- | --- | --- |
+| `angleX` | 鼻尖相对人脸框的横向偏移 | `ParamAngleX` |
+| `angleY` | 鼻尖相对人脸框的纵向偏移 | `ParamAngleY` |
+| `bodyAngleZ` | 双眼外角连线角度 | `ParamBodyAngleZ` |
+| `mouthSmile` | `mouthSmileLeft/Right` blendshape | `ParamMouthSmile` |
+| `mouthOpen` | `jawOpen` blendshape | `ParamMouthOpenY` |
+| `eyeOpen` | `1 - eyeBlink` | `ParamEyeLOpen`、`ParamEyeROpen` |
+| `emotion` | ONNX 或规则打分结果 | 状态栏、Live2D 状态与 LLM 上下文 |
+| `emotionSource` | `onnx` 或 `blendshape_rule` | 调试当前情绪来源 |
+| `fullScores` | 7 类情绪分数 | LLM 上下文与后续表情联动 |
+
+### 6.3 与鼠标/音频的关系
+
+在 `stage.js` 的 `updateModelParameters()` 中：
+
+```text
+如果摄像头追踪有效：
+  使用视觉参数驱动头部、嘴、眼睛；
+  禁用鼠标头部/眼球跟随；
+  摄像头嘴部开合会覆盖音频口型。
+
+如果摄像头追踪无效：
+  使用鼠标跟随和自然晃动；
+  使用音频口型同步。
+```
+
+这个策略可以避免“摄像头驱动”和“鼠标驱动”互相抢参数。
+
+## 7. 已经踩过的坑
+
+### 7.1 Python 视觉后端暂时不要作为主线
+
+曾尝试 Python WebSocket + ONNX 模型方案，但每个模型下载源都需要单独验证，成本高且不稳定。还尝试过 Python MediaPipe，但 `mediapipe -> tensorflow docs -> keras -> scipy/numpy ABI` 链路在当前 Windows 环境出现依赖冲突。
+
+更关键的问题是摄像头占用：浏览器 `getUserMedia()` 和 Python `cv2.VideoCapture()` 同时抢同一个摄像头，在 Windows 与 Linux 上都可能失败。当前主线应继续使用浏览器端摄像头。
+
+### 7.2 MediaPipe 资源有两个位置
+
+当前 `perception-client.js` 通过动态 import 加载：
+
+```text
+main/live2d_stage/src/mediapipe/vision_bundle.js
+```
+
+WASM 与模型通过浏览器静态路径加载：
+
+```text
+main/live2d_stage/public/mediapipe/wasm/
+main/live2d_stage/public/mediapipe/model/face_landmarker.task
+```
+
+如果升级 MediaPipe，需要同时确认 `src/mediapipe/` 与 `public/mediapipe/` 两侧资源是否匹配。
+
+### 7.3 情绪识别已经预留 ONNX 入口
+
+当前主路径是：优先尝试 `main/live2d_stage/public/mediapipe/model/emotion.onnx`，如果模型不存在或加载失败，则继续使用 52 组 blendshapes 规则加权。这样本地开发阶段不被模型文件卡住，后续只要放入匹配的轻量 ONNX 情绪模型即可升级。
+
+## 8. 近期优先级
 
 | 优先级 | 任务 | 说明 |
-|--------|------|------|
-| **P0** | 情绪模型升级 | **改用手写规则 → ONNX Runtime Web + Mini-Xception**。详见第 4.3 节 |
-| **P1** | YOLOv8n 物体检测 | 让角色"看懂"桌面物品。`onnxruntime-web` 加载 `yolov8n.onnx` |
-| **P1** | 情绪 → Live2D 表情联动 | 将 7 种情绪分数直接映射到 Live2D 表情参数 |
-| **P2** | 空间深度估计 | MediaPipe Iris / Depth 估计人脸距离，角色距离响应 |
-| **P2** | CLIP 场景理解 | MobileCLIP 对摄像头帧做零样本场景分类 |
-| **P3** | 手势识别 | MediaPipe Hands + gesture classification |
-| **P3** | Firefly NPU 加速 | RK3588 NPU 跑 ONNX 模型 (RKNN 转换) |
+| --- | --- | --- |
+| P0 | 真实浏览器回归 | 启动 Live2D 舞台，验证摄像头开启、面部追踪、鼠标回退、TTS 与聊天链路。 |
+| P0 | ONNX 情绪模型落盘 | 找到或训练一个输入为 `1x1x48x48` 的 7 类情绪 ONNX，放到 `public/mediapipe/model/emotion.onnx`。 |
+| P1 | 情绪联动 Live2D 表情 | 将 `emotion/fullScores` 映射到 Live2D 表情或动作盘效果。 |
+| P1 | 物体检测 | 浏览器端接入轻量 YOLO/RT-DETR ONNX，让角色能看见桌面物品。 |
+| P1 | 视觉上下文提示词优化 | 当前 `/chat` 已收到视觉上下文，后续需要让 LLM 更稳定地利用这些字段。 |
+| P2 | Firefly 迁移验证 | 在 Firefly Chromium 或替代前端环境中验证 WebGL、WASM、摄像头和音频权限。 |
 
-### 4.3 情绪模型接入步骤 (P0)
+## 9. 建议的下一步开发顺序
 
-```js
-// 1. npm install onnxruntime-web
-// 2. 下载 Mini-Xception ONNX 模型到 public/mediapipe/model/emotion.onnx
-//    模型来源: https://github.com/serengil/deepface (模型路径已变)
-//    或直接用这个: pip install deepface 后从 site-packages 找 mini_xception.onnx
-// 3. 在 perception-client.js 中添加:
-import * as ort from "onnxruntime-web";
-// 4. 每帧取 MediaPipe 检测到的人脸 crop (48x48 gray)
-// 5. ort.InferenceSession.create("emotion.onnx") → run()
-// 6. 输出: [angry, disgust, fear, happy, sad, surprise, neutral] 概率
+1. 跑 `npm run check`、Vite build 和 Python 测试，确认 ONNX 适配与视觉上下文链路没有破坏现有功能。
+2. 启动 Live2D 舞台，打开摄像头，人工验证头部、眼神、表情和麦克风输入。
+3. 准备轻量情绪 ONNX 模型，确保输入尺寸和标签顺序匹配 `emotion-onnx-client.js`。
+4. 将视觉上下文写进 LLM 提示词策略，让角色能主动提到用户表情、是否看向屏幕、是否正在说话。
+5. 再接入物体检测，先做少量可解释物体，例如人、手机、杯子、书。
+
+## 10. 关键设计取舍
+
+### 10.1 为什么当前主线在浏览器端做视觉
+
+浏览器已经拥有摄像头视频流，直接在浏览器端做 FaceLandmarker 可以避免跨进程传帧和摄像头抢占。对当前比赛展示来说，这是更稳的路线。
+
+### 10.2 为什么不立刻上 RKNN/NPU
+
+RK3588 NPU 是最终亮点之一，但现在项目还在交互闭环打磨阶段。先在浏览器和本地服务中把“看见用户 -> 理解状态 -> 角色反馈”跑顺，再迁移模型到 RKNN，风险更低。
+
+### 10.3 为什么保留 `main/visual-perception/`
+
+它是 Python 视觉路线的参考代码和失败经验记录。短期不要删除，除非新视觉方案完全稳定并有文档替代。
+
+## 11. 常用路径
+
+```text
+README.md
+HANDBOOK.md
+main/live2d_stage/src/stage.js
+main/live2d_stage/src/perception-client.js
+main/live2d_stage/src/emotion-onnx-client.js
+main/live2d_stage/src/mediapipe/vision_bundle.js
+main/live2d_stage/public/mediapipe/model/face_landmarker.task
+main/live2d_stage/public/mediapipe/model/emotion.onnx
+main/live2d_stage/public/mediapipe/wasm/
+main/scripts/live2d_control_server.py
+main/src/visual_companion_robot/voice/voxcpm_local.py
+main/src/visual_companion_robot/brain/memory.py
+main/docs/tasks.md
 ```
 
-### 4.4 YOLOv8n 接入步骤 (P1)
+## 12. 给新线程的第一句话
 
-```js
-// 1. npm install onnxruntime-web
-// 2. 下载 https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.onnx
-// 3. 新建 src/perception-objects.js (独立模块，不阻塞面部追踪)
-// 4. 每 N 帧 (e.g. 每 30 帧) 跑一次检测
-// 5. 输出: [{class: "cell phone", confidence: 0.85, bbox: [x,y,w,h]}, ...]
-// 6. 将此信息传给 LLM 用于场景理解
+可以直接这样开新线程：
+
+```text
+请读取 E:\CODE\Visual_Companion_Robot\HANDBOOK.md，并接手 Visual Companion Robot。先检查 git 状态，然后验证浏览器端视觉上下文链路：摄像头 -> perception-client.js -> emotion-onnx-client.js/规则情绪 -> stage.js /chat 请求 -> live2d_control_server.py sanitize_vision_context。
 ```
-
-### 4.5 LLM 对话接入 (P2)
-
-Firefly 硬件限制：
-- 只适合跑 1.1B~1.5B 量化模型
-- 建议: TinyLLaMA 1.1B Q4 / Qwen 1.5B Q4
-- 推理框架: llama.cpp 或 MLX (如迁移到 Mac)
-- 不通过 ONNX Runtime Web 跑（太慢），用本地 Python 服务或 cpp 独立进程
-
-输入上下文应包括：
-```
-当前时间: 下午 3:00
-用户面部: {head_pose: {yaw: 15, pitch: -5}, emotion: "happy", emotion_scores: {...}}
-场景物品: ["cell phone", "coffee cup", "book"]
-最近对话: ["你好", "今天天气怎么样"]
-响应策略: 根据情绪调整语气（happy → 活泼, sad → 温柔）
-```
-
----
-
-## 五、项目结构快照
-
-```
-Visual_Companion_Robot/
-├── .gitignore
-├── main/
-│   ├── live2d_stage/                 ← 当前活跃工作目录
-│   │   ├── index.html                ← 入口 (加了 console 日志过滤)
-│   │   ├── vite.config.mjs           ← Vite 配置 (移除了 Python 插件)
-│   │   ├── package.json
-│   │   └── src/
-│   │       ├── stage.js              ← Live2D 主循环
-│   │       ├── perception-client.js  ← 面部追踪 + 情绪
-│   │       ├── mediapipe/
-│   │       │   └── vision_bundle.js  ← MediaPipe 库 (dynamic import)
-│   │       └── ... (其他原始 UI 文件)
-│   │   └── public/
-│   │       └── mediapipe/
-│   │           ├── vision_bundle.js
-│   │           ├── model/face_landmarker.task
-│   │           └── wasm/vision_wasm_internal.{js,wasm}
-│   │
-│   └── visual-perception/            ← 旧 Python 参考代码
-│       ├── server.py                 ← 原 WebSocket 服务端
-│       ├── pipeline.py               ← 原推理管线 (已重写为 MediaPipe)
-│       └── models/                   ← 原 ONNX 模型代码 (无权重)
-```
-
----
-
-## 六、快速启动
-
-```bash
-# 当前开发环境 (本地 PC)
-npm --prefix main/live2d_stage run dev
-# 打开 http://127.0.0.1:5174
-# 点击 检测摄像头 → 开启摄像头
-
-# Vite 配置
-cd main/live2d_stage
-npm install   # 安装依赖 (如 playwright)
-npm run dev   # 启动开发服务器 (localhost:5174)
-```
-
----
-
-*文档版本: 2026-05-24*
-*移交目标: Codex / 后续开发者*
-*原始作者: Reasonix Code (visual-perception 子代理)*
