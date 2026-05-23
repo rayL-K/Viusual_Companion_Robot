@@ -210,11 +210,15 @@ const statusEl = document.getElementById("stageStatus");
 const hintEl = document.getElementById("stageHint");
 const replyBubbleEl = document.getElementById("replyBubble");
 const replyEl = document.getElementById("replyText");
+const bubbleFontDown = document.getElementById("bubbleFontDown");
+const bubbleFontUp = document.getElementById("bubbleFontUp");
+const bubbleResizeHandle = document.getElementById("bubbleResizeHandle");
 const expressionEl = document.getElementById("expressionValue");
 const motionEl = document.getElementById("motionValue");
 const emotionEl = document.getElementById("emotionValue");
 const voiceEl = document.getElementById("voiceValue");
 const canvasHost = document.getElementById("live2dCanvas");
+const dropOverlayEl = document.getElementById("dropOverlay");
 const chatForm = document.getElementById("chatForm");
 const chatInput = document.getElementById("chatInput");
 const speechRateInput = document.getElementById("speechRateInput");
@@ -322,6 +326,244 @@ function finishReplyStream() {
     clearReplyStream();
     setReplyTextContent(targetText);
   }
+}
+
+/* ── 文件拖拽投喂 ─────────────────────────────── */
+
+const DROPPED_CODE_EXTS = new Set([
+  ".py", ".js", ".ts", ".jsx", ".tsx", ".html", ".css", ".scss", ".less",
+  ".json", ".xml", ".yaml", ".yml", ".md", ".txt",
+  ".java", ".cpp", ".c", ".h", ".hpp", ".go", ".rs", ".rb", ".php",
+  ".swift", ".kt", ".scala", ".sh", ".bat", ".ps1", ".sql",
+]);
+
+function isDroppedCodeFile(filename) {
+  const dot = filename.lastIndexOf(".");
+  if (dot === -1) return false;
+  const ext = filename.slice(dot).toLowerCase();
+  return DROPPED_CODE_EXTS.has(ext);
+}
+
+function showDropOverlay() {
+  dropOverlayEl.hidden = false;
+  canvasHost.classList.add("is-drag-over");
+}
+
+function hideDropOverlay() {
+  dropOverlayEl.hidden = true;
+  canvasHost.classList.remove("is-drag-over");
+}
+
+async function handleFileDrop(event) {
+  event.preventDefault();
+  hideDropOverlay();
+
+  const files = event.dataTransfer.files;
+  if (!files || files.length === 0) return;
+
+  const file = files[0];
+  const filename = file.name;
+  const isCode = isDroppedCodeFile(filename);
+
+  // 读取文件内容（尝试文本，失败则只传文件名）
+  let content = "";
+  try {
+    content = await file.text();
+    // 限制内容长度，避免 LLM 请求过大
+    if (content.length > 6000) {
+      content = content.slice(0, 6000) + "\n\n... [文件过长，已截断]";
+    }
+  } catch (_err) {
+    // 二进制文件无法读取为文本
+    content = `[二进制文件，大小 ${(file.size / 1024).toFixed(1)} KB]`;
+  }
+
+  // 构造发送文本：代码文件走审查，普通文件走投喂互动
+  let userText;
+  if (isCode && content.length > 50) {
+    userText = `[代码审查] 文件「${filename}」：\n\`\`\`\n${content}\n\`\`\``;
+  } else {
+    userText = `[投喂文件] 我给了你一个文件「${filename}」${content ? `，内容如下：\n${content.slice(0, 500)}` : ""}`;
+  }
+
+  // 通过已有聊天链路发送
+  addControlLog("文件拖拽投喂", { filename, isCode, size: file.size });
+  submitChatText(userText, { source: "file-drop" });
+}
+
+function setupFileDrop() {
+  // 阻止整个页面的默认拖拽行为
+  document.addEventListener("dragover", (e) => {
+    if (e.dataTransfer.types.includes("Files")) {
+      e.preventDefault();
+    }
+  });
+  document.addEventListener("drop", (e) => {
+    if (e.dataTransfer.types.includes("Files")) {
+      e.preventDefault();
+    }
+  });
+
+  // 拖拽到 Live2D 画布上触发投喂
+  canvasHost.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer.types.includes("Files")) {
+      showDropOverlay();
+    }
+  });
+
+  canvasHost.addEventListener("dragleave", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = canvasHost.getBoundingClientRect();
+    const x = e.clientX;
+    const y = e.clientY;
+    if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) {
+      hideDropOverlay();
+    }
+  });
+
+  canvasHost.addEventListener("drop", handleFileDrop);
+}
+
+/* ── 聊天气泡交互（拖拽 + 缩放 + 字体） ──────── */
+// 复用已有 setupCameraWindowDrag 的 pointer 事件风格：
+// 状态存 modelState、事件绑元素上、不包 try/catch
+
+const BUBBLE_KEY_X = "visual-companion.bubble-x";
+const BUBBLE_KEY_Y = "visual-companion.bubble-y";
+const BUBBLE_KEY_W = "visual-companion.bubble-width";
+const BUBBLE_KEY_FS = "visual-companion.bubble-font-size";
+const BUBBLE_W_MIN = 160;
+const BUBBLE_W_MAX = 480;
+const BUBBLE_FS_MIN = 12;
+const BUBBLE_FS_MAX = 28;
+const BUBBLE_FS_STEP = 1;
+
+function restoreBubbleSettings() {
+  try {
+    const x = localStorage.getItem(BUBBLE_KEY_X);
+    const y = localStorage.getItem(BUBBLE_KEY_Y);
+    const w = localStorage.getItem(BUBBLE_KEY_W);
+    const fs = localStorage.getItem(BUBBLE_KEY_FS);
+    if (x !== null && y !== null) {
+      replyBubbleEl.style.left = x + "px";
+      replyBubbleEl.style.top = y + "px";
+    }
+    if (w !== null) {
+      replyBubbleEl.style.width = w + "px";
+    }
+    if (fs !== null) {
+      replyEl.style.fontSize = fs + "px";
+    }
+  } catch (_) {}
+}
+
+function setupBubbleInteraction() {
+  // ---- 气泡拖拽 ----
+  replyBubbleEl.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || !event.isPrimary) return;
+    // 点击控件按钮或缩放手柄时不触发拖拽
+    if (event.target.closest(".reply-bubble-controls, .bubble-resize-handle")) return;
+
+    event.preventDefault();
+    const cs = getComputedStyle(replyBubbleEl);
+    modelState.bubbleDrag = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      left: parseFloat(cs.left) || 0,
+      top: parseFloat(cs.top) || 0,
+      moved: false,
+    };
+    replyBubbleEl.classList.add("is-dragging");
+    replyBubbleEl.setPointerCapture(event.pointerId);
+  });
+
+  replyBubbleEl.addEventListener("pointermove", (event) => {
+    const drag = modelState.bubbleDrag;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    drag.moved = true;
+    replyBubbleEl.style.left = (drag.left + event.clientX - drag.startX) + "px";
+    replyBubbleEl.style.top = (drag.top + event.clientY - drag.startY) + "px";
+  });
+
+  replyBubbleEl.addEventListener("pointerup", (event) => {
+    if (modelState.bubbleDrag?.pointerId !== event.pointerId) return;
+    replyBubbleEl.classList.remove("is-dragging");
+    if (modelState.bubbleDrag.moved) {
+      const rect = replyBubbleEl.getBoundingClientRect();
+      try {
+        localStorage.setItem(BUBBLE_KEY_X, String(rect.left));
+        localStorage.setItem(BUBBLE_KEY_Y, String(rect.top));
+      } catch (_) {}
+    }
+    modelState.bubbleDrag = null;
+    replyBubbleEl.releasePointerCapture(event.pointerId);
+  });
+
+  replyBubbleEl.addEventListener("pointercancel", () => {
+    if (!modelState.bubbleDrag) return;
+    replyBubbleEl.classList.remove("is-dragging");
+    modelState.bubbleDrag = null;
+  });
+
+  // ---- 气泡缩放（宽度 + 高度） ----
+  bubbleResizeHandle.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || !event.isPrimary) return;
+    event.stopPropagation();
+    const rect = replyBubbleEl.getBoundingClientRect();
+    modelState.bubbleResize = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      width: rect.width,
+      height: rect.height,
+    };
+    bubbleResizeHandle.setPointerCapture(event.pointerId);
+  });
+
+  bubbleResizeHandle.addEventListener("pointermove", (event) => {
+    const rz = modelState.bubbleResize;
+    if (!rz || rz.pointerId !== event.pointerId) return;
+    const newW = Math.max(BUBBLE_W_MIN, Math.min(BUBBLE_W_MAX, rz.width + event.clientX - rz.startX));
+    const newH = Math.max(60, rz.height + event.clientY - rz.startY);
+    replyBubbleEl.style.width = newW + "px";
+    replyBubbleEl.style.minHeight = newH + "px";
+  });
+
+  bubbleResizeHandle.addEventListener("pointerup", (event) => {
+    if (modelState.bubbleResize?.pointerId !== event.pointerId) return;
+    try {
+      localStorage.setItem(BUBBLE_KEY_W, String(replyBubbleEl.getBoundingClientRect().width));
+    } catch (_) {}
+    modelState.bubbleResize = null;
+    bubbleResizeHandle.releasePointerCapture(event.pointerId);
+  });
+
+  bubbleResizeHandle.addEventListener("pointercancel", () => {
+    modelState.bubbleResize = null;
+  });
+
+  // ---- 气泡字体大小 ----
+  function currentFontSize() {
+    const cur = parseFloat(replyEl.style.fontSize);
+    return Number.isFinite(cur) ? cur : parseFloat(getComputedStyle(replyEl).fontSize);
+  }
+
+  bubbleFontDown.addEventListener("click", () => {
+    const next = Math.max(BUBBLE_FS_MIN, Math.min(BUBBLE_FS_MAX, Math.round(currentFontSize()) - BUBBLE_FS_STEP));
+    replyEl.style.fontSize = next + "px";
+    try { localStorage.setItem(BUBBLE_KEY_FS, String(next)); } catch (_) {}
+  });
+
+  bubbleFontUp.addEventListener("click", () => {
+    const next = Math.max(BUBBLE_FS_MIN, Math.min(BUBBLE_FS_MAX, Math.round(currentFontSize()) + BUBBLE_FS_STEP));
+    replyEl.style.fontSize = next + "px";
+    try { localStorage.setItem(BUBBLE_KEY_FS, String(next)); } catch (_) {}
+  });
 }
 
 function addControlLog(type, payload) {
@@ -621,8 +863,9 @@ function setupPointerTracking() {
 function setupModelTransformControls() {
   canvasHost.addEventListener("pointerdown", startModelDrag);
   canvasHost.addEventListener("lostpointercapture", finishModelDrag);
-  canvasHost.addEventListener("wheel", zoomModelFromWheel, { passive: false });
-  canvasHost.addEventListener("dblclick", resetModelTransformFromPointer);
+  canvasHost.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+  });
   document.addEventListener("pointermove", moveModelDrag);
   document.addEventListener("pointerup", finishModelDrag);
   document.addEventListener("pointercancel", finishModelDrag);
@@ -633,7 +876,7 @@ function setupModelTransformControls() {
 }
 
 function startModelDrag(event) {
-  if (event.button !== 0 || !event.isPrimary) {
+  if (event.button !== 2 || !event.isPrimary) {
     return;
   }
 
@@ -687,7 +930,7 @@ function finishModelDrag(event) {
   canvasHost.classList.remove("is-dragging");
   persistModelTransform();
   if (!drag.moved) {
-    showModelScalePanel(event.clientX, event.clientY);
+    showModelScalePanel(drag.startClientX, drag.startClientY);
   }
   if (event.pointerId) {
     try {
@@ -2932,6 +3175,9 @@ chatForm.addEventListener("submit", (event) => {
   submitChatText(chatInput.value, { source: "text" });
 });
 
+setupFileDrop();
+setupBubbleInteraction();
+
 setupCameraWindowDrag();
 setupAudioWindowDrag();
 initializeCameraControls();
@@ -2941,7 +3187,9 @@ window.addEventListener("beforeunload", () => {
   stopAudioMonitor({ quiet: true });
 });
 
-initStage().catch((error) => {
+initStage().then(() => {
+  restoreBubbleSettings();
+}).catch((error) => {
   console.error(error);
   setStatus("Live2D 舞台启动失败", error.message);
 });

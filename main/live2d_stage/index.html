@@ -11,18 +11,34 @@
   <main class="app-shell">
     <section class="stage-card">
       <div id="live2dCanvas" class="live2d-canvas" aria-label="Live2D 真实模型展示区"></div>
+      <div id="dropOverlay" class="drop-overlay" hidden>
+        <div class="drop-overlay-content">
+          <span class="drop-overlay-icon">📎</span>
+          <span class="drop-overlay-text">松开以投喂文件</span>
+        </div>
+      </div>
       <div id="modelScalePanel" class="model-scale-panel" hidden>
-        <button id="modelScaleCloseButton" class="model-scale-close" type="button" aria-label="关闭人物大小面板">×</button>
-        <label for="modelScaleInput">
-          <span>人物大小</span>
+        <div class="model-scale-header">
+          <span class="model-scale-title">人物大小</span>
+          <button id="modelScaleCloseButton" class="model-scale-close" type="button" aria-label="关闭人物大小面板">×</button>
+        </div>
+        <label class="model-scale-label" for="modelScaleInput">
+          <span>缩放</span>
           <strong id="modelScaleValue">100%</strong>
         </label>
         <input id="modelScaleInput" type="range" min="0.4" max="2.6" step="0.01" value="1">
-        <button id="modelTransformResetButton" type="button">重置位置</button>
+        <button id="modelTransformResetButton" class="model-scale-reset" type="button">重置位置</button>
       </div>
       <div id="replyBubble" class="reply-bubble" aria-live="polite">
-        <span>草莓兔兔</span>
+        <div class="reply-bubble-header">
+          <span>草莓兔兔</span>
+          <div class="reply-bubble-controls">
+            <button id="bubbleFontDown" class="bubble-font-btn" type="button" aria-label="减小字体" title="减小字体">A–</button>
+            <button id="bubbleFontUp" class="bubble-font-btn" type="button" aria-label="增大字体" title="增大字体">A+</button>
+          </div>
+        </div>
         <p id="replyText">等待控制数据...</p>
+        <div id="bubbleResizeHandle" class="bubble-resize-handle" aria-hidden="true"></div>
       </div>
 
       <form id="chatForm" class="stage-chat-form">
