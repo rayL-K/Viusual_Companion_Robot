@@ -41,11 +41,12 @@ function live2dAssetPlugin() {
   };
 }
 
+
+
 export default defineConfig({
   plugins: [live2dAssetPlugin()],
   server: {
     host: "127.0.0.1",
     port: 5174,
-    strictPort: true,
   },
 });

@@ -1,3 +1,5 @@
+import { perceptionClient } from "./perception-client.js";
+
 const MODEL_URL = "/live2d/Strawberry_Rabbit/Strawberry_Rabbit.model3.json";
 const MANIFEST_URL = "/live2d/Strawberry_Rabbit/manifest.json";
 const CONTROL_URL = "/control/latest_control.json";
@@ -1125,10 +1127,31 @@ function updateModelParameters() {
   setParameter("ParamEyeLOpen", eyeBlink);
   setParameter("ParamEyeROpen", eyeBlink);
   applyBaseParameters();
-  applyPointerParameters();
   applyHeldActionParameters(now);
-  setParameter("ParamMouthOpenY", modelState.mouthCurrent);
-  setParameter("ParamMouthForm", modelState.mouthFormTarget);
+
+  // 视觉感知驱动（摄像头预览开启时自动生效）
+  const perceptionParams = perceptionClient.getLive2DParams();
+  if (!perceptionParams) {
+    // 没有摄像头追踪时用音频/鼠标驱动的口型
+    setParameter("ParamMouthOpenY", modelState.mouthCurrent);
+    setParameter("ParamMouthForm", modelState.mouthFormTarget);
+  }
+  if (perceptionParams) {
+    setParameter("ParamAngleX", perceptionParams.angleX);
+    setParameter("ParamAngleY", perceptionParams.angleY);
+    setParameter("ParamBodyAngleZ", perceptionParams.bodyAngleZ);
+    setParameter("ParamMouthSmile", perceptionParams.mouthSmile);
+    setParameter("ParamMouthOpenY", perceptionParams.mouthOpen);
+    setParameter("ParamEyeLOpen", perceptionParams.eyeOpen);
+    setParameter("ParamEyeROpen", perceptionParams.eyeOpen);
+    // 面部追踪激活时，眼球归中、身体不跟随鼠标
+    setParameter("ParamEyeBallX", 0);
+    setParameter("ParamEyeBallY", 0);
+    setParameter("ParamBodyAngleX", 0);
+    setParameter("ParamBodyAngleY", 0);
+  } else {
+    applyPointerParameters();
+  }
 }
 
 function blinkingValue(seconds) {
@@ -1882,6 +1905,23 @@ async function startCameraPreview() {
     modelState.cameraStream = stream;
     cameraPreviewEl.srcObject = stream;
     cameraWindowEl.hidden = false;
+    // 先注册状态回调，再启动感知（避免丢失第一帧状态）
+    perceptionClient.onStatus((status, detail) => {
+      const labels = {
+        loading:  "🔄 加载模型...",
+        ready:    "👤 等待人脸",
+        tracking: "🎯 追踪中",
+        error:    "⚠️ 感知错误",
+        stopped:  "",
+      };
+      const text = labels[status] || status;
+      if (status === "tracking") {
+        setCameraStatus(`🎯 ${detail}`, "");
+      } else if (text) {
+        setCameraStatus(text, "");
+      }
+    });
+    perceptionClient.start(cameraPreviewEl);
     restoreCameraWindowSize();
     restoreCameraWindowPosition();
     updateCameraWindowAspectRatio();
@@ -1908,6 +1948,7 @@ async function startCameraPreview() {
 }
 
 function stopCameraPreview(options = {}) {
+  perceptionClient.stop();
   if (modelState.cameraStream) {
     modelState.cameraStream.getTracks().forEach((track) => track.stop());
     modelState.cameraStream = null;

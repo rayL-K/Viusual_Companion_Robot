@@ -218,6 +218,14 @@
   <script src="https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/pixi.js@6.5.10/dist/browser/pixi.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/pixi-live2d-display@0.4.0/dist/cubism4.min.js"></script>
+  <script>
+    // 过滤 MediaPipe WASM 内部调试日志（不影响功能）
+    const _origCw = console.warn, _origCl = console.log;
+    const _mp = (m) => m.includes("face_landmarker_graph.cc") || m.includes("gl_context.cc")
+                  || m.includes("inference_feedback_manager.cc") || m.includes("custom_dbg") || m.includes("XNNPACK delegate") || m.includes("Graph successfully");
+    console.warn = (...a) => { if (!_mp(a.join(" "))) _origCw.apply(console, a); };
+    console.log = (...a) => { if (!_mp(a.join(" "))) _origCl.apply(console, a); };
+  </script>
   <script type="module" src="/src/stage.js"></script>
 </body>
 </html>

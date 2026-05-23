@@ -5,9 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5174",
-    "check": "node scripts/check-stage.mjs"
+    "check": "node scripts/check-stage.mjs",
+    "dev:perception": "vite --host 127.0.0.1 --port 5174"
   },
   "devDependencies": {
     "vite": "^8.0.12"
+  },
+  "dependencies": {
+    "playwright": "^1.60.0"
   }
 }
