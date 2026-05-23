@@ -14,6 +14,7 @@ from main.scripts.live2d_control_server import (
     parse_gradio_sse_data,
     probe_voxcpm_backend,
     resolve_voxcpm_base_url,
+    sanitize_vision_context,
     select_reference_config,
     select_voice_config,
 )
@@ -149,6 +150,37 @@ class VoxcpmControlServerTests(unittest.TestCase):
         result = parse_gradio_sse_data(raw_text)
 
         self.assertEqual(result[0]["url"], "https://example.com/audio.mp3")
+
+    def test_sanitize_vision_context_keeps_small_trusted_shape(self) -> None:
+        context = sanitize_vision_context(
+            {
+                "status": "running-with-extra-long-status-that-should-be-trimmed",
+                "hasFace": True,
+                "emotion": "happy",
+                "emotionSource": "onnx",
+                "emotionConfidence": 1.5,
+                "fullScores": {"happy": 0.9, "sad": -1, "unknown": 9},
+                "headPose": {"angleX": 99, "angleY": "-99", "bodyAngleZ": 12.34},
+                "mouth": {"smile": 0.4567, "open": 8},
+                "eyes": {"open": "0.3219"},
+            }
+        )
+
+        self.assertTrue(context["enabled"])
+        self.assertTrue(context["has_face"])
+        self.assertEqual(context["emotion"], "happy")
+        self.assertEqual(context["emotion_source"], "onnx")
+        self.assertEqual(context["emotion_confidence"], 1.0)
+        self.assertEqual(context["emotion_scores"], {"happy": 0.9, "sad": 0.0})
+        self.assertEqual(context["head_pose"]["angle_x"], 45.0)
+        self.assertEqual(context["head_pose"]["angle_y"], -45.0)
+        self.assertEqual(context["head_pose"]["body_angle_z"], 12.3)
+        self.assertEqual(context["mouth"]["smile"], 0.457)
+        self.assertEqual(context["mouth"]["open"], 1.0)
+        self.assertEqual(context["eyes"]["open"], 0.322)
+
+    def test_sanitize_vision_context_marks_missing_payload_disabled(self) -> None:
+        self.assertEqual(sanitize_vision_context(None), {"enabled": False})
 
 
 if __name__ == "__main__":

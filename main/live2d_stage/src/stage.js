@@ -3094,6 +3094,7 @@ async function requestChatPlan(userText) {
     body: JSON.stringify({
       text: String(userText || "").trim(),
       rate: currentSpeechRate(),
+      vision: perceptionClient.getContext(),
     }),
   });
   const payload = await response.json().catch(() => ({}));

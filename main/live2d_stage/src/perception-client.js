@@ -1,10 +1,12 @@
+import { emotionOnnxClient } from "./emotion-onnx-client.js";
+
 /**
- * 浏览器端视觉感知 — 基于 MediaPipe FaceLandmarker (CDN 方式)
+ * 浏览器端视觉感知：MediaPipe 负责人脸关键点，ONNX 情绪模型作为可选增强。
  *
- * 通过全局 Vision 对象加载，无需 npm 包。
- * 检测 cameraPreviewEl 视频帧 → 驱动 Live2D 参数。
+ * 检测 cameraPreviewEl 视频帧 → 输出 Live2D 参数与视觉上下文。
  */
 const DETECT_INTERVAL_MS = 66; // ~15fps
+const ONNX_EMOTION_INTERVAL_MS = 220;
 let _onStatus = null;
 
 /** @type {import('@mediapipe/tasks-vision').FaceLandmarker} */
@@ -20,12 +22,42 @@ export const perceptionClient = {
   _result: null,
   _status: "stopped",
   _lastEmotion: "",
+  _onnxEmotion: null,
+  _lastOnnxAt: 0,
+  _reportedOnnxStatus: "",
+  _latestParams: null,
 
   onStatus(fn) { _onStatus = fn; },
   get connected() { return this._running; },
   get hasFace() { return !!(this._result?.faceLandmarks?.length); },
   get latest() { return this._result; },
   get status() { return this._status; },
+  getContext() {
+    if (!this._running || !this._latestParams) {
+      return null;
+    }
+    const params = this._latestParams;
+    return {
+      status: this._status,
+      hasFace: this.hasFace,
+      emotion: params.emotion,
+      emotionSource: params.emotionSource,
+      emotionConfidence: roundNumber(params.emotionConfidence, 3),
+      fullScores: roundScoreMap(params.fullScores),
+      headPose: {
+        angleX: params.angleX,
+        angleY: params.angleY,
+        bodyAngleZ: params.bodyAngleZ,
+      },
+      mouth: {
+        smile: roundNumber(params.mouthSmile, 3),
+        open: roundNumber(params.mouthOpen, 3),
+      },
+      eyes: {
+        open: roundNumber(params.eyeOpen, 3),
+      },
+    };
+  },
 
   _setStatus(status, detail = "") {
     this._status = status;
@@ -68,6 +100,10 @@ export const perceptionClient = {
     this._result = null;
     this._videoEl = null;
     this._lastEmotion = "";
+    this._onnxEmotion = null;
+    this._lastOnnxAt = 0;
+    this._reportedOnnxStatus = "";
+    this._latestParams = null;
     this._setStatus("stopped");
   },
 
@@ -100,7 +136,7 @@ export const perceptionClient = {
     const smile    = Math.max(bm.mouthSmileLeft || 0, bm.mouthSmileRight || 0);
     const browUp   = (bm.browInnerUp || 0) + (bm.browOuterUpLeft || 0) + (bm.browOuterUpRight || 0);
     const jawOpen  = bm.jawOpen || 0;
-    const eyeBlink = (bm.eyeBlinkLeft || 0) + (bm.eyeBlinkRight || 0) / 2;
+    const eyeBlink = ((bm.eyeBlinkLeft || 0) + (bm.eyeBlinkRight || 0)) / 2;
 
     // 时间平滑（最后 5 帧滑动平均）
     const SMOOTH_FRAMES = 5;
@@ -148,15 +184,20 @@ export const perceptionClient = {
     if (Math.max(...Object.values(emo)) < 0.25) { emo.neutral = 1; }
     if (emo.happy > 0.35) { emo.sad *= 0.2; emo.angry *= 0.2; emo.fear *= 0.1; emo.disgust *= 0.1; }
     if (emo.surprise > 0.4) { emo.sad *= 0.3; emo.angry *= 0.3; }
-    const emotion = Object.entries(emo).reduce((a, b) => b[1] > a[1] ? b : a)[0];
+    const ruleEmotion = Object.entries(emo).reduce((a, b) => b[1] > a[1] ? b : a)[0];
+    const emotionResult = this._onnxEmotion?.emotion
+      ? this._onnxEmotion
+      : { emotion: ruleEmotion, confidence: emo[ruleEmotion] || 0, fullScores: emo, source: "blendshape_rule" };
+    const emotion = emotionResult.emotion;
 
     // 状态节流：只在情绪变化时更新状态栏避免闪烁
-    if (emotion !== this._lastEmotion) {
-      this._lastEmotion = emotion;
+    const emotionStatusKey = `${emotionResult.source}:${emotion}`;
+    if (emotionStatusKey !== this._lastEmotion) {
+      this._lastEmotion = emotionStatusKey;
       this._setStatus("tracking", emotion);
     }
 
-    return {
+    const params = {
       angleX: Math.round(nx * -40),
       angleY: Math.round(ny * -30),
       bodyAngleZ: Math.round(roll),
@@ -164,24 +205,91 @@ export const perceptionClient = {
       mouthOpen: Math.max(0, Math.min(1, sJawOpen)),
       browRaise: Math.max(0, Math.min(1, sBrowUp / 3)),
       eyeOpen: Math.max(0, Math.min(1, 1 - sBlink)),
-      emotion, fullScores: emo,
+      emotion,
+      emotionSource: emotionResult.source,
+      emotionConfidence: emotionResult.confidence,
+      fullScores: emotionResult.fullScores,
     };
+    this._latestParams = params;
+    return params;
   },
 
-  _detectLoop() {
+  async _detectLoop() {
     if (!this._running || !this._videoEl) return;
     const video = this._videoEl;
     if (video.readyState >= 2 && video.videoWidth > 0) {
       try {
         this._result = _landmarker.detect(video);
         if (!this._result?.faceLandmarks?.length) {
+          this._onnxEmotion = null;
+          this._latestParams = null;
           if (this._lastEmotion !== "__no_face__") {
             this._lastEmotion = "__no_face__";
             this._setStatus("detecting", "无人脸");
           }
+        } else {
+          await this._updateOnnxEmotion(video);
         }
-      } catch (_) {}
+      } catch (error) {
+        this._setStatus("error", error.message || "视觉感知失败");
+      }
     }
     this._timer = setTimeout(() => this._detectLoop(), DETECT_INTERVAL_MS);
   },
+
+  async _updateOnnxEmotion(video) {
+    const now = performance.now();
+    if (now - this._lastOnnxAt < ONNX_EMOTION_INTERVAL_MS) {
+      return;
+    }
+    this._lastOnnxAt = now;
+    const faceBox = faceBoxFromLandmarks(this._result?.faceLandmarks?.[0]);
+    if (!faceBox) {
+      return;
+    }
+
+    const result = await emotionOnnxClient.classify(video, faceBox);
+    if (result) {
+      this._onnxEmotion = result;
+      return;
+    }
+    this._onnxEmotion = null;
+    if (emotionOnnxClient.status && emotionOnnxClient.status !== this._reportedOnnxStatus) {
+      this._reportedOnnxStatus = emotionOnnxClient.status;
+      console.info("[Perception] ONNX 情绪模型状态:", emotionOnnxClient.status, emotionOnnxClient.error || "");
+    }
+  },
 };
+
+function faceBoxFromLandmarks(landmarks) {
+  if (!landmarks?.length) {
+    return null;
+  }
+  const xs = landmarks.map((point) => point.x);
+  const ys = landmarks.map((point) => point.y);
+  const x1 = clamp01(Math.min(...xs));
+  const y1 = clamp01(Math.min(...ys));
+  const x2 = clamp01(Math.max(...xs));
+  const y2 = clamp01(Math.max(...ys));
+  return {
+    x: x1,
+    y: y1,
+    width: Math.max(0.01, x2 - x1),
+    height: Math.max(0.01, y2 - y1),
+  };
+}
+
+function clamp01(value) {
+  return Math.min(1, Math.max(0, Number(value)));
+}
+
+function roundNumber(value, digits) {
+  const factor = 10 ** digits;
+  return Math.round(Number(value || 0) * factor) / factor;
+}
+
+function roundScoreMap(scores) {
+  return Object.fromEntries(
+    Object.entries(scores || {}).map(([key, value]) => [key, roundNumber(value, 3)]),
+  );
+}

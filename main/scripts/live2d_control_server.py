@@ -50,6 +50,55 @@ def clamp(value: float, min_value: float, max_value: float) -> float:
     return max(min_value, min(max_value, value))
 
 
+def sanitize_vision_context(value: Any) -> Dict[str, Any]:
+    """保留浏览器视觉模块上报给 LLM 的小型可信上下文。"""
+
+    if not isinstance(value, dict):
+        return {"enabled": False}
+
+    def safe_float(raw_value: Any, min_value: float, max_value: float, digits: int = 3) -> float:
+        try:
+            number = float(raw_value)
+        except (TypeError, ValueError):
+            number = 0.0
+        return round(clamp(number, min_value, max_value), digits)
+
+    def safe_score_map(raw_scores: Any) -> Dict[str, float]:
+        if not isinstance(raw_scores, dict):
+            return {}
+        allowed = {"happy", "sad", "surprise", "angry", "fear", "disgust", "neutral"}
+        return {
+            key: safe_float(raw_scores.get(key), 0.0, 1.0)
+            for key in allowed
+            if key in raw_scores
+        }
+
+    head_pose = value.get("headPose") if isinstance(value.get("headPose"), dict) else {}
+    mouth = value.get("mouth") if isinstance(value.get("mouth"), dict) else {}
+    eyes = value.get("eyes") if isinstance(value.get("eyes"), dict) else {}
+    return {
+        "enabled": True,
+        "status": str(value.get("status") or "")[:32],
+        "has_face": bool(value.get("hasFace")),
+        "emotion": str(value.get("emotion") or "neutral")[:32],
+        "emotion_source": str(value.get("emotionSource") or "")[:32],
+        "emotion_confidence": safe_float(value.get("emotionConfidence"), 0.0, 1.0),
+        "emotion_scores": safe_score_map(value.get("fullScores")),
+        "head_pose": {
+            "angle_x": safe_float(head_pose.get("angleX"), -45.0, 45.0, digits=1),
+            "angle_y": safe_float(head_pose.get("angleY"), -45.0, 45.0, digits=1),
+            "body_angle_z": safe_float(head_pose.get("bodyAngleZ"), -45.0, 45.0, digits=1),
+        },
+        "mouth": {
+            "smile": safe_float(mouth.get("smile"), 0.0, 1.0),
+            "open": safe_float(mouth.get("open"), 0.0, 1.0),
+        },
+        "eyes": {
+            "open": safe_float(eyes.get("open"), 0.0, 1.0),
+        },
+    }
+
+
 def load_manifest() -> Tuple[list[str], list[str]]:
     with MANIFEST_PATH.open("r", encoding="utf-8") as handle:
         manifest = json.load(handle)
@@ -451,6 +500,7 @@ class ControlHandler(BaseHTTPRequestHandler):
                     "current_time": now.isoformat(timespec="seconds"),
                     "timezone": now.tzname() or "",
                     "internet_enabled": True,
+                    "vision": sanitize_vision_context(payload.get("vision")),
                 },
                 web_context=web_context,
             )

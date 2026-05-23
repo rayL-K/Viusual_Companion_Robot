@@ -8,6 +8,8 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 STAGE_JS_PATH = PROJECT_ROOT / "main" / "live2d_stage" / "src" / "stage.js"
+PERCEPTION_JS_PATH = PROJECT_ROOT / "main" / "live2d_stage" / "src" / "perception-client.js"
+EMOTION_ONNX_JS_PATH = PROJECT_ROOT / "main" / "live2d_stage" / "src" / "emotion-onnx-client.js"
 
 
 class Live2DStageFrontendTest(unittest.TestCase):
@@ -16,6 +18,8 @@ class Live2DStageFrontendTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.stage_source = STAGE_JS_PATH.read_text(encoding="utf-8")
+        cls.perception_source = PERCEPTION_JS_PATH.read_text(encoding="utf-8")
+        cls.emotion_onnx_source = EMOTION_ONNX_JS_PATH.read_text(encoding="utf-8")
 
     def test_speech_rate_controls_real_audio_playback(self) -> None:
         self.assertIn("audio.playbackRate = safeRate", self.stage_source)
@@ -95,6 +99,21 @@ class Live2DStageFrontendTest(unittest.TestCase):
         self.assertIn("checkSelectedVoiceHealth()", self.stage_source)
         self.assertIn("voxcpm_project_local", self.stage_source)
         self.assertIn("VoxCPM 项目内本地推理", self.stage_source)
+
+    def test_visual_context_is_sent_with_chat_request(self) -> None:
+        self.assertIn("vision: perceptionClient.getContext()", self.stage_source)
+        self.assertIn("getContext()", self.perception_source)
+        self.assertIn("emotionSource", self.perception_source)
+        self.assertIn("fullScores", self.perception_source)
+        self.assertIn("headPose", self.perception_source)
+
+    def test_onnx_emotion_adapter_stays_optional(self) -> None:
+        self.assertIn("emotionOnnxClient.classify(video, faceBox)", self.perception_source)
+        self.assertIn('source: "blendshape_rule"', self.perception_source)
+        self.assertIn("EMOTION_ONNX_MODEL_URL", self.emotion_onnx_source)
+        self.assertIn('import("onnxruntime-web")', self.emotion_onnx_source)
+        self.assertIn("dims: [1, 1, EMOTION_INPUT_SIZE, EMOTION_INPUT_SIZE]", self.emotion_onnx_source)
+        self.assertIn('source: "onnx"', self.emotion_onnx_source)
 
 
 if __name__ == "__main__":
