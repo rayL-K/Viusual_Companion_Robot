@@ -111,8 +111,10 @@ class Live2DStageFrontendTest(unittest.TestCase):
         self.assertIn("emotionOnnxClient.classify(video, faceBox)", self.perception_source)
         self.assertIn('source: "blendshape_rule"', self.perception_source)
         self.assertIn("EMOTION_ONNX_MODEL_URL", self.emotion_onnx_source)
+        self.assertIn("EMOTION_INPUT_SIZE = 224", self.emotion_onnx_source)
+        self.assertIn("EMOTION_INPUT_CHANNELS = 3", self.emotion_onnx_source)
         self.assertIn('import("onnxruntime-web")', self.emotion_onnx_source)
-        self.assertIn("dims: [1, 1, EMOTION_INPUT_SIZE, EMOTION_INPUT_SIZE]", self.emotion_onnx_source)
+        self.assertIn("dims: [1, EMOTION_INPUT_CHANNELS, EMOTION_INPUT_SIZE, EMOTION_INPUT_SIZE]", self.emotion_onnx_source)
         self.assertIn('source: "onnx"', self.emotion_onnx_source)
 
 

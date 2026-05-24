@@ -1,6 +1,10 @@
 const EMOTION_ONNX_MODEL_URL = "/mediapipe/model/emotion.onnx";
-const EMOTION_INPUT_SIZE = 48;
+const EMOTION_MODEL_SOURCE_URL = "https://huggingface.co/dwest1507/emotion-detection-model";
+const EMOTION_INPUT_SIZE = 224;
+const EMOTION_INPUT_CHANNELS = 3;
 const EMOTION_LABELS = ["angry", "disgust", "fear", "happy", "sad", "surprise", "neutral"];
+const IMAGENET_MEAN = [0.485, 0.456, 0.406];
+const IMAGENET_STD = [0.229, 0.224, 0.225];
 
 let ortModulePromise = null;
 let sessionPromise = null;
@@ -11,6 +15,7 @@ export const emotionOnnxClient = {
   status: "idle",
   error: "",
   modelUrl: EMOTION_ONNX_MODEL_URL,
+  sourceUrl: EMOTION_MODEL_SOURCE_URL,
   inputName: "",
   outputName: "",
   _ort: null,
@@ -93,7 +98,10 @@ async function checkModelExists(modelUrl) {
 async function loadOrt() {
   if (!ortModulePromise) {
     ortModulePromise = import("onnxruntime-web").then((ort) => {
-      ort.env.wasm.numThreads = Math.min(Math.max(navigator.hardwareConcurrency || 1, 1), 2);
+      const canUseThreads = window.crossOriginIsolated === true;
+      ort.env.wasm.numThreads = canUseThreads
+        ? Math.min(Math.max(navigator.hardwareConcurrency || 1, 1), 2)
+        : 1;
       return ort;
     });
   }
@@ -121,16 +129,19 @@ function buildFaceTensorData(videoEl, faceBox) {
   );
 
   const rgba = context.getImageData(0, 0, EMOTION_INPUT_SIZE, EMOTION_INPUT_SIZE).data;
-  const data = new Float32Array(EMOTION_INPUT_SIZE * EMOTION_INPUT_SIZE);
-  for (let index = 0; index < data.length; index += 1) {
-    const offset = index * 4;
-    const gray = rgba[offset] * 0.299 + rgba[offset + 1] * 0.587 + rgba[offset + 2] * 0.114;
-    data[index] = gray / 255;
+  const planeSize = EMOTION_INPUT_SIZE * EMOTION_INPUT_SIZE;
+  const data = new Float32Array(EMOTION_INPUT_CHANNELS * planeSize);
+  for (let pixelIndex = 0; pixelIndex < planeSize; pixelIndex += 1) {
+    const rgbaOffset = pixelIndex * 4;
+    for (let channel = 0; channel < EMOTION_INPUT_CHANNELS; channel += 1) {
+      const value = rgba[rgbaOffset + channel] / 255;
+      data[channel * planeSize + pixelIndex] = (value - IMAGENET_MEAN[channel]) / IMAGENET_STD[channel];
+    }
   }
 
   return {
     data,
-    dims: [1, 1, EMOTION_INPUT_SIZE, EMOTION_INPUT_SIZE],
+    dims: [1, EMOTION_INPUT_CHANNELS, EMOTION_INPUT_SIZE, EMOTION_INPUT_SIZE],
   };
 }
 

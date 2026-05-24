@@ -80,7 +80,7 @@ conda run -n visual-companion-robot python -m pytest main\tests -q
 | --- | --- | --- |
 | Live2D 舞台 | `main/live2d_stage/src/stage.js` | 主渲染循环、UI 状态、动作盘、摄像头/麦克风入口、LLM/TTS 请求。 |
 | 浏览器视觉感知 | `main/live2d_stage/src/perception-client.js` | MediaPipe FaceLandmarker，输出头部角度、眨眼、嘴部、微笑和情绪，并向 LLM 提供视觉上下文。 |
-| ONNX 情绪适配 | `main/live2d_stage/src/emotion-onnx-client.js` | 预留浏览器端 ONNX 情绪分类入口；模型缺失时自动沿用 blendshape 规则。 |
+| ONNX 情绪适配 | `main/live2d_stage/src/emotion-onnx-client.js` | 浏览器端 ONNX 情绪分类入口；模型缺失或加载失败时自动沿用 blendshape 规则。 |
 | MediaPipe 本地资源 | `main/live2d_stage/src/mediapipe/` 与 `main/live2d_stage/public/mediapipe/` | 离线加载 Tasks Vision JS、WASM 和 face_landmarker 模型。 |
 | 控制服务 | `main/scripts/live2d_control_server.py` | 提供 `/chat`、`/tts`、`/voices` 等接口。 |
 | VoxCPM2 本地推理 | `main/src/visual_companion_robot/voice/voxcpm_local.py` | 项目内本地 TTS 推理入口，Firefly 迁移时优先沿用。 |
@@ -162,14 +162,23 @@ main/live2d_stage/public/mediapipe/model/face_landmarker.task
 
 ### 7.3 情绪识别已经预留 ONNX 入口
 
-当前主路径是：优先尝试 `main/live2d_stage/public/mediapipe/model/emotion.onnx`，如果模型不存在或加载失败，则继续使用 52 组 blendshapes 规则加权。这样本地开发阶段不被模型文件卡住，后续只要放入匹配的轻量 ONNX 情绪模型即可升级。
+当前主路径是：优先尝试 `main/live2d_stage/public/mediapipe/model/emotion.onnx`，如果模型不存在或加载失败，则继续使用 52 组 blendshapes 规则加权。当前模型来自 Hugging Face `dwest1507/emotion-detection-model`，为 FER-2013 七分类 EfficientNet-B0 ONNX，项目内已合并为单文件模型。
+
+当前前端预处理约定：
+
+```text
+输入：1 x 3 x 224 x 224
+颜色：RGB
+归一化：ImageNet mean/std
+输出：angry, disgust, fear, happy, sad, surprise, neutral
+```
 
 ## 8. 近期优先级
 
 | 优先级 | 任务 | 说明 |
 | --- | --- | --- |
 | P0 | 真实浏览器回归 | 启动 Live2D 舞台，验证摄像头开启、面部追踪、鼠标回退、TTS 与聊天链路。 |
-| P0 | ONNX 情绪模型落盘 | 找到或训练一个输入为 `1x1x48x48` 的 7 类情绪 ONNX，放到 `public/mediapipe/model/emotion.onnx`。 |
+| P0 | 真实浏览器情绪回归 | 当前 ONNX 模型已落盘，下一步要用真实摄像头观察不同表情下的识别稳定性。 |
 | P1 | 情绪联动 Live2D 表情 | 将 `emotion/fullScores` 映射到 Live2D 表情或动作盘效果。 |
 | P1 | 物体检测 | 浏览器端接入轻量 YOLO/RT-DETR ONNX，让角色能看见桌面物品。 |
 | P1 | 视觉上下文提示词优化 | 当前 `/chat` 已收到视觉上下文，后续需要让 LLM 更稳定地利用这些字段。 |
@@ -179,7 +188,7 @@ main/live2d_stage/public/mediapipe/model/face_landmarker.task
 
 1. 跑 `npm run check`、Vite build 和 Python 测试，确认 ONNX 适配与视觉上下文链路没有破坏现有功能。
 2. 启动 Live2D 舞台，打开摄像头，人工验证头部、眼神、表情和麦克风输入。
-3. 准备轻量情绪 ONNX 模型，确保输入尺寸和标签顺序匹配 `emotion-onnx-client.js`。
+3. 用真实摄像头测试 `emotionSource=onnx` 时的情绪稳定性，必要时增加置信度阈值或时间平滑。
 4. 将视觉上下文写进 LLM 提示词策略，让角色能主动提到用户表情、是否看向屏幕、是否正在说话。
 5. 再接入物体检测，先做少量可解释物体，例如人、手机、杯子、书。
 
