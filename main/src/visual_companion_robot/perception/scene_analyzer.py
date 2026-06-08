@@ -1,11 +1,17 @@
 """Moondream 2 场景分析器。
 
-通过 HuggingFace Inference API 调用 Moondream 2，将摄像头帧转换为
-自然语言场景描述。后续可切换为本地量化模型。
+支持两种模式：
+- **API 模式**（默认）：通过 HuggingFace Inference API 调用。
+- **本地模式**：设置 ``local_model_path`` 参数直接加载本地模型。
 
 用法::
 
+    # API 模式
     analyzer = SceneAnalyzer(api_key="hf_xxx")
+
+    # 本地模式
+    analyzer = SceneAnalyzer(local_model_path="main/models/moondream2")
+
     frame = PerceptionFrame()
     analyzer.analyze(camera_frame, frame)
     print(frame.scene_caption)
@@ -15,15 +21,15 @@ from __future__ import annotations
 
 import logging
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional
-
-from huggingface_hub import InferenceClient
 
 from .vision import DetectedObject, PerceptionFrame, encode_frame_to_base64, now_iso
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL_ID = "vikhyatk/moondream2"
+DEFAULT_LOCAL_MODEL_PATH = "main/models/moondream2"
 DEFAULT_CAPTION_MAX_TOKENS = 80
 DEFAULT_QUERY_MAX_TOKENS = 40
 
@@ -32,21 +38,35 @@ class SceneAnalyzer:
     """基于 Moondream 2 的场景理解器。
 
     Args:
-        api_key: HuggingFace API token，默认读取 HF_TOKEN 环境变量。
-        model_id: 模型 ID，默认 Moondream 2。
-        timeout_sec: 单次 API 请求超时秒数。
+        api_key: HF API token（API 模式）。
+        model_id: 模型 ID（API 模式）。
+        local_model_path: 本地模型路径（本地模式），设为非 None 启用本地推理。
+        timeout_sec: API 请求超时秒数。
     """
 
     def __init__(
         self,
         api_key: Optional[str] = None,
         model_id: str = DEFAULT_MODEL_ID,
+        local_model_path: Optional[str] = None,
         timeout_sec: int = 30,
     ) -> None:
-        self._client = InferenceClient(model=model_id, token=api_key, timeout=timeout_sec)
         self._model_id = model_id
+        self._local_path = local_model_path
         self._last_frame_time = 0.0
-        self._min_interval = 0.8  # 最小间隔秒数，避免 API 限流
+        self._min_interval = 0.8
+
+        # 本地模型
+        self._local_model = None
+        if self._local_path:
+            self._load_local_model()
+
+        # API 客户端（仅 API 模式需要）
+        self._client = None
+        if not self._local_path:
+            from huggingface_hub import InferenceClient
+
+            self._client = InferenceClient(model=model_id, token=api_key, timeout=timeout_sec)
 
     # ------------------------------------------------------------------
     # 公共接口
@@ -60,39 +80,113 @@ class SceneAnalyzer:
             frame: 已有的 PerceptionFrame，为 None 时创建新的。
 
         Returns:
-            填充后的 PerceptionFrame，包含 scene/activity/emotion/objects。
+            填充后的 PerceptionFrame。
         """
 
         if frame is None:
             frame = PerceptionFrame()
 
-        # 限制调用频率
         now = time.perf_counter()
         if now - self._last_frame_time < self._min_interval:
             return frame
         self._last_frame_time = now
 
         frame.timestamp = now_iso()
-        b64 = encode_frame_to_base64(frame_bgr)
 
         try:
-            # 图片 URL（base64 data URI）
-            image_uri = f"data:image/jpeg;base64,{b64}"
-
-            # 三步推理：caption → activity → emotion + count
-            frame.scene_caption = self._caption(image_uri)
-            frame.person_activity = self._query(image_uri, "What is the person doing in this scene? Answer in one sentence.")
-            frame.emotion_impression = self._query(
-                image_uri,
-                "What emotion does the person show? Answer with one word: happy, sad, surprised, angry, or neutral.",
-            )
-            frame.person_count = self._count_people(image_uri)
+            if self._local_model:
+                self._analyze_local(frame_bgr, frame)
+            else:
+                self._analyze_api(frame_bgr, frame)
 
             logger.info("Moondream 分析完成: %s", frame.summary())
         except Exception:
-            logger.exception("Moondream API 调用失败")
+            logger.exception("Moondream 分析失败")
 
         return frame
+
+    # ------------------------------------------------------------------
+    # 本地推理
+    # ------------------------------------------------------------------
+
+    def _load_local_model(self) -> None:
+        """加载本地 Moondream 2 模型。"""
+
+        from PIL import Image
+
+        model_path = str(Path(self._local_path).resolve())
+
+        # Moondream 2 使用自定义模型代码，需要特殊的加载方式
+        import importlib.util
+        import sys
+
+        # 动态导入 moondream 模块
+        spec = importlib.util.spec_from_file_location(
+            "moondream",
+            str(Path(model_path) / "moondream.py"),
+        )
+        if spec and spec.loader:
+            module = importlib.util.module_from_spec(spec)
+            sys.modules["moondream"] = module
+            spec.loader.exec_module(module)
+
+            self._local_model = module.Moondream(
+                model_path=model_path,
+                device="cpu",
+            )
+            logger.info("Moondream 2 本地模型已加载 [path=%s]", model_path)
+        else:
+            raise RuntimeError(f"无法加载 moondream.py: {model_path}")
+
+    def _analyze_local(self, frame_bgr, frame: PerceptionFrame) -> None:
+        """本地模型推理。"""
+
+        import numpy as np
+        from PIL import Image
+
+        # BGR → RGB → PIL
+        rgb = frame_bgr[..., ::-1]
+        img = Image.fromarray(rgb)
+
+        try:
+            frame.scene_caption = self._local_model.caption(img, length="normal")["caption"]
+        except Exception:
+            frame.scene_caption = ""
+
+        try:
+            frame.person_activity = self._local_model.query(img, "What is the person doing?")
+        except Exception:
+            pass
+
+        try:
+            emotion = self._local_model.query(img, "What emotion? Answer with one word.")
+            frame.emotion_impression = emotion.strip().lower()
+        except Exception:
+            pass
+
+        try:
+            people = self._local_model.query(img, "How many people? Answer with a number.")
+            frame.person_count = int(people.strip()) if people.strip().isdigit() else 0
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # API 推理
+    # ------------------------------------------------------------------
+
+    def _analyze_api(self, frame_bgr, frame: PerceptionFrame) -> None:
+        """HF API 推理。"""
+
+        b64 = encode_frame_to_base64(frame_bgr)
+        image_uri = f"data:image/jpeg;base64,{b64}"
+
+        frame.scene_caption = self._caption(image_uri)
+        frame.person_activity = self._query(image_uri, "What is the person doing in this scene? Answer in one sentence.")
+        frame.emotion_impression = self._query(
+            image_uri,
+            "What emotion does the person show? Answer with one word: happy, sad, surprised, angry, or neutral.",
+        )
+        frame.person_count = self._count_people(image_uri)
 
     # ------------------------------------------------------------------
     # 底层 API 调用

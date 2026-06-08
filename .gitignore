@@ -19,4 +19,4 @@ main/visual-perception/models/weights/*.tflite
 
 # Temp playwright test scripts
 main/live2d_stage/tmp/
-main/live2d_stage/_*.cjs
+main/live2d_stage/_*.cjsmain/models/
