@@ -1,4 +1,6 @@
 PyYAML>=6.0,<7.0
 huggingface-hub>=0.20
 opencv-python>=4.9
+sherpa-onnx>=1.10
+numpy>=1.24
 
