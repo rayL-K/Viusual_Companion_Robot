@@ -260,3 +260,80 @@ def encode_wav_bytes(wav: Any, sample_rate: int) -> bytes:
     buffer = BytesIO()
     sf.write(buffer, audio, sample_rate, format="WAV", subtype="PCM_16")
     return buffer.getvalue()
+
+
+def encode_wav_file(wav: Any, sample_rate: int, file_path: str) -> str:
+    """把 VoxCPM 返回的波形数组编码为 WAV 文件。
+
+    Returns:
+        写入的文件路径。
+    """
+
+    import numpy as np  # type: ignore[import-not-found]
+    import soundfile as sf  # type: ignore[import-not-found]
+
+    audio = np.asarray(wav, dtype=np.float32).reshape(-1)
+    sf.write(file_path, audio, sample_rate, format="WAV", subtype="PCM_16")
+    return file_path
+
+
+# ---------------------------------------------------------------------------
+# TTSInterface 适配器
+# ---------------------------------------------------------------------------
+
+
+class VoxCpmTTS:
+    """VoxCPM 本地 TTS 引擎，实现 TTSInterface 的文件路径协议。
+
+    由 ``speech.tts_interface.create_tts_engine(\"voxcpm\")`` 创建。
+    """
+
+    def __init__(self, project_root: Optional[Path] = None, **config_overrides) -> None:
+        """初始化 VoxCPM TTS 适配器。
+
+        Args:
+            project_root: 项目根目录，用于解析相对模型路径。
+            **config_overrides: 覆盖 VoxCpmLocalConfig 默认值的参数。
+        """
+
+        import os
+
+        self._project_root = Path(project_root) if project_root else Path.cwd()
+        self._config = self._build_config(config_overrides)
+        self._synthesizer = VoxCpmLocalSynthesizer(self._config)
+
+    def generate_audio(self, text: str, rate: float = 1.0, **kwargs) -> str:
+        """合成语音并写入文件。
+
+        Returns:
+            WAV 文件的绝对路径。
+        """
+
+        import tempfile
+
+        file_path = str(Path(tempfile.gettempdir()) / f"voxcpm_{id(self)}.wav")
+        wav, sample_rate = self._synthesizer.synthesize(text=text, rate=rate, **kwargs)
+        return encode_wav_file(wav, sample_rate, file_path)
+
+    def _build_config(self, overrides: dict) -> "VoxCpmLocalConfig":
+        """从环境变量和参数构造配置。"""
+
+        import os
+
+        model_path = str(
+            os.environ.get("VOXCPM_MODEL_PATH")
+            or overrides.get("model_path")
+            or str(DEFAULT_LOCAL_MODEL_PATH)
+        )
+        if not Path(model_path).is_absolute():
+            model_path = str(self._project_root / model_path)
+
+        return VoxCpmLocalConfig(
+            model_path=Path(model_path).resolve(),
+            device=str(os.environ.get("VOXCPM_DEVICE") or overrides.get("device") or "auto"),
+            control_instruction=str(overrides.get("control_instruction") or "年轻女性，温柔自然，语气友好"),
+            cfg_value=float(overrides.get("cfg_value", 2.0)),
+            inference_timesteps=int(overrides.get("inference_timesteps", 10)),
+            normalize=bool(overrides.get("do_normalize", True)),
+            denoise=bool(overrides.get("denoise", False)),
+        )
