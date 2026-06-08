@@ -1968,15 +1968,15 @@ async function startCameraPreview() {
     // 先注册状态回调，再启动感知（避免丢失第一帧状态）
     perceptionClient.onStatus((status, detail) => {
       const labels = {
-        loading:  "🔄 加载模型...",
-        ready:    "👤 等待人脸",
-        tracking: "🎯 追踪中",
+        loading:  "加载模型...",
+        ready:    "等待人脸",
+        tracking: "追踪中",
         error:    "⚠️ 感知错误",
         stopped:  "",
       };
       const text = labels[status] || status;
       if (status === "tracking") {
-        setCameraStatus(`🎯 ${detail}`, "");
+        setCameraStatus(detail, "");
         // 定时更新视觉感知面板
         if (!modelState._perceptionTimer) {
           modelState._perceptionTimer = setInterval(() => {
