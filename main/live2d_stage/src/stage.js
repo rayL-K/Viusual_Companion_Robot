@@ -657,11 +657,21 @@ function waitForRuntime() {
 }
 
 async function loadJson(url) {
-  const response = await fetch(url, { cache: "no-cache" });
+  // 加载 JSON 资源，网络或解析错误抛出带 URL 上下文的消息
+  let response;
+  try {
+    response = await fetch(url, { cache: "no-cache" });
+  } catch (error) {
+    throw new Error(`${url} 网络请求失败：${error.message || error}`);
+  }
   if (!response.ok) {
     throw new Error(`${url} 加载失败：HTTP ${response.status}`);
   }
-  return response.json();
+  try {
+    return await response.json();
+  } catch (error) {
+    throw new Error(`${url} JSON 解析失败：${error.message || error}`);
+  }
 }
 
 async function initStage() {

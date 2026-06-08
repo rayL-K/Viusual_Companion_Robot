@@ -255,7 +255,10 @@ class Live2DAssetTester:
         self.add_ok(f"expression:{name}", f"{len(params)} 个参数")
 
     def check_motion(self, name: str, relative_path: str) -> None:
-        """检查一个动作文件是否包含时间长度、帧率和曲线数据。"""
+        """检查一个动作文件是否包含时间长度、帧率和曲线数据。
+
+        拆分为 Meta 校验和 Curves 校验两个子方法以降低单函数复杂度。
+        """
 
         path = self.require_file(relative_path, f"motion:{name}")
         if path is None:
@@ -265,23 +268,40 @@ class Live2DAssetTester:
             return
         if data.get("Version") != 3:
             self.add_warning(f"motion:{name}", f"期望 Version=3，实际为 {data.get('Version')!r}")
+        duration, curves = self._check_motion_meta(data, name)
+        if curves is not None:
+            self._check_motion_curves(data, name)
+        self.action_sequence.append({"type": "motion", "name": name, "path": relative_path})
+        self.add_ok(f"motion:{name}", f"{duration} 秒，{len(curves) if curves else 0} 条曲线")
+
+    def _check_motion_meta(self, data: Dict[str, Any], name: str) -> Tuple[Optional[float], Optional[List[Any]]]:
+        """校验动作文件的 Meta 区（Duration、Fps、CurveCount）。"""
+
         meta = data.get("Meta")
         curves = data.get("Curves")
         if not isinstance(meta, dict):
             self.add_error(f"motion:{name}", "Meta 必须是对象")
-            return
+            return None, None
         if not isinstance(curves, list) or not curves:
             self.add_error(f"motion:{name}", "Curves 必须是非空数组")
-            return
+            return None, None
+
         duration = meta.get("Duration")
         fps = meta.get("Fps")
         if not isinstance(duration, (int, float)) or duration <= 0:
             self.add_error(f"motion:{name}", f"Duration 无效：{duration!r}")
         if not isinstance(fps, (int, float)) or fps <= 0:
             self.add_error(f"motion:{name}", f"Fps 无效：{fps!r}")
+
         curve_count = meta.get("CurveCount")
         if isinstance(curve_count, int) and curve_count != len(curves):
             self.add_warning(f"motion:{name}", f"CurveCount={curve_count}，实际曲线数={len(curves)}")
+        return duration, curves
+
+    def _check_motion_curves(self, data: Dict[str, Any], name: str) -> None:
+        """校验动作文件的每条曲线（Target、Id、Segments）。"""
+
+        curves = data.get("Curves", [])
         for index, curve in enumerate(curves):
             if not isinstance(curve, dict):
                 self.add_error(f"motion:{name}", f"第 {index} 条曲线必须是对象")
@@ -295,12 +315,20 @@ class Live2DAssetTester:
                 self.add_error(f"motion:{name}", f"第 {index} 条曲线的 Segments 无效")
             elif not all(isinstance(value, (int, float)) for value in segments):
                 self.add_error(f"motion:{name}", f"第 {index} 条曲线包含非数字片段值")
-        self.action_sequence.append({"type": "motion", "name": name, "path": relative_path})
-        self.add_ok(f"motion:{name}", f"{duration} 秒，{len(curves)} 条曲线")
 
     def run(self) -> Dict[str, Any]:
-        """执行完整资源检查并返回可写入 JSON 的报告对象。"""
+        """执行完整资源检查并返回可写入 JSON 的报告对象。
 
+        所有文件 IO 操作都有异常捕获，单个资源错误不会中断整体检查。
+        """
+
+        try:
+            return self._run_checks()
+        except OSError as exc:
+            self.add_error("file_io", f"资源检查过程中发生文件 IO 错误：{exc}")
+            return self.to_report(None)
+
+    def _run_checks(self) -> Dict[str, Any]:
         if not self.model_root.is_dir():
             self.add_error("model_root", f"缺少模型目录：{self.model_root}")
             return self.to_report(None)
@@ -385,10 +413,14 @@ def main() -> int:
     )
     report = tester.run()
 
-    args.report.parent.mkdir(parents=True, exist_ok=True)
-    with args.report.open("w", encoding="utf-8") as handle:
-        json.dump(report, handle, ensure_ascii=False, indent=2)
-        handle.write("\n")
+    try:
+        args.report.parent.mkdir(parents=True, exist_ok=True)
+        with args.report.open("w", encoding="utf-8") as handle:
+            json.dump(report, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+    except OSError as exc:
+        print(f"错误：报告写入失败 [{args.report}]：{exc}", file=sys.stderr)
+        return 1
 
     print("=== Live2D 资源结构测试 ===")
     print(f"模型目录：    {report['model_root']}")

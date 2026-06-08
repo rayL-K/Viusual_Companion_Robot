@@ -62,16 +62,29 @@ def sample_to_dict(sample: VisemeSample) -> Dict[str, Any]:
 
 
 def build_report_payload(samples: List[VisemeSample], mouth_config_path: Optional[Path]) -> Dict[str, Any]:
-    """生成 HTML 和 JSON 共享的测试报告数据。"""
+    """生成 HTML 和 JSON 共享的测试报告数据。
 
-    app_config = load_app_config()
-    avatar = load_live2d_avatar(
-        app_config.live2d_display.manifest_path,
-        expected_name=app_config.live2d_display.model_name,
-        expected_model3_path=app_config.live2d_display.model_path,
-    )
-    config_path = mouth_config_path or default_mouth_config_path()
-    mouth_config = load_mouth_shape_config(config_path)
+    Raises:
+        FileNotFoundError: 配置文件或模型文件缺失。
+        ValueError: 配置格式错误。
+    """
+
+    try:
+        app_config = load_app_config()
+        avatar = load_live2d_avatar(
+            app_config.live2d_display.manifest_path,
+            expected_name=app_config.live2d_display.model_name,
+            expected_model3_path=app_config.live2d_display.model_path,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        raise FileNotFoundError(f"Live2D 模型资源加载失败：{exc}") from exc
+
+    try:
+        config_path = mouth_config_path or default_mouth_config_path()
+        mouth_config = load_mouth_shape_config(config_path)
+    except (OSError, ValueError) as exc:
+        raise FileNotFoundError(f"嘴型配置文件加载失败 [{config_path if 'config_path' in dir() else '(未定位)'}]：{exc}") from exc
+
     frames = build_mouth_sync_frames(samples)
     coverage = summarize_viseme_coverage(samples)
 
@@ -96,10 +109,19 @@ def build_report_payload(samples: List[VisemeSample], mouth_config_path: Optiona
 
 
 def render_html(payload: Dict[str, Any]) -> str:
-    """渲染独立 HTML 报告。"""
+    """渲染独立 HTML 报告。
+
+    该函数包含完整的 CSS + HTML + JS 模板（约 700 行），长度来自模板字符串拼接而非
+    复杂逻辑。模板区域已用注释分隔为 CSS / 结构 / 脚本三段，便于定位维护。
+    """
 
     data_json = json.dumps(payload, ensure_ascii=False, indent=2).replace("</", "<\\/")
-    html = """<!doctype html>
+    html = _HTML_PREFIX + data_json + _HTML_SUFFIX
+    return html
+
+
+# ---- HTML 模板前半段：DOCTYPE → CSS → 结构 -------------------------------------------------
+_HTML_PREFIX = """<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
@@ -466,7 +488,10 @@ def render_html(payload: Dict[str, Any]) -> str:
       </div>
     </section>
   </main>
-  <script id="report-data" type="application/json">__REPORT_DATA__</script>
+  <script id="report-data" type="application/json">"""
+
+# ---- HTML 模板后半段：脚本 ----------------------------------------------------------------
+_HTML_SUFFIX = """</script>
   <script>
     const report = JSON.parse(document.getElementById("report-data").textContent);
     const initialSamples = report.samples.map((sample) => JSON.parse(JSON.stringify(sample)));
@@ -881,7 +906,6 @@ def render_html(payload: Dict[str, Any]) -> str:
 </body>
 </html>
 """
-    return html.replace("__REPORT_DATA__", data_json)
 
 
 def parse_args() -> argparse.Namespace:
@@ -914,11 +938,24 @@ def main() -> int:
     samples = build_visual_mouth_test_sequence(duration_ms=args.duration_ms, config_path=args.mouth_config)
     payload = build_report_payload(samples, args.mouth_config)
 
-    args.html_report.parent.mkdir(parents=True, exist_ok=True)
-    args.json_report.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        args.html_report.parent.mkdir(parents=True, exist_ok=True)
+        args.json_report.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        print(f"错误：无法创建报告目录：{exc}", file=sys.stderr)
+        return 1
 
-    args.html_report.write_text(render_html(payload), encoding="utf-8")
-    args.json_report.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    try:
+        args.html_report.write_text(render_html(payload), encoding="utf-8")
+    except OSError as exc:
+        print(f"错误：HTML 报告写入失败 [{args.html_report}]：{exc}", file=sys.stderr)
+        return 1
+
+    try:
+        args.json_report.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    except OSError as exc:
+        print(f"错误：JSON 报告写入失败 [{args.json_report}]：{exc}", file=sys.stderr)
+        return 1
 
     print("=== Live2D 嘴型可视化测试 ===")
     print("HTML 报告：{0}".format(args.html_report))

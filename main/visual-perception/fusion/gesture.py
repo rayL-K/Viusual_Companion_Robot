@@ -1,21 +1,27 @@
-"""手势识别"""
+"""手势识别 — 基于手腕位置和头部姿态滑动窗口的挥手/点头/摇头检测。"""
 from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass, field
 
 from fusion.state import Gesture, BodyKeypoints, HeadPose
 
+# 姿态关键点索引（COCO 标准）
 COCO = {"nose": 0, "Lshoulder": 5, "Rshoulder": 6, "Lwrist": 9, "Rwrist": 10}
 
 
 @dataclass
-class _GS:
+class _GestureState:
+    """滑动窗口累加器，用于稳定检测连续手势。
+
+    每个 deque 缓存最近 15 帧的测量值，振幅超出阈值时标志触发。
+    """
+
     wy: deque[float] = field(default_factory=lambda: deque(maxlen=15))
     ph: deque[float] = field(default_factory=lambda: deque(maxlen=15))
     yh: deque[float] = field(default_factory=lambda: deque(maxlen=15))
     last_area: float = 0.0
 
-_ST = _GS()
+_ST = _GestureState()
 
 
 def recognize_gestures(body: BodyKeypoints, head_pose: HeadPose, face_area: float, fps=30) -> Gesture:
@@ -45,7 +51,9 @@ def recognize_gestures(body: BodyKeypoints, head_pose: HeadPose, face_area: floa
     return r
 
 
-def reset_gesture_state():
+def reset_gesture_state() -> None:
+    """重置手势滑动窗口状态，清理所有历史帧。"""
+
     _ST.wy.clear()
     _ST.ph.clear()
     _ST.yh.clear()

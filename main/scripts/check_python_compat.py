@@ -33,16 +33,22 @@ def parse_version(value: str) -> Tuple[int, int]:
 
 
 def iter_python_files(paths: Sequence[Path]) -> Iterable[Path]:
-    """遍历待检查路径下的 Python 文件。"""
+    """遍历待检查路径下的 Python 文件，跳过 __pycache__ 目录。"""
 
     for path in paths:
         resolved = path.resolve()
         if resolved.is_file() and resolved.suffix == ".py":
             yield resolved
         elif resolved.is_dir():
-            for child in sorted(resolved.rglob("*.py")):
-                if "__pycache__" not in child.parts:
-                    yield child
+            yield from _iter_dir_python_files(resolved)
+
+
+def _iter_dir_python_files(root: Path) -> Iterable[Path]:
+    """递归遍历目录下的 `.py` 文件，排除缓存目录。"""
+
+    for child in sorted(root.rglob("*.py")):
+        if "__pycache__" not in child.parts:
+            yield child
 
 
 def parse_with_target_grammar(source: str, path: Path, target_version: Tuple[int, int]) -> None:

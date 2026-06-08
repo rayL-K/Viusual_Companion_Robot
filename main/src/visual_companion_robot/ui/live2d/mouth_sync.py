@@ -138,25 +138,44 @@ def default_mouth_config_path() -> Path:
 
 
 def load_mouth_shape_config(config_path: Optional[Path] = None) -> Dict[str, Any]:
-    """读取每个测试音的嘴型和临时声音配置。"""
+    """读取每个测试音的嘴型和临时声音配置。
+
+    Args:
+        config_path: 配置文件路径，为 None 时自动定位。
+
+    Returns:
+        解析后的配置字典。
+
+    Raises:
+        FileNotFoundError: 配置文件不存在。
+        ValueError: 根节点不是 JSON 对象或 JSON 解析失败。
+    """
 
     path = config_path or default_mouth_config_path()
-    with path.open("r", encoding="utf-8") as config_file:
-        data = json.load(config_file)
+    try:
+        with path.open("r", encoding="utf-8") as config_file:
+            data = json.load(config_file)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"嘴型配置文件 JSON 解析失败 [{path}]: {exc}") from exc
+    except OSError as exc:
+        raise OSError(f"无法读取嘴型配置文件 [{path}]: {exc}") from exc
     if not isinstance(data, dict):
-        raise ValueError("嘴型配置文件根节点必须是 JSON 对象。")
+        raise ValueError(f"嘴型配置文件根节点必须是 JSON 对象 [{path}]。")
     return data
 
 
 def validate_mouth_shape_config(config_path: Optional[Path] = None) -> List[str]:
-    """校验配置是否覆盖所有序列音，并且参数都在安全范围内。"""
+    """校验配置是否覆盖所有序列音，并且参数都在安全范围内。
 
-    errors: List[str] = []
+    拆分为子验证函数以降低单函数复杂度，各子函数独立验证 mouth 和 audio 参数。
+    """
+
     try:
         config = load_mouth_shape_config(config_path)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         return [str(exc)]
 
+    errors: List[str] = []
     sounds = config.get("sounds")
     sequence = config.get("sequence")
     if not isinstance(sounds, dict):
@@ -166,45 +185,77 @@ def validate_mouth_shape_config(config_path: Optional[Path] = None) -> List[str]
         errors.append("sequence 必须是数组。")
         sequence = []
 
+    # 检查 sequence 引用的音是否都在 sounds 中定义
     for index, sound_key in enumerate(sequence):
         if sound_key not in sounds:
             errors.append("sequence[{0}] 引用了不存在的音：{1}".format(index, sound_key))
 
+    # 逐音校验嘴型和音频参数
     for sound_key, sound in sounds.items():
         if not isinstance(sound, dict):
             errors.append("{0} 必须是对象。".format(sound_key))
             continue
-        viseme = sound.get("viseme")
-        if viseme not in VISEME_SHAPES:
-            errors.append("{0} 使用了未知嘴型：{1}".format(sound_key, viseme))
-        mouth = sound.get("mouth")
-        if not isinstance(mouth, dict):
-            errors.append("{0}.mouth 必须是对象。".format(sound_key))
-            mouth = {}
-        for key in MOUTH_PARAMETER_KEYS:
-            value = mouth.get(key)
-            if not isinstance(value, (int, float)):
-                errors.append("{0}.mouth.{1} 必须是数字。".format(sound_key, key))
-            elif not 0.0 <= float(value) <= 1.0:
-                errors.append("{0}.mouth.{1} 必须在 0 到 1 之间。".format(sound_key, key))
-        audio = sound.get("audio")
-        if not isinstance(audio, dict):
-            errors.append("{0}.audio 必须是对象。".format(sound_key))
-            audio = {}
-        if audio.get("mode") not in AUDIO_MODES:
-            errors.append("{0}.audio.mode 必须是 {1} 之一。".format(sound_key, ", ".join(AUDIO_MODES)))
-        for key in ("noise", "gain"):
-            value = audio.get(key)
-            if not isinstance(value, (int, float)):
-                errors.append("{0}.audio.{1} 必须是数字。".format(sound_key, key))
-            elif not 0.0 <= float(value) <= 1.0:
-                errors.append("{0}.audio.{1} 必须在 0 到 1 之间。".format(sound_key, key))
-        for key in ("frequencyHz", "secondFrequencyHz"):
-            value = audio.get(key)
-            if not isinstance(value, (int, float)):
-                errors.append("{0}.audio.{1} 必须是数字。".format(sound_key, key))
-            elif float(value) < 0.0:
-                errors.append("{0}.audio.{1} 不能小于 0。".format(sound_key, key))
+        errors.extend(_validate_sound_entry(sound_key, sound))
+    return errors
+
+
+def _validate_sound_entry(sound_key: str, sound: Dict[str, Any]) -> List[str]:
+    """校验单个音的 viseme、mouth 和 audio 配置。"""
+
+    errors: List[str] = []
+    viseme = sound.get("viseme")
+    if viseme not in VISEME_SHAPES:
+        errors.append("{0} 使用了未知嘴型：{1}".format(sound_key, viseme))
+
+    mouth = sound.get("mouth")
+    if isinstance(mouth, dict):
+        errors.extend(_validate_mouth_params(sound_key, mouth))
+    else:
+        errors.append("{0}.mouth 必须是对象。".format(sound_key))
+
+    audio = sound.get("audio")
+    if isinstance(audio, dict):
+        errors.extend(_validate_audio_params(sound_key, audio))
+    else:
+        errors.append("{0}.audio 必须是对象。".format(sound_key))
+    return errors
+
+
+def _validate_mouth_params(sound_key: str, mouth: Dict[str, Any]) -> List[str]:
+    """校验 mouth 对象的每个参数值（类型 + 范围 0~1）。"""
+
+    errors: List[str] = []
+    for key in MOUTH_PARAMETER_KEYS:
+        value = mouth.get(key)
+        if not isinstance(value, (int, float)):
+            errors.append("{0}.mouth.{1} 必须是数字。".format(sound_key, key))
+        elif not 0.0 <= float(value) <= 1.0:
+            errors.append("{0}.mouth.{1} 必须在 0 到 1 之间。".format(sound_key, key))
+    return errors
+
+
+def _validate_audio_params(sound_key: str, audio: Dict[str, Any]) -> List[str]:
+    """校验 audio 对象的 mode、增益、频率参数。"""
+
+    errors: List[str] = []
+    if audio.get("mode") not in AUDIO_MODES:
+        errors.append("{0}.audio.mode 必须是 {1} 之一。".format(sound_key, ", ".join(AUDIO_MODES)))
+
+    # noise 和 gain 必须在 0~1 之间
+    for key in ("noise", "gain"):
+        value = audio.get(key)
+        if not isinstance(value, (int, float)):
+            errors.append("{0}.audio.{1} 必须是数字。".format(sound_key, key))
+        elif not 0.0 <= float(value) <= 1.0:
+            errors.append("{0}.audio.{1} 必须在 0 到 1 之间。".format(sound_key, key))
+
+    # 频率不能为负
+    for key in ("frequencyHz", "secondFrequencyHz"):
+        value = audio.get(key)
+        if not isinstance(value, (int, float)):
+            errors.append("{0}.audio.{1} 必须是数字。".format(sound_key, key))
+        elif float(value) < 0.0:
+            errors.append("{0}.audio.{1} 不能小于 0。".format(sound_key, key))
     return errors
 
 

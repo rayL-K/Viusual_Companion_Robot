@@ -88,6 +88,11 @@ class PerceptionPipeline:
             await asyncio.sleep(max(0, 1 / 30 - elapsed))
 
     def _process_frame(self, frame) -> dict:
+        """处理单帧图像，返回包含人脸检测+姿态+情绪的字典。
+
+        MediaPipe 推理异常不会抛出，返回统一的"未检测到人脸"结构。
+        """
+
         h, w = frame.shape[:2]
         data = {
             "face": {"detected": False, "bbox": [0, 0, 0, 0]},
@@ -97,9 +102,13 @@ class PerceptionPipeline:
                           "left_eye_ear": 0, "right_eye_ear": 0},
         }
 
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-        result = self._detector.detect(mp_img)
+        try:
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+            result = self._detector.detect(mp_img)
+        except Exception:
+            logger.exception("MediaPipe 帧处理异常，返回默认空结果")
+            return data
 
         if not result.face_landmarks:
             return data

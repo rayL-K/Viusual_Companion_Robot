@@ -68,7 +68,10 @@ class VoxCpmLocalConfig:
 
 
 class VoxCpmLocalSynthesizer:
-    """项目内 VoxCPM 语音合成器。"""
+    """项目内 VoxCPM 语音合成器。
+
+    模型按配置缓存，同一配置只加载一次。合成失败时抛出 VoxCpmLocalError。
+    """
 
     def __init__(self, config: VoxCpmLocalConfig) -> None:
         self.config = config
@@ -165,6 +168,8 @@ class VoxCpmLocalSynthesizer:
 
     @staticmethod
     def _get_model(config: VoxCpmLocalConfig) -> Any:
+        """懒加载 VoxCPM 模型实例，同一配置复用缓存。"""
+
         cache_key = cache_key_for_config(config)
         if cache_key in _MODEL_CACHE:
             return _MODEL_CACHE[cache_key]

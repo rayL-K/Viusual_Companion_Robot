@@ -50,7 +50,9 @@ async def main():
         await asyncio.Future()
 
 
-async def _send(ws, msg):
+async def _send(ws, msg: str) -> None:
+    """安全地向单个 WebSocket 客户端发送消息，断连不抛异常。"""
+
     try:
         await ws.send(msg)
     except websockets.ConnectionClosed:

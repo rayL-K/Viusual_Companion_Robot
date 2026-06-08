@@ -4,3 +4,7 @@
 后续会在这里接入本地小语言模型、角色设定、短期上下文和长期记忆。
 """
 
+from .dialogue import DialogueTurn, DialogueContext
+
+__all__ = ["DialogueTurn", "DialogueContext"]
+

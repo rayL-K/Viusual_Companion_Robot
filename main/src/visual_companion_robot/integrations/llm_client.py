@@ -90,6 +90,14 @@ class DeepSeekLlmClient:
         model: Optional[str] = None,
         timeout_sec: int = 45,
     ) -> None:
+        """初始化 DeepSeek 客户端，API key 优先从环境变量读取。
+
+        Args:
+            api_key: DeepSeek API 密钥，默认读取 DEEPSEEK_API_KEY。
+            base_url: API 基地址，默认读取 DEEPSEEK_BASE_URL。
+            model: 模型名，默认读取 DEEPSEEK_MODEL。
+            timeout_sec: HTTP 请求超时秒数。
+        """
         self.api_key = api_key or os.environ.get("DEEPSEEK_API_KEY", "")
         self.base_url = (base_url or os.environ.get("DEEPSEEK_BASE_URL") or DEFAULT_DEEPSEEK_BASE_URL).rstrip("/")
         self.model = model or os.environ.get("DEEPSEEK_MODEL") or DEFAULT_DEEPSEEK_MODEL

@@ -65,10 +65,14 @@ def main() -> int:
         print("LLM 控制计划生成失败：{0}".format(exc))
         return 1
 
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    with args.output.open("w", encoding="utf-8") as handle:
-        json.dump(plan.to_dict(), handle, ensure_ascii=False, indent=2)
-        handle.write("\n")
+    try:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        with args.output.open("w", encoding="utf-8") as handle:
+            json.dump(plan.to_dict(), handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+    except OSError as exc:
+        print(f"控制文件写入失败 [{args.output}]：{exc}", file=sys.stderr)
+        return 1
 
     print("=== LLM Live2D 控制计划 ===")
     print("输出文件：{0}".format(args.output))

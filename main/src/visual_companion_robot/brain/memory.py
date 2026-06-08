@@ -97,40 +97,55 @@ class SqliteMemoryStore:
             )
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(str(self.db_path))
+        """建立 SQLite 连接，失败时给出包含路径的明确错误。"""
+
+        try:
+            return sqlite3.connect(str(self.db_path))
+        except sqlite3.Error as exc:
+            raise RuntimeError(f"SQLite 连接失败 [{self.db_path}]：{exc}") from exc
 
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
+        """连接上下文管理器，自动 commit 和 close。"""
+
         connection = self._connect()
         try:
             yield connection
             connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
         finally:
             connection.close()
 
     def _init_schema(self) -> None:
-        with self._connection() as connection:
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS conversation_turns (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_text TEXT NOT NULL,
-                    assistant_text TEXT NOT NULL,
-                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        """初始化数据库表结构，仅在表不存在时创建。"""
+
+        try:
+            with self._connection() as connection:
+                connection.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS conversation_turns (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_text TEXT NOT NULL,
+                        assistant_text TEXT NOT NULL,
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """
                 )
-                """
-            )
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS memory_items (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL,
-                    source TEXT NOT NULL,
-                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                connection.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS memory_items (
+                        key TEXT PRIMARY KEY,
+                        value TEXT NOT NULL,
+                        source TEXT NOT NULL,
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """
                 )
-                """
-            )
+        except sqlite3.Error as exc:
+            raise RuntimeError(f"SQLite 建表失败 [{self.db_path}]：{exc}") from exc
 
 
 def current_local_time() -> datetime:

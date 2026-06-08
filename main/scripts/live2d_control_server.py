@@ -274,7 +274,11 @@ def resolve_voxcpm_base_url(voice_config: Dict[str, Any]) -> str:
 
 
 def probe_voxcpm_backend(voice_config: Dict[str, Any], timeout_sec: int = 5) -> Dict[str, Any]:
-    """检查 VoxCPM Gradio 后端是否可访问。"""
+    """检查 VoxCPM Gradio 后端是否可访问。
+
+    先尝试 /gradio_api/info 端点，404 时回退探测根 URL。
+    网络不可达返回 {"ok": False, ...} 而非抛异常，便于前端展示。
+    """
 
     backend = str(voice_config.get("backend") or "")
     if backend == "voxcpm_project_local":
@@ -344,6 +348,12 @@ def build_voxcpm_gradio_payload(
 
 
 def synthesize_voxcpm_gradio(text: str, rate: float, voice_config: Dict[str, Any]) -> Tuple[bytes, str]:
+    """通过 Gradio API 调用 VoxCPM 合成语音。
+
+    流程：检查后端可用 → 上传参考音频 → 提交队列 → 等待 SSE 完成 → 下载音频。
+    整个流程已包裹 try-except，网络/API 错误会抛出 RuntimeError。
+    """
+
     base_url = resolve_voxcpm_base_url(voice_config)
     api_name = str(voice_config.get("api_name") or "generate").strip().strip("/")
     try:

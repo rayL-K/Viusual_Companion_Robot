@@ -67,7 +67,13 @@ def detect_weather_location(user_text: str) -> Optional[Dict[str, Any]]:
 
 
 def fetch_open_meteo_weather(location: Dict[str, Any], timeout_sec: int = 8) -> Tuple[Dict[str, Any], str]:
-    """调用 Open-Meteo 获取当前天气和今日预报。"""
+    """调用 Open-Meteo 获取当前天气和今日预报。
+
+    Raises:
+        urllib.error.URLError: 网络不可达或超时。
+        json.JSONDecodeError: 响应非 JSON。
+        KeyError: location 缺少必要字段。
+    """
 
     query = urllib.parse.urlencode(
         {
@@ -80,13 +86,19 @@ def fetch_open_meteo_weather(location: Dict[str, Any], timeout_sec: int = 8) -> 
         }
     )
     url = f"{OPEN_METEO_URL}?{query}"
-    with urllib.request.urlopen(url, timeout=timeout_sec) as response:
-        data = json.loads(response.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(url, timeout=timeout_sec) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Open-Meteo 返回非 JSON 数据 [{url}]：{exc}") from exc
     return data, url
 
 
 def format_open_meteo_weather(location: Dict[str, Any], data: Dict[str, Any], source_url: str) -> Dict[str, Any]:
-    """把 Open-Meteo 响应压缩成 LLM 易用的中文事实。"""
+    """把 Open-Meteo 响应压缩成 LLM 易用的中文事实。
+
+    所有 dict 取值使用 .get() 安全退化，空字段不会抛异常。
+    """
 
     current = data.get("current") or {}
     daily = data.get("daily") or {}
