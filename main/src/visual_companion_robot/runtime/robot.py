@@ -117,8 +117,8 @@ class RobotRuntime:
         # 3. LLM 推理
         response_text, emotion = self._call_llm(system, messages)
 
-        # 4. 提取动作 + 清理展示文本
-        action = extract_action(response_text)
+        # 4. 子 LLM 动作分类 + 清理展示文本
+        action = classify_action(response_text, self._cfg.llm_api_key)
         display = clean_display_text(response_text)
 
         # 5. 保存对话
@@ -373,11 +373,109 @@ _ACTION_MAP: dict[str, tuple[str, str]] = {
 }
 
 
-def extract_action(text: str) -> str:
-    """从 LLM 文本中提取动作关键词，返回 Live2D 动作名。
+def classify_action(text: str, api_key: str, base_url: str = "https://api.siliconflow.cn/v1") -> str:
+    """动作分类：关键词优先，无匹配时调子 LLM。
 
-    优先匹配最长关键词（「蹦蹦跳跳」优先于「跳」，「不好意思」优先于「好」）。
+    关键词匹配零延迟零成本，覆盖 90% 场景。子 LLM 处理关键词覆盖不到
+    的微妙表达（如「把围巾盖在身上假装被子」→ none）。
+
+    Args:
+        text: LLM 回复文本。
+        api_key: API token。
+        base_url: API 基地址。
+
+    Returns:
+        Live2D 动作名，无匹配时返回空字符串。
     """
+
+    # 1. 关键词匹配（<1ms，免费）
+    kw = _extract_action_by_keyword(text)
+    if kw:
+        return kw
+
+    # 2. 缓存命中（<1ms）
+    if text in _ACTION_CLASSIFY_CACHE:
+        return _ACTION_CLASSIFY_CACHE[text]
+
+    # 3. 子 LLM 兜底（~5s，~0.001 元）
+    return _classify_action_by_llm(text, api_key, base_url)
+
+
+def _classify_action_by_llm(text: str, api_key: str, base_url: str = "https://api.siliconflow.cn/v1") -> str:
+    """子 LLM 动作分类（关键词未命中时的兜底方案）。"""
+
+    import json
+    import urllib.request
+
+    available = [
+        "heart", "star_eyes", "flowers",       # 正面
+        "blush",                                # 害羞
+        "angry", "cry", "shadow_face", "sweat", # 负面
+        "question", "dizzy", "anxious",         # 疑惑
+        "scene1", "finger_heart", "twin_tail", "right_hand_up",  # 动作
+        "dark_mode",                            # 其他
+        "none",                                 # 无动作
+    ]
+
+    prompt = (
+        "你是一个动作分类器。给定角色的对话回复，判断角色此刻应该播放哪个 Live2D 表情或动作。\n\n"
+        f"可选动作: {', '.join(available)}\n"
+        "- heart: 开心、高兴、感到温暖、觉得可爱\n"
+        "- star_eyes: 惊喜、兴奋、眼前一亮\n"
+        "- flowers: 庆祝、撒花、美好的氛围\n"
+        "- blush: 害羞、脸红、不好意思、被夸奖、撒娇\n"
+        "- angry: 生气、不满、跺脚、鼓起腮帮\n"
+        "- cry: 难过、伤心、哭泣、委屈、心疼\n"
+        "- shadow_face: 无语、无奈、黑线、扶额\n"
+        "- sweat: 尴尬、流汗、不好意思但又不完全是害羞\n"
+        "- question: 疑惑、歪头、不解、懵\n"
+        "- dizzy: 头晕、眼花、被绕晕\n"
+        "- anxious: 着急、慌张、担心、紧张\n"
+        "- scene1: 蹦跳、挥手、打招呼、活泼的动作\n"
+        "- finger_heart: 比心、笔芯\n"
+        "- twin_tail: 双马尾相关\n"
+        "- right_hand_up: 举手、抬手、竖起耳朵/手指\n"
+        "- dark_mode: 黑化、坏笑、恶魔\n"
+        "- none: 没有明显的表情或动作，只是普通说话\n\n"
+        f"角色回复: {text}\n\n"
+        "只回复一个动作名，不要任何解释。"
+    )
+
+    payload = json.dumps({
+        "model": "Qwen/Qwen3-8B",
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 10,
+        "temperature": 0.0,
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        f"{base_url}/chat/completions",
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        action = data["choices"][0]["message"]["content"].strip().lower()
+        result = action if action in available else ""
+        # 写入缓存：下次相同文本直接命中
+        if result:
+            _ACTION_CLASSIFY_CACHE[text] = result
+        return result
+    except Exception:
+        return _extract_action_by_keyword(text)
+
+
+# 子 LLM 分类结果缓存，避免重复调用
+_ACTION_CLASSIFY_CACHE: dict[str, str] = {}
+
+
+def _extract_action_by_keyword(text: str) -> str:
+    """关键词回退方案（最长匹配优先）。"""
 
     best = ""
     best_len = 0
@@ -393,7 +491,6 @@ def clean_display_text(text: str) -> str:
 
     import re
 
-    # 去掉 (xxx) 和 （xxx）
     text = re.sub(r"\([^)]*\)", "", text)
     text = re.sub(r"（[^）]*）", "", text)
     return text.strip()
