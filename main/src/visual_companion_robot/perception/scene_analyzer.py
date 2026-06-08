@@ -121,24 +121,71 @@ class SceneAnalyzer:
             return 0
 
     def _infer(self, prompt: str, image_uri: str, max_tokens: int) -> str:
-        """原始 API 调用。"""
+        """原始 API 调用。
 
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image_url", "image_url": {"url": image_uri}},
-                    {"type": "text", "text": prompt},
-                ],
-            }
-        ]
+        通过 HTTPS_PROXY 环境变量配置代理访问 HF Inference API。
+        图片以 base64 data URI 形式嵌入 inputs 字段。
+        """
 
-        result = self._client.chat_completion(
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=0.0,
+        import base64
+        import os
+
+        import requests
+
+        b64_data = image_uri.split(",", 1)[1] if "," in image_uri else image_uri
+        token = getattr(self._client, "token", "")
+
+        api_url = f"https://api-inference.huggingface.co/models/{self._model_id}"
+        headers = {"Authorization": f"Bearer {token}"}
+
+        payload = {
+            "inputs": f"data:image/jpeg;base64,{b64_data}",
+            "parameters": {"max_new_tokens": max_tokens, "temperature": 0.0},
+        }
+
+        # 使用 requests 以支持环境变量代理（HTTPS_PROXY / HTTP_PROXY）
+        proxies = {}
+        for var in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"):
+            val = os.environ.get(var)
+            if val:
+                proxies["https"] = val
+                proxies["http"] = val
+                break
+
+        resp = requests.post(
+            api_url,
+            headers=headers,
+            json=payload,
+            timeout=self._client.timeout,
+            proxies=proxies if proxies else None,
         )
-        return result.choices[0].message.content
+
+        if resp.status_code == 503:
+            # 模型正在加载（冷启动），等待后重试一次
+            import time
+            time.sleep(3)
+            resp = requests.post(
+                api_url,
+                headers=headers,
+                json=payload,
+                timeout=self._client.timeout,
+                proxies=proxies if proxies else None,
+            )
+
+        if resp.status_code != 200:
+            raise RuntimeError(f"HF API {resp.status_code}: {resp.text[:300]}")
+
+        result = resp.json()
+
+        # 兼容多种返回格式
+        if isinstance(result, list) and result:
+            item = result[0]
+            if isinstance(item, dict):
+                return item.get("generated_text", str(item))
+            return str(item)
+        if isinstance(result, dict):
+            return result.get("generated_text", str(result))
+        return str(result)
 
     @staticmethod
     def _clean(text: str) -> str:
