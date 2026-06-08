@@ -268,7 +268,8 @@ const controlLogs = [];
 const MAX_RUNTIME_LOG_ITEMS = 120;
 const chatHistory = [];
 const actionButtons = new Map();
-const sidePanels = [actionPanel, voicePanel, skinPanel, cameraPanel, audioPanel, logPanel, historyPanel];
+const backendPanel = document.getElementById("backendPanel");
+const sidePanels = [actionPanel, voicePanel, skinPanel, cameraPanel, audioPanel, logPanel, historyPanel, backendPanel];
 
 function setStatus(message, hint = "") {
   statusEl.textContent = message;
@@ -325,6 +326,121 @@ function updatePerceptionPanel(ctx) {
   if (activity) activity.textContent = ctx.person_activity || ctx.activity || "-";
   if (emotion) emotion.textContent = ctx.emotion_impression || ctx.emotion || "-";
   if (count) count.textContent = ctx.person_count > 0 ? ctx.person_count : "-";
+}
+
+// ── 推理后端切换 ──
+
+/** 可用的推理后端配置 */
+const INFERENCE_BACKENDS = {
+  llm: {
+    label: "LLM 对话",
+    options: {
+      "siliconflow-deepseek":  { label: "硅基流动 - DeepSeek-V3",  icon: "cloud" },
+      "siliconflow-qwen":      { label: "硅基流动 - Qwen3-8B",     icon: "cloud" },
+      "local-qwen-1.5b":       { label: "本地 - Qwen2.5-1.5B",    icon: "chip" },
+      "local-ollama":           { label: "本地 - Ollama",           icon: "chip" },
+    },
+    active: "siliconflow-deepseek",
+    storageKey: "vc-backend-llm",
+  },
+  tts: {
+    label: "TTS 语音合成",
+    options: {
+      "voxcpm-local":     { label: "本地 - VoxCPM2",       icon: "chip" },
+      "voxcpm-api":       { label: "API - VoxCPM HF Space", icon: "cloud" },
+      "sherpa-onnx":      { label: "本地 - sherpa-onnx",   icon: "chip" },
+    },
+    active: "voxcpm-local",
+    storageKey: "vc-backend-tts",
+  },
+  asr: {
+    label: "ASR 语音识别",
+    options: {
+      "sherpa-onnx-sense": { label: "本地 - SenseVoice",    icon: "chip" },
+      "sherpa-onnx-para":  { label: "本地 - Paraformer",    icon: "chip" },
+      "web-speech":        { label: "浏览器 - Web Speech",   icon: "browser" },
+    },
+    active: "sherpa-onnx-sense",
+    storageKey: "vc-backend-asr",
+  },
+  vision: {
+    label: "视觉感知",
+    options: {
+      "siliconflow-qwen-vl": { label: "API - Qwen3-VL-8B",    icon: "cloud" },
+      "local-moondream":     { label: "本地 - Moondream 2",    icon: "chip" },
+      "mediapipe":           { label: "本地 - MediaPipe 人脸", icon: "chip" },
+    },
+    active: "siliconflow-qwen-vl",
+    storageKey: "vc-backend-vision",
+  },
+};
+
+/** 初始化后端面板 */
+function initBackendPanel() {
+  const list = document.getElementById("backendList");
+  if (!list) return;
+
+  // 从 localStorage 恢复选择
+  for (const [moduleId, cfg] of Object.entries(INFERENCE_BACKENDS)) {
+    const saved = localStorage.getItem(cfg.storageKey);
+    if (saved && cfg.options[saved]) cfg.active = saved;
+  }
+
+  list.replaceChildren();
+
+  for (const [moduleId, cfg] of Object.entries(INFERENCE_BACKENDS)) {
+    const section = document.createElement("div");
+    section.className = "backend-module";
+
+    const title = document.createElement("h3");
+    title.textContent = cfg.label;
+    section.appendChild(title);
+
+    for (const [key, opt] of Object.entries(cfg.options)) {
+      const row = document.createElement("label");
+      row.className = "backend-option" + (cfg.active === key ? " is-active" : "");
+
+      const radio = document.createElement("input");
+      radio.type = "radio";
+      radio.name = `backend-${moduleId}`;
+      radio.value = key;
+      radio.checked = cfg.active === key;
+      radio.addEventListener("change", () => {
+        if (radio.checked) {
+          cfg.active = key;
+          localStorage.setItem(cfg.storageKey, key);
+          // 刷新面板样式
+          initBackendPanel();
+          // 通知控制服务
+          applyBackendChange(moduleId, key);
+        }
+      });
+
+      const span = document.createElement("span");
+      span.textContent = opt.label;
+
+      row.appendChild(radio);
+      row.appendChild(span);
+      section.appendChild(row);
+    }
+
+    list.appendChild(section);
+  }
+
+  document.getElementById("backendPanelButton").addEventListener("click", () => openSidePanel(backendPanel));
+  document.getElementById("closeBackendPanelButton").addEventListener("click", () => closeSidePanel(backendPanel));
+}
+
+/** 通知后端切换推理引擎 */
+function applyBackendChange(moduleId, backendKey) {
+  const payload = { module: moduleId, backend: backendKey };
+  // 调用控制服务
+  fetch("http://127.0.0.1:8765/tts-runtime", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).catch(() => {});
+  addControlLog("推理后端切换", { module: moduleId, backend: backendKey });
 }
 
 function setReplyTextContent(text) {
@@ -746,6 +862,7 @@ async function initStage() {
   setStatus("Live2D 模型已加载", "可以直接在下方输入框对话，或从右侧动作盘手动测试动作。");
   await loadVoiceModels();
   await loadInitialControl();
+  initBackendPanel();
   scheduleIdleAction();
 }
 

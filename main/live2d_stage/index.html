@@ -80,12 +80,23 @@
 
       <div class="grid">
         <button id="actionDiskButton" type="button">动作盘</button>
-        <button id="voiceModelButton" type="button">更换语音模型</button>
-        <button id="skinModelButton" type="button">更换皮肤模型</button>
-        <button id="cameraPanelButton" type="button">视觉摄像头</button>
-        <button id="audioPanelButton" type="button">听觉麦克风</button>
-        <button id="controlLogButton" type="button">显示运行日志</button>
+        <button id="backendPanelButton" type="button">推理后端</button>
+        <button id="voiceModelButton" type="button">语音模型</button>
+        <button id="skinModelButton" type="button">皮肤模型</button>
+        <button id="cameraPanelButton" type="button">摄像头</button>
+        <button id="audioPanelButton" type="button">麦克风</button>
+        <button id="controlLogButton" type="button">运行日志</button>
       </div>
+
+      <section id="backendPanel" class="side-panel" hidden>
+        <header>
+          <h2>推理后端切换</h2>
+          <button id="closeBackendPanelButton" type="button" aria-label="收起后端面板">收起</button>
+        </header>
+        <div id="backendList" class="backend-list">
+          <p>正在读取后端配置...</p>
+        </div>
+      </section>
 
       <section id="actionPanel" class="side-panel" hidden>
         <header>

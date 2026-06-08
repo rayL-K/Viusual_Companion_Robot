@@ -981,6 +981,41 @@ code {
 
 }
 
+/* ── 推理后端面板 ── */
+.backend-list {
+  display: grid;
+  gap: 16px;
+}
+.backend-module h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: #66746d;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.backend-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #34423b;
+  transition: background 140ms ease;
+}
+.backend-option:hover {
+  background: rgba(40, 125, 90, 0.06);
+}
+.backend-option.is-active {
+  background: rgba(40, 125, 90, 0.12);
+  color: #1a4d36;
+  font-weight: 700;
+}
+.backend-option input[type="radio"] {
+  accent-color: #287d5a;
+}
+
 /* ── 视觉感知面板 ── */
 .perception-panel {
   border-color: #287d5a;
