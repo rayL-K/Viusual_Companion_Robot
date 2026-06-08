@@ -49,10 +49,12 @@ class SceneAnalyzer:
         api_key: Optional[str] = None,
         model_id: str = DEFAULT_MODEL_ID,
         local_model_path: Optional[str] = None,
+        device: str = "auto",
         timeout_sec: int = 30,
     ) -> None:
         self._model_id = model_id
         self._local_path = local_model_path
+        self._device = device
         self._last_frame_time = 0.0
         self._min_interval = 0.8
 
@@ -139,21 +141,29 @@ class SceneAnalyzer:
         sys.modules["moondream"] = module
         spec.loader.exec_module(module)
 
+        # 自动检测设备
+        device = self._device
+        if device == "auto":
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+
+        dtype = torch.float16 if device == "cuda" else torch.float32
+
         # 加载配置
         with open(f"{model_dir}/config.json") as f:
             config = module.MoondreamConfig.from_dict(json.load(f))
 
         # 加载模型权重
-        logger.info("加载 Moondream 2 模型权重...")
-        self._local_model = module.MoondreamModel(config, dtype=torch.float32)
+        logger.info("加载 Moondream 2 模型权重 [device=%s]...", device)
+        self._local_model = module.MoondreamModel(config, dtype=dtype)
         state = load_file(f"{model_dir}/model.safetensors", device="cpu")
-        state = {k: v.float() for k, v in state.items()}  # bf16 → f32
+        state = {k: v.to(dtype=dtype) for k, v in state.items()}
         self._local_model.load_state_dict(state, strict=False)
+        self._local_model.to(device)
         self._local_model.eval()
-        logger.info("Moondream 2 本地模型已加载 [path=%s]", model_dir)
+        logger.info("Moondream 2 本地模型已加载 [path=%s, device=%s]", model_dir, device)
 
     def _analyze_local(self, frame_bgr, frame: PerceptionFrame) -> None:
-        """本地模型推理。"""
+        """本地模型推理（CUDA 或 CPU）。"""
 
         import numpy as np
         from PIL import Image
@@ -163,23 +173,24 @@ class SceneAnalyzer:
         img = Image.fromarray(rgb)
 
         try:
-            frame.scene_caption = self._local_model.caption(img, length="normal")["caption"]
+            result = self._local_model.caption(img, length="normal")
+            frame.scene_caption = result.get("caption", "")
         except Exception:
             frame.scene_caption = ""
 
         try:
-            frame.person_activity = self._local_model.query(img, "What is the person doing?")
+            frame.person_activity = self._local_model.query(img, "What is the person doing? Answer in one sentence.")
         except Exception:
             pass
 
         try:
-            emotion = self._local_model.query(img, "What emotion? Answer with one word.")
+            emotion = self._local_model.query(img, "What emotion does the person show? Answer with one word: happy, sad, surprised, angry, or neutral.")
             frame.emotion_impression = emotion.strip().lower()
         except Exception:
             pass
 
         try:
-            people = self._local_model.query(img, "How many people? Answer with a number.")
+            people = self._local_model.query(img, "How many people are in this image? Answer with a number like 0, 1, 2.")
             frame.person_count = int(people.strip()) if people.strip().isdigit() else 0
         except Exception:
             pass
