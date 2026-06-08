@@ -285,7 +285,46 @@ function setReplyThinking() {
 
 function setReplyText(text) {
   clearReplyStream();
-  setReplyTextContent(text);
+  // 展示去括号的纯文本，有 display_text 优先
+  const display = text && typeof text === "object" ? (text.display_text || text.text || "") : String(text || "");
+  setReplyTextContent(cleanActionBrackets(display));
+}
+
+/** 去掉文本中的动作描述括号（全角/半角） */
+function cleanActionBrackets(text) {
+  return String(text || "").replace(/\([^)]*\)/g, "").replace(/（[^）]*）/g, "").trim();
+}
+
+/** 从回复文本中提取需要自动播放的动作名 */
+function extractAutoAction(text) {
+  const raw = String(text || "");
+  // 检查是否包含我们的 27 个动作名中的任何一个
+  const actions = [
+    "heart", "star_eyes", "flowers", "blush",
+    "angry", "cry", "shadow_face", "sweat",
+    "question", "dizzy", "anxious", "dark_mode",
+    "right_hand_up", "left_hand_up", "finger_heart",
+    "microphone", "gaming", "scene1", "twin_tail",
+    "up", "down", "left", "right",
+    "captain", "admiral", "governor"
+  ];
+  for (const action of actions) {
+    if (raw.toLowerCase().includes(action.toLowerCase())) return action;
+  }
+  return "";
+}
+
+/** 更新视觉感知面板 */
+function updatePerceptionPanel(ctx) {
+  if (!ctx) return;
+  const scene = document.getElementById("perceptionScene");
+  const activity = document.getElementById("perceptionActivity");
+  const emotion = document.getElementById("perceptionEmotion");
+  const count = document.getElementById("perceptionCount");
+  if (scene) scene.textContent = ctx.scene_caption || ctx.scene || "（无视觉数据）";
+  if (activity) activity.textContent = ctx.person_activity || ctx.activity || "-";
+  if (emotion) emotion.textContent = ctx.emotion_impression || ctx.emotion || "-";
+  if (count) count.textContent = ctx.person_count > 0 ? ctx.person_count : "-";
 }
 
 function setReplyTextContent(text) {
@@ -1321,6 +1360,12 @@ async function applyPlan(plan, options = { speak: true }) {
 }
 
 async function applyPlanVisuals(plan) {
+  // 1. 自动从回复文本提取动作（后端动作映射）
+  const autoAction = extractAutoAction(plan.text);
+  if (autoAction && !plan.actions.some((a) => a.name === autoAction)) {
+    plan.actions.push({ name: autoAction, mode: "pulse", durationMs: 2600, delayMs: 0 });
+  }
+
   if (plan.actions.length) {
     await applyActionControls(plan.actions);
   } else {
@@ -1328,6 +1373,11 @@ async function applyPlanVisuals(plan) {
   }
   await applyMotion(plan.motion);
   applyParameters(plan.parameters);
+
+  // 2. 更新视觉感知面板
+  if (plan.vision) {
+    updatePerceptionPanel(plan.vision);
+  }
 }
 
 function normalizePlan(plan) {
@@ -1927,6 +1977,13 @@ async function startCameraPreview() {
       const text = labels[status] || status;
       if (status === "tracking") {
         setCameraStatus(`🎯 ${detail}`, "");
+        // 定时更新视觉感知面板
+        if (!modelState._perceptionTimer) {
+          modelState._perceptionTimer = setInterval(() => {
+            const ctx = perceptionClient.getContext();
+            if (ctx) updatePerceptionPanel(ctx);
+          }, 2000);
+        }
       } else if (text) {
         setCameraStatus(text, "");
       }

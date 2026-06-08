@@ -980,3 +980,35 @@ code {
   }
 
 }
+
+/* ── 视觉感知面板 ── */
+.perception-panel {
+  border-color: #287d5a;
+}
+.perception-content {
+  padding: 12px 0;
+}
+.perception-scene {
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(40, 125, 90, 0.08);
+  color: #1a4d36;
+  font-size: 13px;
+  line-height: 1.6;
+  min-height: 40px;
+}
+.perception-detail {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+  font-size: 12px;
+}
+.perception-detail dt {
+  color: #66746d;
+}
+.perception-detail dd {
+  color: #17211c;
+  font-weight: 700;
+}
