@@ -114,21 +114,20 @@ class SceneAnalyzer:
     def _load_local_model(self) -> None:
         """加载本地 Moondream 2 模型。
 
-        模型文件结构：moondream.py + model.safetensors + config.json。
-        使用 importlib 动态加载自定义模型代码。
+        使用 importlib 动态加载 moondream 模块，配合 safetensors 加载权重。
+        RTX 2060 用 bfloat16（CUDA 支持），CPU 用 float32。
         """
 
         import json
+        import importlib.util
+        import sys
 
         import torch
         from safetensors.torch import load_file
 
         model_dir = str(Path(self._local_path).resolve())
 
-        # 动态导入 moondream 模块（作为包加载以支持相对导入）
-        import importlib.util
-        import sys
-
+        # 动态导入 moondream 包
         spec = importlib.util.spec_from_file_location(
             "moondream",
             str(Path(model_dir) / "moondream.py"),
@@ -141,26 +140,25 @@ class SceneAnalyzer:
         sys.modules["moondream"] = module
         spec.loader.exec_module(module)
 
-        # 自动检测设备
+        # 自动检测设备 + dtype
         device = self._device
         if device == "auto":
             device = "cuda" if torch.cuda.is_available() else "cpu"
-
+        # RTX 2060 (Turing) 不支持 bf16 硬件加速，用 fp16
         dtype = torch.float16 if device == "cuda" else torch.float32
 
-        # 加载配置
         with open(f"{model_dir}/config.json") as f:
             config = module.MoondreamConfig.from_dict(json.load(f))
 
-        # 加载模型权重
-        logger.info("加载 Moondream 2 模型权重 [device=%s]...", device)
+        logger.info("加载 Moondream 2 [device=%s, dtype=%s]...", device, dtype)
         self._local_model = module.MoondreamModel(config, dtype=dtype)
         state = load_file(f"{model_dir}/model.safetensors", device="cpu")
+        # bf16 → target dtype
         state = {k: v.to(dtype=dtype) for k, v in state.items()}
         self._local_model.load_state_dict(state, strict=False)
-        self._local_model.to(device)
+        self._local_model.to(device=device, dtype=dtype)
         self._local_model.eval()
-        logger.info("Moondream 2 本地模型已加载 [path=%s, device=%s]", model_dir, device)
+        logger.info("Moondream 2 已加载 [%s]", model_dir)
 
     def _analyze_local(self, frame_bgr, frame: PerceptionFrame) -> None:
         """本地模型推理（CUDA 或 CPU）。"""
