@@ -117,7 +117,11 @@ class RobotRuntime:
         # 3. LLM 推理
         response_text, emotion = self._call_llm(system, messages)
 
-        # 4. 保存对话
+        # 4. 提取动作 + 清理展示文本
+        action = extract_action(response_text)
+        display = clean_display_text(response_text)
+
+        # 5. 保存对话
         from visual_companion_robot.brain import DialogueTurn
 
         self._context.history.append(
@@ -128,7 +132,12 @@ class RobotRuntime:
             )
         )
 
-        return RobotResponse(text=response_text, emotion=emotion)
+        return RobotResponse(
+            text=response_text,
+            display_text=display,
+            emotion=emotion,
+            actions=[action] if action else [],
+        )
 
     # ------------------------------------------------------------------
     # 内部
@@ -259,7 +268,63 @@ class RobotResponse:
 
     text: str
     emotion: str = "neutral"
+    display_text: str = ""  # 展示文本（去掉动作描述后的纯文本）
     actions: list[str] = field(default_factory=list)
+
+
+# ── 动作映射表：LLM 输出关键词 → Live2D 动作名 ──────────────────
+
+_ACTION_MAP: dict[str, tuple[str, str]] = {
+    # 表情 → (动作名, 模式)
+    "害羞": ("blush", "pulse"),
+    "脸红": ("blush", "pulse"),
+    "开心": ("heart", "pulse"),
+    "爱心": ("heart", "pulse"),
+    "星星眼": ("star_eyes", "pulse"),
+    "晕": ("dizzy", "pulse"),
+    "流汗": ("sweat", "pulse"),
+    "汗": ("sweat", "pulse"),
+    "着急": ("anxious", "pulse"),
+    "生气": ("angry", "pulse"),
+    "怒": ("angry", "pulse"),
+    "黑脸": ("shadow_face", "pulse"),
+    "无语": ("shadow_face", "pulse"),
+    "哭": ("cry", "pulse"),
+    "难过": ("cry", "pulse"),
+    "问号": ("question", "pulse"),
+    "疑惑": ("question", "pulse"),
+    "花花": ("flowers", "pulse"),
+    "黑化": ("dark_mode", "pulse"),
+    # 手势/动作 → 动作名
+    "挥手": ("scene1", "pulse"),
+    "招手": ("scene1", "pulse"),
+    "比心": ("finger_heart", "pulse"),
+    "双马尾": ("twin_tail", "hold"),
+    "抬手": ("right_hand_up", "pulse"),
+    "举手": ("right_hand_up", "pulse"),
+    "蹦": ("scene1", "pulse"),
+    "跳": ("scene1", "pulse"),
+}
+
+
+def extract_action(text: str) -> str:
+    """从 LLM 文本中提取动作关键词，返回 Live2D 动作名。"""
+
+    for keyword, (action_name, _mode) in _ACTION_MAP.items():
+        if keyword in text:
+            return action_name
+    return ""
+
+
+def clean_display_text(text: str) -> str:
+    """去掉文本中的动作描述括号（全角/半角），得到纯展示文本。"""
+
+    import re
+
+    # 去掉 (xxx) 和 （xxx）
+    text = re.sub(r"\([^)]*\)", "", text)
+    text = re.sub(r"（[^）]*）", "", text)
+    return text.strip()
 
 
 # ------------------------------------------------------------------
