@@ -451,7 +451,28 @@ def activate_tts_runtime(voice_id: str) -> Dict[str, Any]:
 
 
 class ControlHandler(BaseHTTPRequestHandler):
-    server_version = "VisualCompanionControl/0.2"
+    """Live2D 控制服务 HTTP 处理器。
+
+    使用消息分发表（dict dispatch）替代 if/elif 链，参考 Open-LLM-VTuber 的
+    WebSocket handler 模式。新增路由只需在分发表中添加一行。
+    """
+
+    server_version = "VisualCompanionControl/0.3"
+
+    # ---- GET 路由分发表 ----
+    _GET_ROUTES: Dict[str, str] = {
+        "/health": "_health",
+        "/voices": "_voices",
+        "/tts-health": "_tts_health",
+        "/reference-audio": "_reference_audio",
+    }
+
+    # ---- POST 路由分发表 ----
+    _POST_ROUTES: Dict[str, str] = {
+        "/chat": "_chat",
+        "/tts": "_tts",
+        "/tts-runtime": "_tts_runtime",
+    }
 
     def do_OPTIONS(self) -> None:
         self.send_response(204)
@@ -461,32 +482,19 @@ class ControlHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed_url = urlparse(self.path)
         path = parsed_url.path
-        if path == "/health":
-            self.send_json({"ok": True, "service": "live2d-control"})
-            return
-        if path == "/voices":
-            self.send_json(load_tts_config())
-            return
-        if path == "/tts-health":
-            self.handle_tts_health(parsed_url.query)
-            return
-        if path == "/reference-audio":
-            self.handle_reference_audio(parsed_url.query)
-            return
-        self.send_json({"error": "Not found"}, status=404)
+        handler_name = self._GET_ROUTES.get(path)
+        if handler_name:
+            getattr(self, f"handle{handler_name}")(parsed_url.query)
+        else:
+            self.send_json({"error": "Not found"}, status=404)
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path == "/chat":
-            self.handle_chat()
-            return
-        if path == "/tts":
-            self.handle_tts()
-            return
-        if path == "/tts-runtime":
-            self.handle_tts_runtime()
-            return
-        self.send_json({"error": "Not found"}, status=404)
+        handler_name = self._POST_ROUTES.get(path)
+        if handler_name:
+            getattr(self, f"handle{handler_name}")()
+        else:
+            self.send_json({"error": "Not found"}, status=404)
 
     def handle_chat(self) -> None:
         try:

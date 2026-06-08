@@ -13,12 +13,27 @@ from typing import Any, Dict, List, Optional
 
 @dataclass
 class DialogueTurn:
-    """一轮对话的结构化记录。"""
+    """一轮对话的结构化记录。
+
+    参考 Open-LLM-VTuber 的 SentenceOutput 设计：
+    - ``display_text``：展示给用户的文本（可含表情符号等 UI 元素）
+    - ``tts_text``：发送给 TTS 引擎的纯文本
+    二者可不同，例如 display_text 带颜文字但 tts_text 只保留语音内容。
+    """
 
     user_text: str
     assistant_text: str = ""
+    display_text: str = ""
+    tts_text: str = ""
     emotion: str = "neutral"
     actions: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        # 向后兼容：未设置 display/tts 时回退到 assistant_text
+        if not self.display_text:
+            self.display_text = self.assistant_text
+        if not self.tts_text:
+            self.tts_text = self.assistant_text
 
 
 @dataclass
