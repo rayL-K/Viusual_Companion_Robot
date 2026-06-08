@@ -25,6 +25,10 @@ EVENT_TTS_START = "tts.start"
 """语音合成开始。"""
 EVENT_TTS_END = "tts.end"
 """语音合成结束。"""
+EVENT_SPEECH_START = "vad.speech_start"
+"""用户开始说话，应中断当前 TTS 播放。"""
+EVENT_SPEECH_END = "vad.speech_end"
+"""用户说完话，可提交 ASR 转录。"""
 
 
 @dataclass

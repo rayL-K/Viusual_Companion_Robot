@@ -9,6 +9,7 @@ from .vision import PerceptionFrame, DetectedObject, encode_frame_to_base64, now
 from .scene_analyzer import SceneAnalyzer
 from .asr_interface import ASRInterface, create_asr_engine
 from .sherpa_onnx_asr import SherpaOnnxASR
+from .vad import VoiceActivityDetector, VADConfig, VAD_SPEECH_START, VAD_SPEECH_END
 
 __all__ = [
     "PerceptionFrame",
@@ -17,6 +18,10 @@ __all__ = [
     "ASRInterface",
     "SherpaOnnxASR",
     "create_asr_engine",
+    "VoiceActivityDetector",
+    "VADConfig",
+    "VAD_SPEECH_START",
+    "VAD_SPEECH_END",
     "encode_frame_to_base64",
     "now_iso",
 ]
