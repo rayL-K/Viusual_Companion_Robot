@@ -275,45 +275,117 @@ class RobotResponse:
 # ── 动作映射表：LLM 输出关键词 → Live2D 动作名 ──────────────────
 
 _ACTION_MAP: dict[str, tuple[str, str]] = {
-    # 表情 → (动作名, 模式)
+    # ═══ 正面情绪 ═══
+    "开心": ("heart", "pulse"),
+    "高兴": ("heart", "pulse"),
+    "快乐": ("heart", "pulse"),
+    "嘻嘻": ("heart", "pulse"),
+    "哈哈": ("heart", "pulse"),
+    "笑": ("heart", "pulse"),
+    "可爱": ("heart", "pulse"),
+    "幸福": ("heart", "pulse"),
+    "甜蜜": ("heart", "pulse"),
+    "温暖": ("heart", "pulse"),
+    "爱心": ("heart", "pulse"),
+    "心": ("heart", "pulse"),
+    "星星眼": ("star_eyes", "pulse"),
+    "闪闪": ("star_eyes", "pulse"),
+    "发光": ("star_eyes", "pulse"),
+    "惊喜": ("star_eyes", "pulse"),
+    "耶": ("star_eyes", "pulse"),
+    "花花": ("flowers", "pulse"),
+    "花": ("flowers", "pulse"),
+    "撒花": ("flowers", "pulse"),
+    "庆祝": ("flowers", "pulse"),
+    # ═══ 害羞/傲娇 ═══
     "害羞": ("blush", "pulse"),
     "脸红": ("blush", "pulse"),
-    "开心": ("heart", "pulse"),
-    "爱心": ("heart", "pulse"),
-    "星星眼": ("star_eyes", "pulse"),
-    "晕": ("dizzy", "pulse"),
-    "流汗": ("sweat", "pulse"),
-    "汗": ("sweat", "pulse"),
-    "着急": ("anxious", "pulse"),
+    "不好意思": ("blush", "pulse"),
+    "羞": ("blush", "pulse"),
+    "扭捏": ("blush", "pulse"),
+    "低头": ("blush", "pulse"),
+    "蹭": ("blush", "pulse"),
+    "不好意思": ("blush", "pulse"),
+    "傲娇": ("blush", "pulse"),
+    "哼": ("blush", "pulse"),  # 傲娇式哼
+    # ═══ 负面情绪 ═══
     "生气": ("angry", "pulse"),
     "怒": ("angry", "pulse"),
-    "黑脸": ("shadow_face", "pulse"),
-    "无语": ("shadow_face", "pulse"),
+    "讨厌": ("angry", "pulse"),
+    "烦": ("angry", "pulse"),
+    "气": ("angry", "pulse"),
+    "跺脚": ("angry", "pulse"),
+    "鼓起腮帮": ("angry", "pulse"),
     "哭": ("cry", "pulse"),
     "难过": ("cry", "pulse"),
-    "问号": ("question", "pulse"),
+    "伤心": ("cry", "pulse"),
+    "呜呜": ("cry", "pulse"),
+    "泪": ("cry", "pulse"),
+    "委屈": ("cry", "pulse"),
+    "心疼": ("cry", "pulse"),
+    "黑脸": ("shadow_face", "pulse"),
+    "无语": ("shadow_face", "pulse"),
+    "无奈": ("shadow_face", "pulse"),
+    "扶额": ("shadow_face", "pulse"),
+    "汗": ("sweat", "pulse"),
+    "流汗": ("sweat", "pulse"),
+    "尴尬": ("sweat", "pulse"),
+    "黑线": ("sweat", "pulse"),
+    # ═══ 疑惑/惊讶 ═══
     "疑惑": ("question", "pulse"),
-    "花花": ("flowers", "pulse"),
-    "黑化": ("dark_mode", "pulse"),
-    # 手势/动作 → 动作名
+    "问号": ("question", "pulse"),
+    "歪头": ("question", "pulse"),
+    "不解": ("question", "pulse"),
+    "懵": ("question", "pulse"),
+    "诶": ("question", "pulse"),
+    "晕": ("dizzy", "pulse"),
+    "头晕": ("dizzy", "pulse"),
+    "眼花": ("dizzy", "pulse"),
+    "天旋地转": ("dizzy", "pulse"),
+    "着急": ("anxious", "pulse"),
+    "急": ("anxious", "pulse"),
+    "慌": ("anxious", "pulse"),
+    "担心": ("anxious", "pulse"),
+    "紧张": ("anxious", "pulse"),
+    # ═══ 动作/姿态 ═══
     "挥手": ("scene1", "pulse"),
     "招手": ("scene1", "pulse"),
-    "比心": ("finger_heart", "pulse"),
-    "双马尾": ("twin_tail", "hold"),
-    "抬手": ("right_hand_up", "pulse"),
-    "举手": ("right_hand_up", "pulse"),
+    "打招呼": ("scene1", "pulse"),
     "蹦": ("scene1", "pulse"),
     "跳": ("scene1", "pulse"),
+    "蹦蹦跳跳": ("scene1", "pulse"),
+    "雀跃": ("scene1", "pulse"),
+    "手舞足蹈": ("scene1", "pulse"),
+    "扭": ("scene1", "pulse"),
+    "比心": ("finger_heart", "pulse"),
+    "比心心": ("finger_heart", "pulse"),
+    "笔芯": ("finger_heart", "pulse"),
+    "双马尾": ("twin_tail", "hold"),
+    "马尾": ("twin_tail", "hold"),
+    "举手": ("right_hand_up", "pulse"),
+    "抬手": ("right_hand_up", "pulse"),
+    "举手手": ("right_hand_up", "pulse"),
+    "竖起": ("right_hand_up", "pulse"),
+    # ═══ 其他状态 ═══
+    "黑化": ("dark_mode", "pulse"),
+    "恶魔": ("dark_mode", "pulse"),
+    "坏笑": ("dark_mode", "pulse"),
 }
 
 
 def extract_action(text: str) -> str:
-    """从 LLM 文本中提取动作关键词，返回 Live2D 动作名。"""
+    """从 LLM 文本中提取动作关键词，返回 Live2D 动作名。
 
+    优先匹配最长关键词（「蹦蹦跳跳」优先于「跳」，「不好意思」优先于「好」）。
+    """
+
+    best = ""
+    best_len = 0
     for keyword, (action_name, _mode) in _ACTION_MAP.items():
-        if keyword in text:
-            return action_name
-    return ""
+        if keyword in text and len(keyword) > best_len:
+            best = action_name
+            best_len = len(keyword)
+    return best
 
 
 def clean_display_text(text: str) -> str:
