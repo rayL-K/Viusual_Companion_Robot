@@ -370,6 +370,16 @@ _ACTION_MAP: dict[str, tuple[str, str]] = {
     "黑化": ("dark_mode", "pulse"),
     "恶魔": ("dark_mode", "pulse"),
     "坏笑": ("dark_mode", "pulse"),
+    "腹黑": ("dark_mode", "pulse"),
+    # ═══ 新增动作映射 ═══
+    "唱歌": ("microphone", "hold"),
+    "麦克风": ("microphone", "hold"),
+    "游戏": ("gaming", "hold"),
+    "打游戏": ("gaming", "hold"),
+    "左手": ("left_hand_up", "pulse"),
+    "舰长": ("captain", "pulse"),
+    "提督": ("admiral", "pulse"),
+    "总督": ("governor", "pulse"),
 }
 
 
@@ -408,37 +418,56 @@ def _classify_action_by_llm(text: str, api_key: str, base_url: str = "https://ap
     import urllib.request
 
     available = [
-        "heart", "star_eyes", "flowers",       # 正面
-        "blush",                                # 害羞
-        "angry", "cry", "shadow_face", "sweat", # 负面
-        "question", "dizzy", "anxious",         # 疑惑
-        "scene1", "finger_heart", "twin_tail", "right_hand_up",  # 动作
-        "dark_mode",                            # 其他
-        "none",                                 # 无动作
+        # 表情
+        "heart", "star_eyes", "flowers", "blush",
+        "angry", "cry", "shadow_face", "sweat",
+        "question", "dizzy", "anxious", "dark_mode",
+        # 手势
+        "right_hand_up", "left_hand_up", "finger_heart",
+        # 动作
+        "scene1", "twin_tail", "microphone", "gaming",
+        # 方向
+        "up", "down", "left", "right",
+        # 轮盘
+        "captain", "admiral", "governor",
+        # 无
+        "none",
     ]
 
     prompt = (
         "你是一个动作分类器。给定角色的对话回复，判断角色此刻应该播放哪个 Live2D 表情或动作。\n\n"
-        f"可选动作: {', '.join(available)}\n"
+        "注意：只能从下面列表中选择一个动作名，不要自创。\n\n"
+        "=== 可选动作 ===\n"
+        "【表情】\n"
         "- heart: 开心、高兴、感到温暖、觉得可爱\n"
-        "- star_eyes: 惊喜、兴奋、眼前一亮\n"
+        "- star_eyes: 惊喜、兴奋、眼前一亮、星星眼\n"
         "- flowers: 庆祝、撒花、美好的氛围\n"
-        "- blush: 害羞、脸红、不好意思、被夸奖、撒娇\n"
+        "- blush: 害羞、脸红、不好意思、被夸奖、撒娇、蹭蹭\n"
         "- angry: 生气、不满、跺脚、鼓起腮帮\n"
-        "- cry: 难过、伤心、哭泣、委屈、心疼\n"
+        "- cry: 难过、伤心、哭泣、委屈、心疼、眼泪汪汪\n"
         "- shadow_face: 无语、无奈、黑线、扶额\n"
-        "- sweat: 尴尬、流汗、不好意思但又不完全是害羞\n"
-        "- question: 疑惑、歪头、不解、懵\n"
-        "- dizzy: 头晕、眼花、被绕晕\n"
+        "- sweat: 尴尬、流汗、囧\n"
+        "- question: 疑惑、歪头、不解、懵、问号\n"
+        "- dizzy: 头晕、眼花、被绕晕、天旋地转\n"
         "- anxious: 着急、慌张、担心、紧张\n"
-        "- scene1: 蹦跳、挥手、打招呼、活泼的动作\n"
-        "- finger_heart: 比心、笔芯\n"
-        "- twin_tail: 双马尾相关\n"
-        "- right_hand_up: 举手、抬手、竖起耳朵/手指\n"
-        "- dark_mode: 黑化、坏笑、恶魔\n"
-        "- none: 没有明显的表情或动作，只是普通说话\n\n"
+        "- dark_mode: 黑化、坏笑、恶魔、腹黑\n"
+        "【手势】\n"
+        "- right_hand_up: 右手举起、举手、抬手、竖手指/耳朵\n"
+        "- left_hand_up: 左手举起\n"
+        "- finger_heart: 比心、笔芯、比心心\n"
+        "- microphone: 拿麦克风、唱歌\n"
+        "- gaming: 打游戏、玩游戏\n"
+        "【动作】\n"
+        "- scene1: 蹦跳、挥手、打招呼、活泼、跳舞、雀跃\n"
+        "- twin_tail: 双马尾、变身\n"
+        "【方向】\n"
+        "- up/down/left/right: 方向移动\n"
+        "【轮盘】\n"
+        "- captain/admiral/governor: 舰长/提督/总督轮盘\n"
+        "【无动作】\n"
+        "- none: 没有明显表情或动作，只是普通说话\n\n"
         f"角色回复: {text}\n\n"
-        "只回复一个动作名，不要任何解释。"
+        "只回复一个动作名，不要解释，不要标点。"
     )
 
     payload = json.dumps({
