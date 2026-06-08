@@ -110,33 +110,47 @@ class SceneAnalyzer:
     # ------------------------------------------------------------------
 
     def _load_local_model(self) -> None:
-        """加载本地 Moondream 2 模型。"""
+        """加载本地 Moondream 2 模型。
 
-        from PIL import Image
+        模型文件结构：moondream.py + model.safetensors + config.json。
+        使用 importlib 动态加载自定义模型代码。
+        """
 
-        model_path = str(Path(self._local_path).resolve())
+        import json
 
-        # Moondream 2 使用自定义模型代码，需要特殊的加载方式
+        import torch
+        from safetensors.torch import load_file
+
+        model_dir = str(Path(self._local_path).resolve())
+
+        # 动态导入 moondream 模块（作为包加载以支持相对导入）
         import importlib.util
         import sys
 
-        # 动态导入 moondream 模块
         spec = importlib.util.spec_from_file_location(
             "moondream",
-            str(Path(model_path) / "moondream.py"),
+            str(Path(model_dir) / "moondream.py"),
+            submodule_search_locations=[model_dir],
         )
-        if spec and spec.loader:
-            module = importlib.util.module_from_spec(spec)
-            sys.modules["moondream"] = module
-            spec.loader.exec_module(module)
+        if not spec or not spec.loader:
+            raise RuntimeError(f"无法加载 moondream.py: {model_dir}")
 
-            self._local_model = module.Moondream(
-                model_path=model_path,
-                device="cpu",
-            )
-            logger.info("Moondream 2 本地模型已加载 [path=%s]", model_path)
-        else:
-            raise RuntimeError(f"无法加载 moondream.py: {model_path}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["moondream"] = module
+        spec.loader.exec_module(module)
+
+        # 加载配置
+        with open(f"{model_dir}/config.json") as f:
+            config = module.MoondreamConfig.from_dict(json.load(f))
+
+        # 加载模型权重
+        logger.info("加载 Moondream 2 模型权重...")
+        self._local_model = module.MoondreamModel(config, dtype=torch.float32)
+        state = load_file(f"{model_dir}/model.safetensors", device="cpu")
+        state = {k: v.float() for k, v in state.items()}  # bf16 → f32
+        self._local_model.load_state_dict(state, strict=False)
+        self._local_model.eval()
+        logger.info("Moondream 2 本地模型已加载 [path=%s]", model_dir)
 
     def _analyze_local(self, frame_bgr, frame: PerceptionFrame) -> None:
         """本地模型推理。"""
