@@ -134,6 +134,17 @@ class VoxCpmLocalSynthesizer:
         status["cached_models"] = cached_model_count()
         return status
 
+    @staticmethod
+    def _resolve_reference_path(
+        reference_audio_path: str, prompt_text: str
+    ) -> tuple[Optional[str], Optional[str], bool]:
+        """处理参考音频路径，返回 (reference_path, clean_prompt_text, use_prompt_mode)。"""
+
+        ref_path = str(reference_audio_path or "").strip() or None
+        clean_prompt = str(prompt_text or "").strip() or None
+        use_prompt = bool(ref_path and clean_prompt)
+        return ref_path, clean_prompt, use_prompt
+
     def build_generation_kwargs(
         self,
         text: str,
@@ -147,9 +158,9 @@ class VoxCpmLocalSynthesizer:
         if not clean_text:
             raise VoxCpmLocalError("待合成文本不能为空。")
 
-        reference_path = str(reference_audio_path or "").strip() or None
-        clean_prompt_text = str(prompt_text or "").strip() or None
-        use_prompt_mode = bool(reference_path and clean_prompt_text)
+        reference_path, clean_prompt_text, use_prompt_mode = self._resolve_reference_path(
+            reference_audio_path, prompt_text
+        )
         control = "" if use_prompt_mode else build_control_instruction(self.config.control_instruction, rate)
 
         kwargs: Dict[str, Any] = {
@@ -269,11 +280,9 @@ def encode_wav_file(wav: Any, sample_rate: int, file_path: str) -> str:
         写入的文件路径。
     """
 
-    import numpy as np  # type: ignore[import-not-found]
-    import soundfile as sf  # type: ignore[import-not-found]
-
-    audio = np.asarray(wav, dtype=np.float32).reshape(-1)
-    sf.write(file_path, audio, sample_rate, format="WAV", subtype="PCM_16")
+    data = encode_wav_bytes(wav, sample_rate)
+    with open(file_path, "wb") as f:
+        f.write(data)
     return file_path
 
 
