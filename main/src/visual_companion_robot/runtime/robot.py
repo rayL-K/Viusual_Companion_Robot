@@ -177,26 +177,7 @@ class RobotRuntime:
             )
 
         # 注入时间
-        from datetime import datetime
-
-        now = datetime.now()
-        time_hint = f"\n\n【现在的时间】{now.strftime('%Y年%m月%d日 %H:%M')}"
-        hour = now.hour
-        if hour < 6:
-            time_hint += " 现在是深夜，主人还没睡，你要温柔地催主人休息。"
-        elif hour < 9:
-            time_hint += " 现在是早晨，可以活泼地和主人说早安。"
-        elif hour < 12:
-            time_hint += " 现在是上午。"
-        elif hour < 14:
-            time_hint += " 现在是中午，可以提醒主人吃午饭。"
-        elif hour < 18:
-            time_hint += " 现在是下午。"
-        elif hour < 22:
-            time_hint += " 现在是晚上。"
-        else:
-            time_hint += " 现在是深夜，要注意关心主人的作息。"
-        system += time_hint
+        system += _build_time_hint()
 
         # ── 对话消息 ──
         messages = []
@@ -411,13 +392,10 @@ def classify_action(text: str, api_key: str, base_url: str = "https://api.silico
     return _classify_action_by_llm(text, api_key, base_url)
 
 
-def _classify_action_by_llm(text: str, api_key: str, base_url: str = "https://api.siliconflow.cn/v1") -> str:
-    """子 LLM 动作分类（关键词未命中时的兜底方案）。"""
+def _get_available_actions() -> list[str]:
+    """返回 Live2D 动作白名单。"""
 
-    import json
-    import urllib.request
-
-    available = [
+    return [
         # 表情
         "heart", "star_eyes", "flowers", "blush",
         "angry", "cry", "shadow_face", "sweat",
@@ -434,41 +412,52 @@ def _classify_action_by_llm(text: str, api_key: str, base_url: str = "https://ap
         "none",
     ]
 
-    prompt = (
-        "你是一个动作分类器。给定角色的对话回复，判断角色此刻应该播放哪个 Live2D 表情或动作。\n\n"
-        "注意：只能从下面列表中选择一个动作名，不要自创。\n\n"
-        "=== 可选动作 ===\n"
-        "【表情】\n"
-        "- heart: 开心、高兴、感到温暖、觉得可爱\n"
-        "- star_eyes: 惊喜、兴奋、眼前一亮、星星眼\n"
-        "- flowers: 庆祝、撒花、美好的氛围\n"
-        "- blush: 害羞、脸红、不好意思、被夸奖、撒娇、蹭蹭\n"
-        "- angry: 生气、不满、跺脚、鼓起腮帮\n"
-        "- cry: 难过、伤心、哭泣、委屈、心疼、眼泪汪汪\n"
-        "- shadow_face: 无语、无奈、黑线、扶额\n"
-        "- sweat: 尴尬、流汗、囧\n"
-        "- question: 疑惑、歪头、不解、懵、问号\n"
-        "- dizzy: 头晕、眼花、被绕晕、天旋地转\n"
-        "- anxious: 着急、慌张、担心、紧张\n"
-        "- dark_mode: 黑化、坏笑、恶魔、腹黑\n"
-        "【手势】\n"
-        "- right_hand_up: 右手举起、举手、抬手、竖手指/耳朵\n"
-        "- left_hand_up: 左手举起\n"
-        "- finger_heart: 比心、笔芯、比心心\n"
-        "- microphone: 拿麦克风、唱歌\n"
-        "- gaming: 打游戏、玩游戏\n"
-        "【动作】\n"
-        "- scene1: 蹦跳、挥手、打招呼、活泼、跳舞、雀跃\n"
-        "- twin_tail: 双马尾、变身\n"
-        "【方向】\n"
-        "- up/down/left/right: 方向移动\n"
-        "【轮盘】\n"
-        "- captain/admiral/governor: 舰长/提督/总督轮盘\n"
-        "【无动作】\n"
-        "- none: 没有明显表情或动作，只是普通说话\n\n"
-        f"角色回复: {text}\n\n"
-        "只回复一个动作名，不要解释，不要标点。"
-    )
+
+_ACTION_CLASSIFY_PROMPT_TEMPLATE = (
+    "你是一个动作分类器。给定角色的对话回复，判断角色此刻应该播放哪个 Live2D 表情或动作。\n\n"
+    "注意：只能从下面列表中选择一个动作名，不要自创。\n\n"
+    "=== 可选动作 ===\n"
+    "【表情】\n"
+    "- heart: 开心、高兴、感到温暖、觉得可爱\n"
+    "- star_eyes: 惊喜、兴奋、眼前一亮、星星眼\n"
+    "- flowers: 庆祝、撒花、美好的氛围\n"
+    "- blush: 害羞、脸红、不好意思、被夸奖、撒娇、蹭蹭\n"
+    "- angry: 生气、不满、跺脚、鼓起腮帮\n"
+    "- cry: 难过、伤心、哭泣、委屈、心疼、眼泪汪汪\n"
+    "- shadow_face: 无语、无奈、黑线、扶额\n"
+    "- sweat: 尴尬、流汗、囧\n"
+    "- question: 疑惑、歪头、不解、懵、问号\n"
+    "- dizzy: 头晕、眼花、被绕晕、天旋地转\n"
+    "- anxious: 着急、慌张、担心、紧张\n"
+    "- dark_mode: 黑化、坏笑、恶魔、腹黑\n"
+    "【手势】\n"
+    "- right_hand_up: 右手举起、举手、抬手、竖手指/耳朵\n"
+    "- left_hand_up: 左手举起\n"
+    "- finger_heart: 比心、笔芯、比心心\n"
+    "- microphone: 拿麦克风、唱歌\n"
+    "- gaming: 打游戏、玩游戏\n"
+    "【动作】\n"
+    "- scene1: 蹦跳、挥手、打招呼、活泼、跳舞、雀跃\n"
+    "- twin_tail: 双马尾、变身\n"
+    "【方向】\n"
+    "- up/down/left/right: 方向移动\n"
+    "【轮盘】\n"
+    "- captain/admiral/governor: 舰长/提督/总督轮盘\n"
+    "【无动作】\n"
+    "- none: 没有明显表情或动作，只是普通说话\n\n"
+    "角色回复: {{text}}\n\n"
+    "只回复一个动作名，不要解释，不要标点。"
+)
+
+
+def _classify_action_by_llm(text: str, api_key: str, base_url: str = "https://api.siliconflow.cn/v1") -> str:
+    """子 LLM 动作分类（关键词未命中时的兜底方案）。"""
+
+    import json
+    import urllib.request
+
+    available = _get_available_actions()
+    prompt = _ACTION_CLASSIFY_PROMPT_TEMPLATE.replace("{{text}}", text)
 
     payload = json.dumps({
         "model": "Qwen/Qwen3-8B",
@@ -523,6 +512,31 @@ def clean_display_text(text: str) -> str:
     text = re.sub(r"\([^)]*\)", "", text)
     text = re.sub(r"（[^）]*）", "", text)
     return text.strip()
+
+
+def _build_time_hint() -> str:
+    """生成当前时间提示，供注入 system prompt 使用。"""
+
+    from datetime import datetime
+
+    now = datetime.now()
+    hint = f"\n\n【现在的时间】{now.strftime('%Y年%m月%d日 %H:%M')}"
+    hour = now.hour
+    if hour < 6:
+        hint += " 现在是深夜，主人还没睡，你要温柔地催主人休息。"
+    elif hour < 9:
+        hint += " 现在是早晨，可以活泼地和主人说早安。"
+    elif hour < 12:
+        hint += " 现在是上午。"
+    elif hour < 14:
+        hint += " 现在是中午，可以提醒主人吃午饭。"
+    elif hour < 18:
+        hint += " 现在是下午。"
+    elif hour < 22:
+        hint += " 现在是晚上。"
+    else:
+        hint += " 现在是深夜，要注意关心主人的作息。"
+    return hint
 
 
 # ------------------------------------------------------------------

@@ -15,9 +15,32 @@ import urllib.request
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 
-
 DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash"
+
+# Live2D 导演系统 prompt —— 控制 LLM 输出结构化 JSON 控制计划。
+_LIVE2D_SYSTEM_PROMPT = (
+    "你是虚拟陪伴机器人草莓兔兔的导演。"
+    "请只输出一个 JSON 对象，不要 Markdown。"
+    "JSON 字段必须包含：text, emotion, expression, motion, actions, speech, parameters。"
+    "text 是适合用温柔中文女声朗读的一句话或两句话。"
+    "emotion 从 happy, neutral, shy, surprised, sad, angry, thinking 中选择。"
+    "expression 必须从允许表情中选择。motion 必须从允许动作中选择。"
+    "actions 是数组，用来控制会持续显示的道具或姿态。"
+    "action.name 可选 gaming, microphone, finger_heart, right_hand_up, left_hand_up, heart, blush, question, up, down, left, right。"
+    "action.mode 可选 hold, pulse, off。hold 表示一直保持，pulse 表示短时动作，off 表示关闭同组动作。"
+    "action.delay_ms 表示延迟多少毫秒后执行，默认 0，范围 0 到 30000。"
+    "当用户要求一直拿着、保持、持续展示某个动作时使用 hold；唱歌或说话需要麦克风时使用 microphone hold；玩游戏或拿游戏机时使用 gaming hold。"
+    "当用户要求先做 A、几秒后做 B、然后做 C 时，必须把计划拆进 actions，不能只写进 text。"
+    "例如“先举起双手，5 秒后拿游戏机”应输出 right_hand_up hold、left_hand_up hold、gaming hold delay_ms=5000。"
+    "实时天气等事实必须优先使用联网事实字段；没有联网事实或联网失败时，不要编造实时信息。"
+    "近期记忆包含 time 和 relative_time，回答记忆或时间问题时必须使用这些具体时间，不要凭聊天顺序猜昨天、前天。"
+    "如果用户要求说明你记得什么，要给出具体日期时间或相对时间。"
+    "duration_ms 只对 pulse 有效，保持在 300 到 10000。"
+    "speech.voice 固定为 female_zh，rate 在 0.85 到 1.15，pitch 在 1.0 到 1.35。"
+    "parameters 只能包含 ParamAngleX, ParamAngleY, ParamAngleZ, "
+    "ParamBodyAngleX, ParamBodyAngleY, ParamMouthForm，数值保持在合理范围。"
+)
 
 
 @dataclass
@@ -151,40 +174,18 @@ class DeepSeekLlmClient:
                 plan = build_fallback_live2d_control_plan(content, expressions=expressions, motions=motions)
                 return normalize_action_plan_for_user_text(user_prompt, plan)
 
-    def _build_request(
-        self,
+    @staticmethod
+    def _build_user_content(
         user_prompt: str,
         expressions: List[str],
         motions: List[str],
         memory_context: List[Dict[str, Any]],
         runtime_context: Dict[str, Any],
         web_context: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        """构造 DeepSeek Chat Completions 请求。"""
+    ) -> dict:
+        """构造 user 侧上下文 JSON，供 LLM 生成控制计划。"""
 
-        system_prompt = (
-            "你是虚拟陪伴机器人草莓兔兔的导演。"
-            "请只输出一个 JSON 对象，不要 Markdown。"
-            "JSON 字段必须包含：text, emotion, expression, motion, actions, speech, parameters。"
-            "text 是适合用温柔中文女声朗读的一句话或两句话。"
-            "emotion 从 happy, neutral, shy, surprised, sad, angry, thinking 中选择。"
-            "expression 必须从允许表情中选择。motion 必须从允许动作中选择。"
-            "actions 是数组，用来控制会持续显示的道具或姿态。"
-            "action.name 可选 gaming, microphone, finger_heart, right_hand_up, left_hand_up, heart, blush, question, up, down, left, right。"
-            "action.mode 可选 hold, pulse, off。hold 表示一直保持，pulse 表示短时动作，off 表示关闭同组动作。"
-            "action.delay_ms 表示延迟多少毫秒后执行，默认 0，范围 0 到 30000。"
-            "当用户要求一直拿着、保持、持续展示某个动作时使用 hold；唱歌或说话需要麦克风时使用 microphone hold；玩游戏或拿游戏机时使用 gaming hold。"
-            "当用户要求先做 A、几秒后做 B、然后做 C 时，必须把计划拆进 actions，不能只写进 text。"
-            "例如“先举起双手，5 秒后拿游戏机”应输出 right_hand_up hold、left_hand_up hold、gaming hold delay_ms=5000。"
-            "实时天气等事实必须优先使用联网事实字段；没有联网事实或联网失败时，不要编造实时信息。"
-            "近期记忆包含 time 和 relative_time，回答记忆或时间问题时必须使用这些具体时间，不要凭聊天顺序猜昨天、前天。"
-            "如果用户要求说明你记得什么，要给出具体日期时间或相对时间。"
-            "duration_ms 只对 pulse 有效，保持在 300 到 10000。"
-            "speech.voice 固定为 female_zh，rate 在 0.85 到 1.15，pitch 在 1.0 到 1.35。"
-            "parameters 只能包含 ParamAngleX, ParamAngleY, ParamAngleZ, "
-            "ParamBodyAngleX, ParamBodyAngleY, ParamMouthForm，数值保持在合理范围。"
-        )
-        user_content = {
+        return {
             "用户输入": user_prompt,
             "当前运行上下文": runtime_context,
             "联网事实": web_context,
@@ -201,11 +202,36 @@ class DeepSeekLlmClient:
                 "parameters": {"ParamAngleX": 4, "ParamAngleY": 2, "ParamMouthForm": 0.3},
             },
         }
+
+    def _build_request(
+        self,
+        user_prompt: str,
+        expressions: List[str],
+        motions: List[str],
+        memory_context: List[Dict[str, Any]],
+        runtime_context: Dict[str, Any],
+        web_context: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """构造 DeepSeek Chat Completions 请求（system prompt + user 上下文）。"""
+
         return {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": json.dumps(user_content, ensure_ascii=False)},
+                {"role": "system", "content": _LIVE2D_SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        self._build_user_content(
+                            user_prompt=user_prompt,
+                            expressions=expressions,
+                            motions=motions,
+                            memory_context=memory_context,
+                            runtime_context=runtime_context,
+                            web_context=web_context,
+                        ),
+                        ensure_ascii=False,
+                    ),
+                },
             ],
             "temperature": 0.7,
             "max_tokens": 700,
