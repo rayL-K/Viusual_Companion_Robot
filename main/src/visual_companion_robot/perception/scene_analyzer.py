@@ -1,24 +1,20 @@
-"""视觉场景分析器 — 硅基流动 Qwen3-VL。
+"""视觉场景分析器 — 双后端。
 
-通过 OpenAI 兼容 API 调用 Qwen3-VL-8B，将摄像头帧转换为中文场景描述。
-
-用法::
-
-    analyzer = SceneAnalyzer(api_key="sk-xxx")
-    frame = PerceptionFrame()
-    analyzer.analyze(camera_frame, frame)
-    print(frame.scene_caption)  # "画面中一个人坐在沙发上，正在看手机。"
+cloud: Qwen3-VL-8B API
+local: YOLO NPU 检测 + Qwen2.5-0.5B 描述
 """
 
 from __future__ import annotations
 
 import logging
-import re
-import time
+from dataclasses import dataclass
 from typing import Optional
 
+import numpy as np
 import requests
 
+from visual_companion_robot.integrations.model_runtime import DetectionResult, RkllmEngine
+from .detector import YoloDetector
 from .vision import PerceptionFrame, encode_frame_to_base64, now_iso
 
 logger = logging.getLogger(__name__)
@@ -27,113 +23,109 @@ DEFAULT_MODEL = "Qwen/Qwen3-VL-8B-Instruct"
 DEFAULT_BASE_URL = "https://api.siliconflow.cn/v1"
 
 
+@dataclass
+class SceneAnalyzerConfig:
+    backend: str = "cloud"
+    api_key: str = ""
+    model_id: str = DEFAULT_MODEL
+    base_url: str = DEFAULT_BASE_URL
+    yolo_model_path: str = ""
+    vision_llm_path: str = ""
+    conf_threshold: float = 0.5
+
+
 class SceneAnalyzer:
-    """基于 Qwen3-VL 的场景理解器（硅基流动 API）。
+    def __init__(self, config: SceneAnalyzerConfig) -> None:
+        self._cfg = config
+        self._base_url = config.base_url.rstrip("/")
+        self._detector: Optional[YoloDetector] = None
+        self._vision_llm: Optional[RkllmEngine] = None
 
-    Args:
-        api_key: 硅基流动 API token，以 ``sk-`` 开头。
-        model_id: 模型 ID，默认 Qwen3-VL-8B-Instruct。
-        base_url: API 基地址。
-        timeout_sec: 单次请求超时秒数。
-    """
+        if config.backend == "local":
+            if not config.yolo_model_path:
+                raise ValueError("local 后端需要 yolo_model_path")
+            self._detector = YoloDetector(model_path=config.yolo_model_path, conf_threshold=config.conf_threshold)
+            if config.vision_llm_path:
+                self._vision_llm = RkllmEngine(n_threads=4, max_tokens=128)
 
-    def __init__(
-        self,
-        api_key: Optional[str] = None,
-        model_id: str = DEFAULT_MODEL,
-        base_url: str = DEFAULT_BASE_URL,
-        timeout_sec: int = 60,
-    ) -> None:
-        self._api_key = api_key
-        self._model_id = model_id
-        self._base_url = base_url
-        self._timeout = timeout_sec
-        self._last_frame_time = 0.0
-        self._min_interval = 1.0
+    def load(self) -> None:
+        if self._detector is not None and not self._detector.is_loaded():
+            self._detector.load()
+            logger.info("本地 YOLO 检测器已加载")
+        if self._vision_llm is not None and not self._vision_llm.is_loaded():
+            self._vision_llm.load(str(self._cfg.vision_llm_path))
+            logger.info("本地视觉小 LLM 已加载")
 
-    # ------------------------------------------------------------------
-    # 公共接口
-    # ------------------------------------------------------------------
+    def analyze(self, frame_bgr: np.ndarray, frame: Optional[PerceptionFrame] = None) -> PerceptionFrame:
+        result = frame or PerceptionFrame()
+        result.timestamp = now_iso()
+        result.frame_width = frame_bgr.shape[1]
+        result.frame_height = frame_bgr.shape[0]
 
-    def analyze(self, frame_bgr, frame: Optional[PerceptionFrame] = None) -> PerceptionFrame:
-        """分析一帧摄像头画面，填充场景描述。"""
+        if self._cfg.backend == "local":
+            self._analyze_local(frame_bgr, result)
+        else:
+            self._analyze_cloud(frame_bgr, result)
+        return result
 
-        if frame is None:
-            frame = PerceptionFrame()
+    def _analyze_cloud(self, frame_bgr: np.ndarray, frame: PerceptionFrame) -> None:
+        if not self._cfg.api_key:
+            frame.scene_caption = "未配置视觉 API 密钥"
+            return
 
-        now = time.perf_counter()
-        if now - self._last_frame_time < self._min_interval:
-            return frame
-        self._last_frame_time = now
-
-        frame.timestamp = now_iso()
+        base64_image = encode_frame_to_base64(frame_bgr)
+        payload = {
+            "model": self._cfg.model_id,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}},
+                    {"type": "text", "text": "请用一句中文描述画面中的场景、人物活动和情绪。"},
+                ],
+            }],
+            "max_tokens": 200,
+        }
 
         try:
-            b64 = encode_frame_to_base64(frame_bgr)
-            image_url = f"data:image/jpeg;base64,{b64}"
-
-            # 四步推理
-            frame.scene_caption = self._chat(
-                "请用一句话描述这个画面，重点描述画面中的人物及其周围环境。",
-                image_url,
+            resp = requests.post(
+                f"{self._base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {self._cfg.api_key}", "Content-Type": "application/json"},
+                json=payload, timeout=15,
             )
-            frame.person_activity = self._chat(
-                "画面中的人物在做什么？用一句话回答。",
-                image_url,
-            )
-            frame.emotion_impression = self._chat(
-                "画面中的人物表现出什么情绪？只回答一个词：开心、难过、惊讶、生气、或中性。",
-                image_url,
-            )
-            frame.person_count = self._parse_count(
-                self._chat("画面中有几个人？只回答数字，如 0、1、2。", image_url)
-            )
+            resp.raise_for_status()
+            data = resp.json()
+            caption = data["choices"][0]["message"]["content"].strip()
+            frame.scene_caption = caption
+            frame.scene_raw = caption
+        except Exception as exc:
+            logger.warning("云端视觉分析失败: %s", exc)
+            frame.scene_caption = "视觉分析暂时不可用"
 
-            logger.info("视觉分析: %s", frame.summary())
-        except Exception:
-            logger.exception("视觉分析失败")
+    def _analyze_local(self, frame_bgr: np.ndarray, frame: PerceptionFrame) -> None:
+        if self._detector is None:
+            frame.scene_caption = "本地检测器未初始化"
+            return
 
-        return frame
+        try:
+            det_result = self._detector.detect(frame_bgr)
+        except Exception as exc:
+            logger.warning("本地 YOLO 检测失败: %s", exc)
+            frame.scene_caption = "视觉检测暂时不可用"
+            return
 
-    # ------------------------------------------------------------------
-    # API 调用
-    # ------------------------------------------------------------------
+        frame.scene_caption = self._detector.detect_for_scene(frame_bgr)
+        frame.objects_detected = [d.class_name for d in det_result.detections]
 
-    def _chat(self, prompt: str, image_url: str, max_tokens: int = 100) -> str:
-        """OpenAI 兼容的 vision chat 请求。"""
+        if self._vision_llm and det_result.detections:
+            try:
+                frame.scene_caption = self._generate_description(det_result)
+            except Exception as exc:
+                logger.warning("视觉小 LLM 描述生成失败: %s", exc)
 
-        resp = requests.post(
-            f"{self._base_url}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {self._api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": self._model_id,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "image_url", "image_url": {"url": image_url}},
-                            {"type": "text", "text": prompt},
-                        ],
-                    }
-                ],
-                "max_tokens": max_tokens,
-                "temperature": 0.0,
-            },
-            timeout=self._timeout,
+    def _generate_description(self, det_result: DetectionResult) -> str:
+        objects_str = ", ".join(f"{d.class_name}({d.confidence:.0%})" for d in det_result.detections[:8])
+        return self._vision_llm.generate(
+            prompt=f"摄像头检测到以下物体：{objects_str}。请用一句自然的中文描述这个场景，像在和朋友说话。",
+            system_prompt="你是一个场景解说助手，用一句自然的中文描述画面。",
+            temperature=0.3, max_tokens=60,
         )
-
-        if resp.status_code != 200:
-            raise RuntimeError(f"硅基流动 API {resp.status_code}: {resp.text[:300]}")
-
-        data = resp.json()
-        return data["choices"][0]["message"]["content"].strip()
-
-    @staticmethod
-    def _parse_count(text: str) -> int:
-        """从文本中提取数字。"""
-
-        match = re.search(r"\d+", str(text))
-        return int(match.group()) if match else 0

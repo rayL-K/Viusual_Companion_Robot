@@ -6,11 +6,13 @@ Moondream 2 为核心，输出自然语言场景描述；语音感知通过 sher
 """
 
 from .vision import PerceptionFrame, DetectedObject, encode_frame_to_base64, now_iso
-from .scene_analyzer import SceneAnalyzer
+from .scene_analyzer import SceneAnalyzer, SceneAnalyzerConfig
 from .asr_interface import ASRInterface, create_asr_engine
 from .sherpa_onnx_asr import SherpaOnnxASR
 from .vad import VoiceActivityDetector, VADConfig, VAD_SPEECH_START, VAD_SPEECH_END
 from .perception_loop import PerceptionLoop
+from .emotion import FerPlusEmotionRecognizer, EmotionResult
+from .detector import YoloDetector
 
 __all__ = [
     "PerceptionFrame",
@@ -24,6 +26,9 @@ __all__ = [
     "VAD_SPEECH_START",
     "VAD_SPEECH_END",
     "PerceptionLoop",
+    "FerPlusEmotionRecognizer",
+    "EmotionResult",
+    "YoloDetector",
     "encode_frame_to_base64",
     "now_iso",
 ]
