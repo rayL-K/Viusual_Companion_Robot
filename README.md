@@ -1,6 +1,6 @@
 # Visual Companion Robot
 
-基于 Firefly/RK3588 的多模态 AI 陪伴机器人。透过摄像头感知用户场景，结合 LLM 生成带情绪的个性化回复，驱动 Live2D 虚拟形象做出匹配的表情动作。Windows 笔记本为主要开发环境，Firefly 板卡为目标运行环境。
+基于 ELF2 (RK3588) 的多模态 AI 陪伴机器人。透过摄像头感知用户场景，结合 LLM 生成带情绪的个性化回复，驱动 Live2D 虚拟形象做出匹配的表情动作。Windows 10 为开发环境，ELF2 板卡为目标运行环境。
 
 ## 作品定位
 
@@ -11,78 +11,120 @@
 ## 闭环架构
 
 ```
-┌─────────────────────────────────────────────────┐
-│                   RobotRuntime                    │
-│                                                   │
-│  摄像头 ──→ SceneAnalyzer ──→ DialogueContext     │
-│              (Qwen3-VL)         (视觉上下文)       │
-│                                    │              │
-│  用户输入 ─────────────────→  LLM (DeepSeek-V3)   │
-│                                    │              │
-│                              ┌─────┴─────┐        │
-│                              │ 回复文本    │        │
-│                              │ 情绪标签    │        │
-│                              │ 动作映射    │        │
-│                              └─────┬─────┘        │
-│                                    │              │
-│   Live2D ←── TTS ←── 展示文本 ←───┘              │
-│   (动作播放)  (语音)  (去括号)                    │
-└─────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                    ELF2 (RK3588) 板端                             │
+│                                                                  │
+│  ┌──────────────┐    ┌──────────────┐    ┌───────────────────┐  │
+│  │  摄像头采集    │    │  麦克风采集    │    │  Chromium 浏览器    │  │
+│  │  perception_ │    │  sherpa-onnx │    │  Live2D (WebGL)   │  │
+│  │  loop.py     │    │  ASR + VAD   │    │  MediaPipe 人脸    │  │
+│  └──────┬───────┘    └──────┬───────┘    │  FER+ 情绪分类     │  │
+│         │                   │            └───────────────────┘  │
+│         ▼                   ▼                                    │
+│  ┌──────────────────────────────────────────┐                   │
+│  │           SceneAnalyzer (双后端)           │                   │
+│  │  ┌─────────┐        ┌──────────────────┐  │                   │
+│  │  │ Cloud:   │        │ Local:           │  │                   │
+│  │  │ Qwen3-VL │        │ YOLO NPU(5ms)   │  │                   │
+│  │  │ API      │        │ + Qwen0.5B 描述  │  │                   │
+│  │  └─────────┘        └──────────────────┘  │                   │
+│  └──────────────────────┬───────────────────┘                   │
+│                         ▼                                        │
+│  ┌──────────────────────────────────────────┐                   │
+│  │         RobotRuntime + DialogueContext     │                   │
+│  │  ┌─────────┐        ┌──────────────────┐  │                   │
+│  │  │ Cloud:   │        │ Local:           │  │                   │
+│  │  │ DeepSeek │        │ Qwen2.5-1.5B    │  │                   │
+│  │  │ API      │        │ (RKLLM, 8t/s)   │  │                   │
+│  │  └─────────┘        └──────────────────┘  │                   │
+│  └──────────────────────┬───────────────────┘                   │
+│                         ▼                                        │
+│  ┌──────────────────────────────────────────┐                   │
+│  │         TTS (双后端)                      │                   │
+│  │  ┌──────────┐  ┌──────────────┐          │                   │
+│  │  │ VoxCPM2  │  │ sherpa-onnx  │          │                   │
+│  │  │ (2B)     │  │ TTS (~50MB)  │          │                   │
+│  │  └──────────┘  └──────────────┘          │                   │
+│  └──────────────────────┬───────────────────┘                   │
+│                         ▼                                        │
+│               Live2D 表情 + 嘴型同步                              │
+└──────────────────────────────────────────────────────────────────┘
+                         │
+                    ── 网络 ──
+                         │
+              ┌──────────┴──────────┐
+              ▼                     ▼
+        DeepSeek API          Open-Meteo API
+        (LLM 对话)             (天气查询)
 ```
-
-三层 prompt 驱动角色人格：System Prompt（人设+视觉+时间）→ 对话历史 → 用户输入。
 
 ## 模块清单
 
 | 模块 | 状态 | 说明 |
 |------|:----:|------|
-| **视觉感知** | ✅ | Qwen3-VL-8B 通过硅基流动 API，国内直连 3-6s/帧，中文场景描述+活动识别+情绪推断+人数统计 |
-| **LLM 对话** | ✅ | DeepSeek-V3，含视觉上下文注入、角色人格 system prompt、多轮记忆 |
+| **视觉感知** | ✅ | 双后端：云端 Qwen3-VL-8B API / 本地 YOLOv26N NPU (5ms) + Qwen0.5B 描述 |
+| **LLM 对话** | ✅ | 双后端：云端 DeepSeek-V3 API / 本地 Qwen2.5-1.5B (RKLLM, 8t/s) |
 | **Live2D 展示** | ✅ | Strawberry_Rabbit 模型，表情/动作/口型/鼠标跟随/待机/拖拽缩放 |
-| **动作映射** | ✅ | 80+ 关键词 + 子 LLM 兜底 + 缓存，精准映射到 27 个 Live2D 动作 |
-| **语音合成 (TTS)** | ✅ | VoxCPM2 本地推理 / 公网 API / Gradio 桥接，TTSInterface 抽象层 |
-| **语音识别 (ASR)** | ⚙️ | ASRInterface 抽象层 + sherpa-onnx 后端已定义，待接入麦克风 |
-| **语音打断 (VAD)** | ⚙️ | Silero VAD 3 状态机已实现，待接入音频流 |
+| **动作映射** | ✅ | 80+ 关键词 + 缓存，精准映射到 27 个 Live2D 动作 |
+| **情绪识别** | ✅ | FER+ ONNX (Microsoft Model Zoo)，后端 HTTP 服务，<5ms/次 |
+| **语音合成 (TTS)** | ✅ | 双后端：VoxCPM2 (2B) / sherpa-onnx TTS (~50MB) |
+| **语音识别 (ASR)** | ⚙️ | sherpa-onnx 后端已实现，待接入麦克风 |
+| **语音打断 (VAD)** | ✅ | WebRTC VAD (webrtcvad)，去掉 PyTorch 依赖 |
 | **记忆模块** | ✅ | SQLite 对话轮次存储，DialogueContext 维护视觉+对话上下文 |
 | **消息总线** | ✅ | RobotEvent + 事件类型常量，解耦模块通信 |
-| **Firefly 部署** | ⚙️ | 同步脚本就绪，待板端适配 RKNN |
+| **ELF2 部署** | ⚙️ | 配置就绪，待板端安装依赖 |
 
 ## 项目结构
 
 ```text
 main/
-├── app.py                          # 板端入口（待接入 RobotRuntime）
-├── config/                         # 应用配置、TTS、嘴型配置
-├── requirements.txt                # Python 依赖
+├── config/
+│   ├── app.yaml                    # 双后端配置（backend/model_paths/npu）
+│   └── requirements-board.txt      # RK3588 板端依赖清单
 ├── src/visual_companion_robot/
+│   ├── integrations/               # 模型运行时 + 外部服务集成
+│   │   ├── model_runtime.py        #   RknnEngine / RkllmEngine / OnnxEngine
+│   │   ├── llm_client.py           #   LlmClient 抽象 + DeepSeek/Local 双实现
+│   │   └── web_context.py          #   Open-Meteo 天气查询
 │   ├── perception/                 # 感知层
 │   │   ├── vision.py               #   PerceptionFrame 数据结构
-│   │   ├── scene_analyzer.py       #   Qwen3-VL 场景分析器
+│   │   ├── detector.py             #   YOLO NPU 检测器
+│   │   ├── scene_analyzer.py        #   双后端场景分析器
+│   │   ├── emotion.py              #   FER+ ONNX 情绪识别
+│   │   ├── emotion_server.py       #   情绪推理 HTTP 服务
 │   │   ├── perception_loop.py      #   摄像头→视觉→总线 主循环
 │   │   ├── asr_interface.py        #   ASR 抽象基类 + 工厂
-│   │   ├── sherpa_onnx_asr.py      #   sherpa-onnx 后端
-│   │   └── vad.py                  #   Silero VAD 语音打断
+│   │   ├── sherpa_onnx_asr.py      #   sherpa-onnx ASR 后端
+│   │   └── vad.py                  #   WebRTC VAD 语音打断
 │   ├── brain/                      # 对话决策层
 │   │   ├── dialogue.py             #   DialogueContext + DialogueTurn
 │   │   └── memory.py               #   SQLite 记忆存储
 │   ├── speech/                     # 语音输出层
 │   │   └── tts_interface.py        #   TTS 抽象基类 + 工厂
 │   ├── voice/                      # 语音引擎
-│   │   └── voxcpm_local.py         #   VoxCPM2 本地推理
+│   │   ├── voxcpm_local.py         #   VoxCPM2 本地推理
+│   │   └── sherpa_tts.py          #   sherpa-onnx TTS 轻量后端
 │   ├── runtime/                    # 运行时
 │   │   ├── robot.py                #   RobotRuntime 闭环主循环
 │   │   ├── bus.py                  #   消息总线
-│   │   └── config.py               #   配置加载
+│   │   └── config.py               #   双后端配置加载
 │   └── ui/live2d/                  # Live2D 控制
 │       ├── controller.py           #   动作/表情控制
 │       └── mouth_sync.py           #   口型同步
 ├── live2d_stage/                   # Vite Live2D 网页控制台
-├── scripts/                        # 控制服务、测试脚本
-├── visual-perception/              # 独立视觉管线（MediaPipe 备用）
-└── models/moondream2/              # Moondream 2 本地模型（备用）
+│   └── src/
+│       ├── stage.js                #   主舞台 + 推理后端面板
+│       ├── emotion-onnx-client.js  #   情绪分类（调用后端 FER+）
+│       └── perception-client.js    #   MediaPipe 人脸追踪
+└── tools/
+    ├── download_emotion_ferplus.py # FER+ 模型下载
+    ├── export_yolo_rknn.py         # YOLO ONNX → RKNN 导出
+    └── integration_test.py         # 端到端集成测试
 ```
 
 ## 快速开始
+
+### 开发环境 (Windows 10)
 
 ```powershell
 # 1. 环境
@@ -91,35 +133,57 @@ conda activate companion
 # 2. 密钥
 set SILICONFLOW_KEY=sk-your-key-here
 
-# 3. 测试闭环
+# 3. 配置后端（开发机用 cloud）
+#    main/config/app.yaml 中 backend 全设为 cloud
+
+# 4. 测试闭环
 python -c "
 import sys; sys.path.insert(0,'main/src')
 from visual_companion_robot.runtime.robot import RobotRuntime, RobotConfig
-rt = RobotRuntime(RobotConfig(
-    vision_api_key='sk-xxx',
-    llm_api_key='sk-xxx',
-    llm_model='deepseek-ai/DeepSeek-V3',
-    llm_base_url='https://api.siliconflow.cn/v1',
-    debug=True,
-))
+from visual_companion_robot.integrations.llm_client import create_llm_client
+llm = create_llm_client(backend='cloud', api_key='sk-xxx')
+rt = RobotRuntime(RobotConfig(debug=True), llm_client=llm)
 resp = rt.run_once('你好！')
 print(resp.display_text)
 print(resp.emotion, resp.actions)
 "
 ```
 
-## 当前依赖
+### 部署环境 (ELF2 RK3588)
 
-| 服务 | 使用 |
+```bash
+# 1. 安装板端依赖
+pip install -r main/config/requirements-board.txt
+
+# 2. 下载模型
+python tools/download_emotion_ferplus.py
+
+# 3. 配置本地后端
+#    main/config/app.yaml 中 backend 设为 local
+
+# 4. 启动情绪服务
+python -m visual_companion_robot.perception.emotion_server &
+
+# 5. 启动主程序
+python main/app.py
+```
+
+## 技术栈
+
+| 层 | 技术 |
 |------|------|
-| 硅基流动 API | Qwen3-VL-8B（视觉）+ DeepSeek-V3（对话） |
-| VoxCPM2 | TTS 语音合成（本地模型） |
-| Strawberry_Rabbit | Live2D 角色模型 |
+| **后端语言** | Python 3.11 |
+| **NPU 推理** | rknn-toolkit2 (YOLO) |
+| **CPU 推理** | llama-cpp-python (Qwen2.5), onnxruntime (FER+) |
+| **语音** | sherpa-onnx (ASR/TTS), webrtcvad (VAD) |
+| **前端** | Vite 8 + PixiJS 6 + Live2D Cubism |
+| **浏览器 AI** | MediaPipe Tasks-Vision (人脸) |
+| **云端** | DeepSeek API, 硅基流动 API, Open-Meteo API |
+| **硬件** | ELF2 (RK3588, 6 TOPS NPU) |
 
 ## 后续路线
 
 1. 接入麦克风 → VAD → ASR 语音输入闭环
 2. TTS 播放集成 → 口型同步
 3. Live2D 前端接收 RobotResponse 动作/情绪
-4. Firefly RK3588 板端部署适配
-5. 人脸身份注册与识别
+4. 人脸身份注册与识别
