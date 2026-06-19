@@ -1,3 +1,0 @@
-einops
-pyvips-binary==8.16.0
-pyvips==2.2.3
