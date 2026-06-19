@@ -10,52 +10,55 @@
 
 ## 闭环架构
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                    ELF2 (RK3588) 板端                             │
-│                                                                  │
-│  ┌──────────────┐    ┌──────────────┐    ┌───────────────────┐  │
-│  │  摄像头采集    │    │  麦克风采集    │    │  Chromium 浏览器    │  │
-│  │  perception_ │    │  sherpa-onnx │    │  Live2D (WebGL)   │  │
-│  │  loop.py     │    │  ASR + VAD   │    │  MediaPipe 人脸    │  │
-│  └──────┬───────┘    └──────┬───────┘    │  FER+ 情绪分类     │  │
-│         │                   │            └───────────────────┘  │
-│         ▼                   ▼                                    │
-│  ┌──────────────────────────────────────────┐                   │
-│  │           SceneAnalyzer (双后端)           │                   │
-│  │  ┌─────────┐        ┌──────────────────┐  │                   │
-│  │  │ Cloud:   │        │ Local:           │  │                   │
-│  │  │ Qwen3-VL │        │ YOLO NPU(5ms)   │  │                   │
-│  │  │ API      │        │ + Qwen0.5B 描述  │  │                   │
-│  │  └─────────┘        └──────────────────┘  │                   │
-│  └──────────────────────┬───────────────────┘                   │
-│                         ▼                                        │
-│  ┌──────────────────────────────────────────┐                   │
-│  │         RobotRuntime + DialogueContext     │                   │
-│  │  ┌─────────┐        ┌──────────────────┐  │                   │
-│  │  │ Cloud:   │        │ Local:           │  │                   │
-│  │  │ DeepSeek │        │ Qwen2.5-1.5B    │  │                   │
-│  │  │ API      │        │ (RKLLM, 8t/s)   │  │                   │
-│  │  └─────────┘        └──────────────────┘  │                   │
-│  └──────────────────────┬───────────────────┘                   │
-│                         ▼                                        │
-│  ┌──────────────────────────────────────────┐                   │
-│  │         TTS (双后端)                      │                   │
-│  │  ┌──────────┐  ┌──────────────┐          │                   │
-│  │  │ VoxCPM2  │  │ sherpa-onnx  │          │                   │
-│  │  │ (2B)     │  │ TTS (~50MB)  │          │                   │
-│  │  └──────────┘  └──────────────┘          │                   │
-│  └──────────────────────┬───────────────────┘                   │
-│                         ▼                                        │
-│               Live2D 表情 + 嘴型同步                              │
-└──────────────────────────────────────────────────────────────────┘
-                         │
-                    ── 网络 ──
-                         │
-              ┌──────────┴──────────┐
-              ▼                     ▼
-        DeepSeek API          Open-Meteo API
-        (LLM 对话)             (天气查询)
+```mermaid
+flowchart TB
+    subgraph ELF2["ELF2 (RK3588) 板端"]
+        subgraph Input["输入层"]
+            CAM["摄像头采集<br/>perception_loop.py"]
+            MIC["麦克风采集<br/>sherpa-onnx ASR + VAD"]
+            CHROME["Chromium 浏览器<br/>Live2D (WebGL)<br/>MediaPipe 人脸<br/>FER+ 情绪分类"]
+        end
+
+        subgraph Vision["视觉分析"]
+            SA["SceneAnalyzer (双后端)"]
+            SA_C["Cloud: Qwen3-VL API"]
+            SA_L["Local: YOLO NPU(5ms)<br/>+ Qwen0.5B 描述"]
+            SA --- SA_C
+            SA --- SA_L
+        end
+
+        subgraph LLM["对话决策"]
+            RT["RobotRuntime + DialogueContext"]
+            LLM_C["Cloud: DeepSeek API"]
+            LLM_L["Local: Qwen2.5-1.5B<br/>(RKLLM, 8t/s)"]
+            RT --- LLM_C
+            RT --- LLM_L
+        end
+
+        subgraph TTS["语音合成"]
+            TTS_B["TTS (双后端)"]
+            TTS_V["VoxCPM2 (2B)"]
+            TTS_S["sherpa-onnx TTS (~50MB)"]
+            TTS_B --- TTS_V
+            TTS_B --- TTS_S
+        end
+
+        L2D["Live2D 表情 + 嘴型同步"]
+    end
+
+    subgraph Cloud["云端服务"]
+        DS["DeepSeek API<br/>(LLM 对话)"]
+        OM["Open-Meteo API<br/>(天气查询)"]
+    end
+
+    CAM --> SA
+    MIC --> RT
+    CHROME --> SA
+    SA --> RT
+    RT --> TTS_B
+    TTS_B --> L2D
+    RT -.->|网络| DS
+    RT -.->|网络| OM
 ```
 
 ## 模块清单
