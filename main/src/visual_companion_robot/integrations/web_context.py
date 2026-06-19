@@ -1,7 +1,6 @@
-"""联网事实上下文。
+"""联网事实上下文 — 天气查询。
 
-当前先把最常见的实时天气查询做成确定性联网补充，再交给 LLM 组织成自然回复。
-这样可以避免模型凭记忆编造天气，也为后续接入更多在线工具保留统一入口。
+通过 Open-Meteo 免费 API 获取实时天气，避免 LLM 编造。
 """
 
 from __future__ import annotations
@@ -24,14 +23,11 @@ WEATHER_LOCATIONS: List[Tuple[str, Dict[str, Any]]] = [
 
 
 def build_web_context(user_text: str, now: Optional[datetime] = None, timeout_sec: int = 8) -> Dict[str, Any]:
-    """根据用户输入构造默认开启的联网事实上下文。"""
-
     reference_time = now or datetime.now().astimezone().replace(microsecond=0)
     context: Dict[str, Any] = {
         "enabled": True,
         "queried_at": reference_time.isoformat(timespec="seconds"),
-        "facts": [],
-        "errors": [],
+        "facts": [], "errors": [],
     }
     if not is_weather_query(user_text):
         return context
@@ -50,41 +46,25 @@ def build_web_context(user_text: str, now: Optional[datetime] = None, timeout_se
 
 
 def is_weather_query(user_text: str) -> bool:
-    """判断是否需要天气联网事实。"""
-
-    text = str(user_text or "")
-    return any(keyword in text for keyword in WEATHER_QUERY_KEYWORDS)
+    return any(keyword in user_text for keyword in WEATHER_QUERY_KEYWORDS)
 
 
 def detect_weather_location(user_text: str) -> Optional[Dict[str, Any]]:
-    """从用户输入中识别当前支持的天气位置。"""
-
-    text = str(user_text or "")
     for keyword, location in WEATHER_LOCATIONS:
-        if keyword in text:
+        if keyword in user_text:
             return dict(location)
     return None
 
 
 def fetch_open_meteo_weather(location: Dict[str, Any], timeout_sec: int = 8) -> Tuple[Dict[str, Any], str]:
-    """调用 Open-Meteo 获取当前天气和今日预报。
-
-    Raises:
-        urllib.error.URLError: 网络不可达或超时。
-        json.JSONDecodeError: 响应非 JSON。
-        KeyError: location 缺少必要字段。
-    """
-
-    query = urllib.parse.urlencode(
-        {
-            "latitude": location["latitude"],
-            "longitude": location["longitude"],
-            "current": "temperature_2m,relative_humidity_2m,precipitation,weather_code,wind_speed_10m",
-            "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max",
-            "timezone": "Asia/Shanghai",
-            "forecast_days": 1,
-        }
-    )
+    query = urllib.parse.urlencode({
+        "latitude": location["latitude"],
+        "longitude": location["longitude"],
+        "current": "temperature_2m,relative_humidity_2m,precipitation,weather_code,wind_speed_10m",
+        "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max",
+        "timezone": "Asia/Shanghai",
+        "forecast_days": 1,
+    })
     url = f"{OPEN_METEO_URL}?{query}"
     try:
         with urllib.request.urlopen(url, timeout=timeout_sec) as response:
@@ -95,17 +75,12 @@ def fetch_open_meteo_weather(location: Dict[str, Any], timeout_sec: int = 8) -> 
 
 
 def format_open_meteo_weather(location: Dict[str, Any], data: Dict[str, Any], source_url: str) -> Dict[str, Any]:
-    """把 Open-Meteo 响应压缩成 LLM 易用的中文事实。
-
-    所有 dict 取值使用 .get() 安全退化，空字段不会抛异常。
-    """
-
     current = data.get("current") or {}
     daily = data.get("daily") or {}
     daily_codes = daily.get("weather_code") or []
-    max_temperatures = daily.get("temperature_2m_max") or []
-    min_temperatures = daily.get("temperature_2m_min") or []
-    precipitation_probs = daily.get("precipitation_probability_max") or []
+    max_temps = daily.get("temperature_2m_max") or []
+    min_temps = daily.get("temperature_2m_min") or []
+    precip_probs = daily.get("precipitation_probability_max") or []
     today_code = daily_codes[0] if daily_codes else current.get("weather_code")
     fact = {
         "type": "weather",
@@ -122,9 +97,9 @@ def format_open_meteo_weather(location: Dict[str, Any], data: Dict[str, Any], so
         },
         "today": {
             "weather": weather_code_to_text(today_code),
-            "max_temperature_c": max_temperatures[0] if max_temperatures else None,
-            "min_temperature_c": min_temperatures[0] if min_temperatures else None,
-            "precipitation_probability_percent": precipitation_probs[0] if precipitation_probs else None,
+            "max_temperature_c": max_temps[0] if max_temps else None,
+            "min_temperature_c": min_temps[0] if min_temps else None,
+            "precipitation_probability_percent": precip_probs[0] if precip_probs else None,
         },
     }
     fact["summary"] = build_weather_summary(fact)
@@ -132,29 +107,21 @@ def format_open_meteo_weather(location: Dict[str, Any], data: Dict[str, Any], so
 
 
 def build_weather_summary(fact: Dict[str, Any]) -> str:
-    """生成可直接引用的天气事实摘要。"""
-
-    current = fact["current"]
-    today = fact["today"]
+    c = fact["current"]
+    t = fact["today"]
     parts = [
-        f"{fact['location']}当前{current['weather']}",
-        f"{current['temperature_c']}°C" if current["temperature_c"] is not None else "",
-        f"湿度{current['humidity_percent']}%" if current["humidity_percent"] is not None else "",
-        f"风速{current['wind_speed_kmh']}km/h" if current["wind_speed_kmh"] is not None else "",
-        f"今日{today['weather']}",
-        f"{today['min_temperature_c']}到{today['max_temperature_c']}°C"
-        if today["min_temperature_c"] is not None and today["max_temperature_c"] is not None
-        else "",
-        f"最大降水概率{today['precipitation_probability_percent']}%"
-        if today["precipitation_probability_percent"] is not None
-        else "",
+        f"{fact['location']}当前{c['weather']}",
+        f"{c['temperature_c']}°C" if c["temperature_c"] is not None else "",
+        f"湿度{c['humidity_percent']}%" if c["humidity_percent"] is not None else "",
+        f"风速{c['wind_speed_kmh']}km/h" if c["wind_speed_kmh"] is not None else "",
+        f"今日{t['weather']}",
+        f"{t['min_temperature_c']}到{t['max_temperature_c']}°C" if t["min_temperature_c"] is not None and t["max_temperature_c"] is not None else "",
+        f"最大降水概率{t['precipitation_probability_percent']}%" if t["precipitation_probability_percent"] is not None else "",
     ]
-    return "，".join(part for part in parts if part)
+    return "，".join(p for p in parts if p)
 
 
 def weather_code_to_text(raw_code: Any) -> str:
-    """Open-Meteo 天气码转中文。"""
-
     try:
         code = int(raw_code)
     except (TypeError, ValueError):

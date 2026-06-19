@@ -11,6 +11,7 @@ sys.path.insert(0, "main/src")
 
 from visual_companion_robot.perception import (
     SceneAnalyzer,
+    SceneAnalyzerConfig,
     PerceptionFrame,
     PerceptionLoop,
 )
@@ -90,7 +91,7 @@ print("=" * 60)
 print("Test 4: 视觉分析 API 端到端 (真实图片)")
 print("=" * 60)
 
-analyzer = SceneAnalyzer(api_key=API_KEY)
+analyzer = SceneAnalyzer(SceneAnalyzerConfig(api_key=API_KEY))
 
 # 下载真实图片
 url = "https://images.unsplash.com/photo-1522202176988-66273c2fd55f?w=640&h=400&fit=crop"

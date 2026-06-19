@@ -337,8 +337,8 @@ const INFERENCE_BACKENDS = {
     options: {
       "siliconflow-deepseek":  { label: "硅基流动 - DeepSeek-V3",  icon: "cloud" },
       "siliconflow-qwen":      { label: "硅基流动 - Qwen3-8B",     icon: "cloud" },
-      "local-qwen-1.5b":       { label: "本地 - Qwen2.5-1.5B",    icon: "chip" },
-      "local-ollama":           { label: "本地 - Ollama",           icon: "chip" },
+      "local-rkllm":           { label: "本地 - Qwen2.5-1.5B (RK3588)", icon: "chip" },
+      "local-ollama":          { label: "本地 - Ollama",            icon: "chip" },
     },
     active: "siliconflow-deepseek",
     storageKey: "vc-backend-llm",
@@ -346,11 +346,11 @@ const INFERENCE_BACKENDS = {
   tts: {
     label: "TTS 语音合成",
     options: {
-      "voxcpm-local":     { label: "本地 - VoxCPM2",       icon: "chip" },
-      "voxcpm-api":       { label: "API - VoxCPM HF Space", icon: "cloud" },
-      "sherpa-onnx":      { label: "本地 - sherpa-onnx",   icon: "chip" },
+      "voxcpm-local":     { label: "本地 - VoxCPM2",         icon: "chip" },
+      "voxcpm-api":       { label: "API - VoxCPM HF Space",  icon: "cloud" },
+      "sherpa-onnx-tts":  { label: "本地 - sherpa-onnx TTS", icon: "chip" },
     },
-    active: "voxcpm-local",
+    active: "sherpa-onnx-tts",
     storageKey: "vc-backend-tts",
   },
   asr: {
@@ -366,9 +366,9 @@ const INFERENCE_BACKENDS = {
   vision: {
     label: "视觉感知",
     options: {
-      "siliconflow-qwen-vl": { label: "API - Qwen3-VL-8B",    icon: "cloud" },
-      "local-moondream":     { label: "本地 - Moondream 2",    icon: "chip" },
-      "mediapipe":           { label: "本地 - MediaPipe 人脸", icon: "chip" },
+      "siliconflow-qwen-vl": { label: "API - Qwen3-VL-8B",       icon: "cloud" },
+      "local-yolo":          { label: "本地 - YOLO NPU 检测",     icon: "chip" },
+      "mediapipe":           { label: "本地 - MediaPipe 人脸",    icon: "chip" },
     },
     active: "siliconflow-qwen-vl",
     storageKey: "vc-backend-vision",
