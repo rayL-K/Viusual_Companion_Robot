@@ -1,4 +1,4 @@
-# Firefly RK3588 板端 Python 依赖
+# ELF2 (RK3588) 板端 Python 依赖
 # ARM64 Ubuntu 22.04+, Python 3.11, CPU + NPU 推理
 
 # ── 核心运行时 ──
@@ -9,27 +9,24 @@ numpy>=1.24,<2.0
 opencv-python-headless>=4.9
 Pillow>=10.0
 
-# ── 视觉感知：Moondream 2 本地推理 ──
-torch>=2.0          # ARM64 wheel: pip install torch --index-url https://download.pytorch.org/whl/cpu
-safetensors>=0.4
-tokenizers>=0.15
-Pillow>=10.0
+# ── 视觉感知：YOLO NPU 推理 ──
+# rknn-toolkit2 / rknpu2 — 从 RK3588  SDK 安装，非 pip
+
+# ── 视觉感知：开发机 CPU 降级 ──
+# onnxruntime>=1.18   # pip install onnxruntime
 
 # ── LLM 对话：Qwen2.5-1.5B 本地推理 ──
-# 方案A: llama.cpp (推荐 ARM)
-#   pip install llama-cpp-python
-# 方案B: PyTorch + transformers
-#   transformers>=4.45
-#   torch>=2.0
+# llama-cpp-python    # pip install llama-cpp-python (ARM 需编译)
 
-# ── 语音识别 (ASR)：sherpa-onnx ──
+# ── 语音识别 + 合成 + VAD：sherpa-onnx ──
 sherpa-onnx>=1.10     # ARM64 预编译包
 
-# ── 语音合成 (TTS)：VoxCPM2 ──
-soundfile>=0.12
+# ── 语音合成 (TTS)：VoxCPM2（备选） ──
+# voxcpm>=2.0.3       # 按需安装，2B 模型需评估 RK3588 CPU 性能
+# soundfile>=0.12
 
 # ── 语音打断 (VAD) ──
-# silero-vad 通过 torch.hub 加载，无需额外 pip
+webrtcvad>=2.0        # 轻量 C 扩展，替代 Silero VAD + PyTorch
 
 # ── Web 服务 ──
 # 前端 Vite build → 静态文件由 Python http.server 托管

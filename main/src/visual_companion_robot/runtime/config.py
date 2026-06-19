@@ -22,6 +22,81 @@ class ConfigError(ValueError):
     """配置文件内容不符合程序要求。"""
 
 
+# ── 后端配置 ──────────────────────────────────────────────────────
+
+@dataclass
+class BackendConfig:
+    """每个模块的后端选择。"""
+
+    llm: str = "cloud"          # cloud / local
+    vision: str = "cloud"       # cloud / local
+    asr: str = "local"
+    tts: str = "local"
+    vad: str = "local"
+
+    VALID_BACKENDS = {"cloud", "local"}
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, str]) -> "BackendConfig":
+        def _valid(key: str, fallback: str) -> str:
+            value = data.get(key, fallback)
+            if value not in cls.VALID_BACKENDS:
+                raise ConfigError(f"后端 `{key}` 值 `{value}` 无效，须为 cloud/local")
+            return value
+        return cls(
+            llm=_valid("llm", "cloud"),
+            vision=_valid("vision", "cloud"),
+            asr=_valid("asr", "local"),
+            tts=_valid("tts", "local"),
+            vad=_valid("vad", "local"),
+        )
+
+
+# ── NPU 配置 ──────────────────────────────────────────────────────
+
+@dataclass
+class NpuConfig:
+    """RK3588 NPU 配置。"""
+
+    target: str = "rk3588"
+    core_mask: int = 0
+
+
+# ── 模型路径配置 ──────────────────────────────────────────────────
+
+@dataclass
+class ModelPaths:
+    """本地模型文件路径（相对 main/ 目录）。"""
+
+    yolo: str = "models/yolo/yolov26n.rknn"
+    llm: str = "models/qwen/Qwen2.5-1.5B-Q4_K_M.gguf"
+    vision_llm: str = "models/qwen/Qwen2.5-0.5B-Q4_K_M.gguf"
+    onnx: str = "models/onnx/"
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, str]) -> "ModelPaths":
+        return cls(
+            yolo=str(data.get("yolo", cls.yolo)),
+            llm=str(data.get("llm", cls.llm)),
+            vision_llm=str(data.get("vision_llm", cls.vision_llm)),
+            onnx=str(data.get("onnx", cls.onnx)),
+        )
+
+    def resolve_yolo(self) -> Path:
+        return resolve_main_path(self.yolo)
+
+    def resolve_llm(self) -> Path:
+        return resolve_main_path(self.llm)
+
+    def resolve_vision_llm(self) -> Path:
+        return resolve_main_path(self.vision_llm)
+
+    def resolve_onnx_dir(self) -> Path:
+        return resolve_main_path(self.onnx)
+
+
+# ── Live2D 配置 ───────────────────────────────────────────────────
+
 @dataclass
 class Live2DDisplayConfig:
     """Live2D 显示模块配置。"""
@@ -32,6 +107,8 @@ class Live2DDisplayConfig:
     manifest_path: Path
 
 
+# ── 应用配置 ──────────────────────────────────────────────────────
+
 @dataclass
 class AppConfig:
     """板端应用的结构化配置。"""
@@ -40,21 +117,24 @@ class AppConfig:
     mode: str
     display: str
     log_level: str
+    backend: BackendConfig
+    model_paths: ModelPaths
+    npu: NpuConfig
     live2d_display: Live2DDisplayConfig
     modules: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
 
-def resolve_project_path(relative_path: str) -> Path:
-    """把相对项目根目录的路径转换为绝对路径。"""
+# ── 路径工具 ──────────────────────────────────────────────────────
 
+def resolve_project_path(relative_path: str) -> Path:
     return PROJECT_ROOT / relative_path
 
 
 def resolve_main_path(relative_path: str) -> Path:
-    """把相对 `main/` 目录的路径转换为绝对路径。"""
-
     return MAIN_ROOT / relative_path
 
+
+# ── 加载器 ───────────────────────────────────────────────────────
 
 def load_raw_config(config_path: Optional[Path] = None) -> Dict[str, Any]:
     """读取 YAML 配置文件并返回原始字典。"""
@@ -77,13 +157,23 @@ def load_app_config(config_path: Optional[Path] = None) -> AppConfig:
     data = load_raw_config(config_path)
     app = require_mapping(data, "app")
     runtime = require_mapping(data, "runtime")
+    backend = BackendConfig.from_mapping(data.get("backend", {}))
+    model_paths = ModelPaths.from_mapping(data.get("model_paths", {}))
+    npu_raw = data.get("npu", {})
+    npu = NpuConfig(
+        target=str(npu_raw.get("target", "rk3588")),
+        core_mask=int(npu_raw.get("core_mask", 0)),
+    )
     modules = require_mapping(data, "modules")
     live2d = require_mapping(modules, "live2d_display")
 
     live2d_config = Live2DDisplayConfig(
         enabled=require_bool(live2d, "enabled"),
         model_name=require_string(live2d, "model_name"),
-        model_path=require_existing_main_file(require_string(live2d, "model_path"), "modules.live2d_display.model_path"),
+        model_path=require_existing_main_file(
+            require_string(live2d, "model_path"),
+            "modules.live2d_display.model_path",
+        ),
         manifest_path=require_existing_main_file(
             require_string(live2d, "manifest_path"),
             "modules.live2d_display.manifest_path",
@@ -95,14 +185,17 @@ def load_app_config(config_path: Optional[Path] = None) -> AppConfig:
         mode=require_string(app, "mode"),
         display=require_string(runtime, "display"),
         log_level=require_string(runtime, "log_level"),
+        backend=backend,
+        model_paths=model_paths,
+        npu=npu,
         modules=dict(modules),
         live2d_display=live2d_config,
     )
 
 
-def require_mapping(data: Mapping[str, Any], key: str) -> Mapping[str, Any]:
-    """读取对象字段，并要求该字段仍是对象。"""
+# ── 校验工具 ─────────────────────────────────────────────────────
 
+def require_mapping(data: Mapping[str, Any], key: str) -> Mapping[str, Any]:
     value = data.get(key)
     if not isinstance(value, dict):
         raise ConfigError(f"配置项 `{key}` 必须是对象")
@@ -110,8 +203,6 @@ def require_mapping(data: Mapping[str, Any], key: str) -> Mapping[str, Any]:
 
 
 def require_string(data: Mapping[str, Any], key: str) -> str:
-    """读取非空字符串配置项。"""
-
     value = data.get(key)
     if not isinstance(value, str) or not value.strip():
         raise ConfigError(f"配置项 `{key}` 必须是非空字符串")
@@ -119,8 +210,6 @@ def require_string(data: Mapping[str, Any], key: str) -> str:
 
 
 def require_bool(data: Mapping[str, Any], key: str) -> bool:
-    """读取布尔配置项。"""
-
     value = data.get(key)
     if not isinstance(value, bool):
         raise ConfigError(f"配置项 `{key}` 必须是布尔值")
@@ -128,8 +217,6 @@ def require_bool(data: Mapping[str, Any], key: str) -> bool:
 
 
 def require_existing_main_file(relative_path: str, label: str) -> Path:
-    """读取相对 `main/` 的文件路径，并确认文件存在。"""
-
     path = resolve_main_path(relative_path).resolve()
     try:
         path.relative_to(MAIN_ROOT.resolve())
@@ -141,7 +228,4 @@ def require_existing_main_file(relative_path: str, label: str) -> Path:
 
 
 def empty_config() -> Dict[str, Any]:
-    """返回一个最小可用配置，供早期测试和单元测试使用。"""
-
     return {"app": {"name": "visual_companion_robot"}}
-

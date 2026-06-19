@@ -1,19 +1,40 @@
-# 板端应用的基础配置。当前阶段先把模块开关和资源路径固定下来，
-# 后续接入真实摄像头、麦克风、模型推理和显示窗口时再逐项扩展。
 app:
   name: visual_companion_robot
   mode: development
 
-# 运行环境配置。DISPLAY=:0 表示默认使用 Firefly 本机图形桌面。
 runtime:
   display: ":0"
   log_level: INFO
 
-# 模块开关。除 Live2D 资源测试外，其他业务模块先保持关闭，避免
-# 未接硬件或模型时启动失败。
+# ── 后端选择 ──────────────────────────────────────────────────────
+# 每个模块可选 cloud（云端 API）或 local（板端 NPU/CPU 推理）。
+backend:
+  llm: cloud
+  vision: cloud
+  asr: local
+  tts: local
+  vad: local
+
+# ── 本地模型路径 ──────────────────────────────────────────────────
+model_paths:
+  # YOLO 检测模型（RKNN 格式）
+  yolo: models/yolo/yolov26n.rknn
+  # 本地 LLM（GGUF 格式）
+  llm: models/qwen/Qwen2.5-1.5B-Q4_K_M.gguf
+  # 视觉小 LLM（GGUF 格式，用于 YOLO 结果 → 自然语言描述）
+  vision_llm: models/qwen/Qwen2.5-0.5B-Q4_K_M.gguf
+  # ONNX 模型目录（sherpa-onnx ASR/TTS/VAD）
+  onnx: models/onnx/
+
+# ── RK3588 NPU 配置 ──────────────────────────────────────────────
+npu:
+  target: rk3588
+  core_mask: 0
+
+# ── 模块配置 ──────────────────────────────────────────────────────
 modules:
   vision:
-    enabled: false
+    enabled: true
   audio_input:
     enabled: false
   speech_recognition:
