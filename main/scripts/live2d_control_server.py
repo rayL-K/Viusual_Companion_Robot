@@ -29,7 +29,7 @@ TTS_CONFIG_PATH = PROJECT_ROOT / "main" / "config" / "tts_models.json"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from visual_companion_robot.integrations.llm_client import DeepSeekLlmClient, LlmClientError
+from visual_companion_robot.integrations.llm_client import DeepSeekLlmClient, LlmClientError, LlmContext
 from visual_companion_robot.integrations.web_context import build_web_context
 from visual_companion_robot.brain.memory import SqliteMemoryStore, current_local_time
 from visual_companion_robot.voice.voxcpm_local import (
@@ -43,7 +43,16 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 DEFAULT_VOXCPM_LOCAL_URL = "http://127.0.0.1:7860"
 MAX_TEXT_LENGTH = 500
+MAX_REQUEST_BODY_BYTES = 128 * 1024
 MEMORY_DB_PATH = PROJECT_ROOT / "main" / "data" / "memory.sqlite3"
+
+
+class RequestBodyError(ValueError):
+    """客户端请求体不符合本地控制服务协议。"""
+
+    def __init__(self, message: str, status: int = 400) -> None:
+        super().__init__(message)
+        self.status = status
 
 
 def clamp(value: float, min_value: float, max_value: float) -> float:
@@ -461,17 +470,17 @@ class ControlHandler(BaseHTTPRequestHandler):
 
     # ---- GET 路由分发表 ----
     _GET_ROUTES: Dict[str, str] = {
-        "/health": "_health",
-        "/voices": "_voices",
-        "/tts-health": "_tts_health",
-        "/reference-audio": "_reference_audio",
+        "/health": "handle_health",
+        "/voices": "handle_voices",
+        "/tts-health": "handle_tts_health",
+        "/reference-audio": "handle_reference_audio",
     }
 
     # ---- POST 路由分发表 ----
     _POST_ROUTES: Dict[str, str] = {
-        "/chat": "_chat",
-        "/tts": "_tts",
-        "/tts-runtime": "_tts_runtime",
+        "/chat": "handle_chat",
+        "/tts": "handle_tts",
+        "/tts-runtime": "handle_tts_runtime",
     }
 
     def do_OPTIONS(self) -> None:
@@ -484,7 +493,7 @@ class ControlHandler(BaseHTTPRequestHandler):
         path = parsed_url.path
         handler_name = self._GET_ROUTES.get(path)
         if handler_name:
-            getattr(self, f"handle{handler_name}")(parsed_url.query)
+            getattr(self, handler_name)(parsed_url.query)
         else:
             self.send_json({"error": "Not found"}, status=404)
 
@@ -492,9 +501,21 @@ class ControlHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         handler_name = self._POST_ROUTES.get(path)
         if handler_name:
-            getattr(self, f"handle{handler_name}")()
+            try:
+                getattr(self, handler_name)()
+            except RequestBodyError as exc:
+                self.send_json({"error": str(exc)}, status=exc.status)
         else:
             self.send_json({"error": "Not found"}, status=404)
+
+    def handle_health(self, _raw_query: str) -> None:
+        self.send_json({"ok": True, "service": "visual-companion-control", "version": self.server_version})
+
+    def handle_voices(self, _raw_query: str) -> None:
+        try:
+            self.send_json(load_tts_config())
+        except (OSError, RuntimeError, json.JSONDecodeError) as exc:
+            self.send_json({"error": str(exc)}, status=500)
 
     def handle_chat(self) -> None:
         try:
@@ -503,6 +524,8 @@ class ControlHandler(BaseHTTPRequestHandler):
             if not text:
                 self.send_json({"error": "text 不能为空。"}, status=400)
                 return
+            requested_rate = payload.get("rate")
+            parsed_rate = None if requested_rate is None else self.parse_number(requested_rate, "rate")
             expressions, motions = load_manifest()
             memory_store = SqliteMemoryStore(MEMORY_DB_PATH)
             now = current_local_time()
@@ -510,24 +533,25 @@ class ControlHandler(BaseHTTPRequestHandler):
             web_context = build_web_context(text[:MAX_TEXT_LENGTH], now=now)
             client = DeepSeekLlmClient()
             plan = client.generate_live2d_control(
-                text[:MAX_TEXT_LENGTH],
-                expressions=expressions,
-                motions=motions,
-                memory_context=[turn.to_prompt_dict(now=now) for turn in memory_context],
-                runtime_context={
-                    "current_time": now.isoformat(timespec="seconds"),
-                    "timezone": now.tzname() or "",
-                    "internet_enabled": True,
-                    "vision": sanitize_vision_context(payload.get("vision")),
-                },
-                web_context=web_context,
+                LlmContext(
+                    user_prompt=text[:MAX_TEXT_LENGTH],
+                    expressions=expressions,
+                    motions=motions,
+                    memory_context=[turn.to_prompt_dict(now=now) for turn in memory_context],
+                    runtime_context={
+                        "current_time": now.isoformat(timespec="seconds"),
+                        "timezone": now.tzname() or "",
+                        "internet_enabled": True,
+                        "vision": sanitize_vision_context(payload.get("vision")),
+                    },
+                    web_context=web_context,
+                )
             )
-            rate = payload.get("rate")
-            if rate is not None:
-                plan.speech.rate = clamp(float(rate), 0.85, 1.35)
+            if parsed_rate is not None:
+                plan.speech.rate = clamp(parsed_rate, 0.85, 1.35)
             memory_store.append_turn(text[:MAX_TEXT_LENGTH], plan.text)
             self.send_json(plan.to_dict())
-        except (LlmClientError, ValueError, RuntimeError, OSError) as exc:
+        except (LlmClientError, RuntimeError, OSError) as exc:
             self.send_json({"error": str(exc)}, status=500)
 
     def handle_tts(self) -> None:
@@ -537,7 +561,7 @@ class ControlHandler(BaseHTTPRequestHandler):
             if not text:
                 self.send_json({"error": "text 不能为空。"}, status=400)
                 return
-            rate = float(payload.get("rate") or 1.0)
+            rate = self.parse_number(payload.get("rate") or 1.0, "rate")
             voice = str(payload.get("voice") or "")
             reference = str(payload.get("reference") or "")
             prompt_text_payload = payload.get("promptText", payload.get("prompt_text"))
@@ -553,7 +577,7 @@ class ControlHandler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(audio)
-        except (ValueError, RuntimeError, OSError, json.JSONDecodeError) as exc:
+        except (RuntimeError, OSError) as exc:
             self.send_json({"error": str(exc)}, status=500)
 
     def handle_reference_audio(self, raw_query: str) -> None:
@@ -597,9 +621,32 @@ class ControlHandler(BaseHTTPRequestHandler):
             self.send_json({"ok": False, "error": str(exc)}, status=200)
 
     def read_json(self) -> Dict[str, Any]:
-        length = int(self.headers.get("Content-Length") or 0)
-        raw = self.rfile.read(min(length, 128 * 1024))
-        return json.loads(raw.decode("utf-8"))
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError as exc:
+            raise RequestBodyError("Content-Length 无效。") from exc
+        if length <= 0:
+            raise RequestBodyError("请求体不能为空。")
+        if length > MAX_REQUEST_BODY_BYTES:
+            raise RequestBodyError("请求体超过 128 KiB 限制。", status=413)
+
+        raw = self.rfile.read(length)
+        if len(raw) != length:
+            raise RequestBodyError("请求体读取不完整。")
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RequestBodyError("请求体必须是有效的 UTF-8 JSON 对象。") from exc
+        if not isinstance(payload, dict):
+            raise RequestBodyError("请求体必须是 JSON 对象。")
+        return payload
+
+    @staticmethod
+    def parse_number(value: Any, field_name: str) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError) as exc:
+            raise RequestBodyError(f"{field_name} 必须是数字。") from exc
 
     def send_json(self, payload: Dict[str, Any], status: int = 200) -> None:
         raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")

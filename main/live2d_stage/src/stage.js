@@ -273,9 +273,7 @@ const sidePanels = [actionPanel, voicePanel, skinPanel, cameraPanel, audioPanel,
 
 function setStatus(message, hint = "") {
   statusEl.textContent = message;
-  if (hint) {
-    hintEl.textContent = hint;
-  }
+  hintEl.textContent = hint;
 }
 
 function setReplyThinking() {
@@ -328,119 +326,62 @@ function updatePerceptionPanel(ctx) {
   if (count) count.textContent = ctx.person_count > 0 ? ctx.person_count : "-";
 }
 
-// ── 推理后端切换 ──
+// ── 当前运行后端 ──
 
-/** 可用的推理后端配置 */
-const INFERENCE_BACKENDS = {
-  llm: {
+/** 此页面实际接入的运行链路。切换能力只在对应的真实控件中提供。 */
+const RUNTIME_BACKENDS = [
+  {
     label: "LLM 对话",
-    options: {
-      "siliconflow-deepseek":  { label: "硅基流动 - DeepSeek-V3",  icon: "cloud" },
-      "siliconflow-qwen":      { label: "硅基流动 - Qwen3-8B",     icon: "cloud" },
-      "local-rkllm":           { label: "本地 - Qwen2.5-1.5B (RK3588)", icon: "chip" },
-      "local-ollama":          { label: "本地 - Ollama",            icon: "chip" },
-    },
-    active: "siliconflow-deepseek",
-    storageKey: "vc-backend-llm",
+    value: "控制服务 / DeepSeek API",
+    detail: "模型与密钥由本地控制服务环境配置。",
   },
-  tts: {
+  {
     label: "TTS 语音合成",
-    options: {
-      "voxcpm-local":     { label: "本地 - VoxCPM2",         icon: "chip" },
-      "voxcpm-api":       { label: "API - VoxCPM HF Space",  icon: "cloud" },
-      "sherpa-onnx-tts":  { label: "本地 - sherpa-onnx TTS", icon: "chip" },
-    },
-    active: "sherpa-onnx-tts",
-    storageKey: "vc-backend-tts",
+    value: "由“语音模型”面板选择",
+    detail: "仅该面板会调用真实的语音运行时切换接口。",
   },
-  asr: {
+  {
     label: "ASR 语音识别",
-    options: {
-      "sherpa-onnx-sense": { label: "本地 - SenseVoice",    icon: "chip" },
-      "sherpa-onnx-para":  { label: "本地 - Paraformer",    icon: "chip" },
-      "web-speech":        { label: "浏览器 - Web Speech",   icon: "browser" },
-    },
-    active: "sherpa-onnx-sense",
-    storageKey: "vc-backend-asr",
+    value: "浏览器 Web Speech",
+    detail: "启动麦克风监听时使用浏览器提供的识别能力。",
   },
-  vision: {
+  {
     label: "视觉感知",
-    options: {
-      "siliconflow-qwen-vl": { label: "API - Qwen3-VL-8B",       icon: "cloud" },
-      "local-yolo":          { label: "本地 - YOLO NPU 检测",     icon: "chip" },
-      "mediapipe":           { label: "本地 - MediaPipe 人脸",    icon: "chip" },
-    },
-    active: "siliconflow-qwen-vl",
-    storageKey: "vc-backend-vision",
+    value: "MediaPipe + 本机 FER+",
+    detail: "FER+ 服务不可用时自动降级为 blendshape 规则。",
   },
-};
+];
 
 /** 初始化后端面板 */
 function initBackendPanel() {
   const list = document.getElementById("backendList");
   if (!list) return;
 
-  // 从 localStorage 恢复选择
-  for (const [moduleId, cfg] of Object.entries(INFERENCE_BACKENDS)) {
-    const saved = localStorage.getItem(cfg.storageKey);
-    if (saved && cfg.options[saved]) cfg.active = saved;
-  }
-
   list.replaceChildren();
 
-  for (const [moduleId, cfg] of Object.entries(INFERENCE_BACKENDS)) {
+  for (const config of RUNTIME_BACKENDS) {
     const section = document.createElement("div");
     section.className = "backend-module";
 
     const title = document.createElement("h3");
-    title.textContent = cfg.label;
+    title.textContent = config.label;
     section.appendChild(title);
 
-    for (const [key, opt] of Object.entries(cfg.options)) {
-      const row = document.createElement("label");
-      row.className = "backend-option" + (cfg.active === key ? " is-active" : "");
+    const value = document.createElement("strong");
+    value.className = "backend-value";
+    value.textContent = config.value;
 
-      const radio = document.createElement("input");
-      radio.type = "radio";
-      radio.name = `backend-${moduleId}`;
-      radio.value = key;
-      radio.checked = cfg.active === key;
-      radio.addEventListener("change", () => {
-        if (radio.checked) {
-          cfg.active = key;
-          localStorage.setItem(cfg.storageKey, key);
-          // 刷新面板样式
-          initBackendPanel();
-          // 通知控制服务
-          applyBackendChange(moduleId, key);
-        }
-      });
+    const detail = document.createElement("p");
+    detail.className = "backend-detail";
+    detail.textContent = config.detail;
 
-      const span = document.createElement("span");
-      span.textContent = opt.label;
-
-      row.appendChild(radio);
-      row.appendChild(span);
-      section.appendChild(row);
-    }
+    section.append(value, detail);
 
     list.appendChild(section);
   }
 
   document.getElementById("backendPanelButton").addEventListener("click", () => openSidePanel(backendPanel));
   document.getElementById("closeBackendPanelButton").addEventListener("click", () => closeSidePanel(backendPanel));
-}
-
-/** 通知后端切换推理引擎 */
-function applyBackendChange(moduleId, backendKey) {
-  const payload = { module: moduleId, backend: backendKey };
-  // 调用控制服务
-  fetch("http://127.0.0.1:8765/tts-runtime", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  }).catch(() => {});
-  addControlLog("推理后端切换", { module: moduleId, backend: backendKey });
 }
 
 function setReplyTextContent(text) {
@@ -1903,10 +1844,11 @@ function updateReferenceControls() {
   referenceHintEl.textContent = `${config.display_name || modelState.selectedReference}：参考文本必须尽量与音频内容一致，VoxCPM 会使用它约束音色。`;
 }
 
-function selectVoice(voiceId) {
+async function selectVoice(voiceId) {
   if (!modelState.voiceModels[voiceId]) {
     return;
   }
+  const previousVoice = modelState.selectedVoice;
   modelState.selectedVoice = voiceId;
   renderVoiceList();
   updateVoiceStatus();
@@ -1914,7 +1856,20 @@ function selectVoice(voiceId) {
     voice: voiceId,
     backend: modelState.voiceModels[voiceId].backend,
   });
-  synchronizeSelectedVoiceRuntime();
+  const activated = await synchronizeSelectedVoiceRuntime();
+  if (activated === false && modelState.selectedVoice === voiceId && previousVoice) {
+    const failureDetail = hintEl.textContent;
+    const rejectedName = modelState.voiceModels[voiceId]?.display_name || voiceId;
+    const restoredName = modelState.voiceModels[previousVoice]?.display_name || previousVoice;
+    modelState.selectedVoice = previousVoice;
+    renderVoiceList();
+    updateVoiceStatus();
+    setStatus(
+      "语音切换失败，已恢复原模型",
+      `${rejectedName} 未启用：${failureDetail} 当前仍使用 ${restoredName}。`,
+    );
+    addControlLog("恢复语音模型选择", { voice: previousVoice, rejected: voiceId });
+  }
 }
 
 function selectReference(referenceId) {
@@ -2087,6 +2042,7 @@ async function startCameraPreview() {
       const labels = {
         loading:  "加载模型...",
         ready:    "等待人脸",
+        detecting: "等待人脸",
         tracking: "追踪中",
         error:    "⚠️ 感知错误",
         stopped:  "",
@@ -2101,8 +2057,17 @@ async function startCameraPreview() {
             if (ctx) updatePerceptionPanel(ctx);
           }, 2000);
         }
+      } else if (status === "detecting") {
+        setCameraStatus(detail || text, "");
+        const noFace = detail === "无人脸";
+        document.getElementById("perceptionScene").textContent = noFace
+          ? "摄像头画面正常，未检测到人脸。"
+          : "正在等待摄像头画面...";
+        document.getElementById("perceptionActivity").textContent = "-";
+        document.getElementById("perceptionEmotion").textContent = "-";
+        document.getElementById("perceptionCount").textContent = "-";
       } else if (text) {
-        setCameraStatus(text, "");
+        setCameraStatus(text, detail || "");
       }
     });
     perceptionClient.start(cameraPreviewEl);
@@ -2138,6 +2103,12 @@ function stopCameraPreview(options = {}) {
     modelState.cameraStream = null;
   }
   cameraPreviewEl.srcObject = null;
+  document.getElementById("perceptionScene").textContent = options.quiet
+    ? "正在等待摄像头画面..."
+    : "摄像头已关闭。";
+  document.getElementById("perceptionActivity").textContent = "-";
+  document.getElementById("perceptionEmotion").textContent = "-";
+  document.getElementById("perceptionCount").textContent = "-";
   if (options.hideWindow !== false) {
     cameraWindowEl.hidden = true;
   }
@@ -2818,7 +2789,7 @@ async function checkSelectedVoiceHealth() {
 async function synchronizeSelectedVoiceRuntime() {
   const config = currentVoiceConfig();
   if (!config) {
-    return;
+    return false;
   }
   const requestId = modelState.voiceRuntimeRequestId + 1;
   modelState.voiceRuntimeRequestId = requestId;
@@ -2837,23 +2808,26 @@ async function synchronizeSelectedVoiceRuntime() {
     });
     const payload = await response.json();
     if (requestId !== modelState.voiceRuntimeRequestId) {
-      return;
+      return null;
     }
 
     addControlLog("语音运行时切换", payload);
     if (!payload.ok) {
       setStatus("语音运行时切换失败", payload.message || payload.error || "请检查控制服务日志。");
-      return;
+      return false;
     }
     if (isProjectLocal) {
       setStatus("VoxCPM 本地推理已启动", payload.model_path || payload.message || "模型已加载到控制服务进程。");
-      return;
+      return true;
     }
     setStatus("已切换到云端语音", payload.message || "本地 VoxCPM 模型缓存已释放。");
+    return true;
   } catch (error) {
     if (requestId === modelState.voiceRuntimeRequestId) {
       setStatus("语音运行时切换失败", error.message);
+      return false;
     }
+    return null;
   }
 }
 

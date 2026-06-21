@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import tempfile
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -65,8 +66,9 @@ class TTSInterface(ABC):
     @staticmethod
     def temp_wav_path(prefix: str = "tts") -> str:
         """生成临时 WAV 文件路径。"""
-
-        return str(Path(tempfile.gettempdir()) / f"{prefix}_{id(prefix)}.wav")
+        file_descriptor, path = tempfile.mkstemp(prefix=f"{prefix}_", suffix=".wav")
+        os.close(file_descriptor)
+        return path
 
 
 # ---------------------------------------------------------------------------
@@ -89,5 +91,9 @@ def create_tts_engine(engine_type: str, **kwargs) -> TTSInterface:
         from visual_companion_robot.voice.voxcpm_local import VoxCpmTTS
 
         return VoxCpmTTS(**kwargs)
+    if engine_type in {"sherpa", "sherpa-onnx"}:
+        from visual_companion_robot.voice.sherpa_tts import SherpaOnnxTTS, SherpaOnnxTTSAdapter
+
+        return SherpaOnnxTTSAdapter(SherpaOnnxTTS(**kwargs))
 
     raise ValueError(f"不支持的 TTS 引擎类型：{engine_type}")

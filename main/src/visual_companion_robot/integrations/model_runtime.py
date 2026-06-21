@@ -84,7 +84,11 @@ class RknnEngine(InferenceEngine):
 
     def load(self, model_path: str) -> None:
         path = Path(model_path)
+        onnx_path = path.with_suffix(".onnx")
         if not path.is_file():
+            if self._cpu_fallback and onnx_path.is_file():
+                self._load_cpu_fallback(str(onnx_path))
+                return
             raise ModelRuntimeError(f"RKNN 模型文件不存在: {path}")
 
         try:
@@ -92,7 +96,7 @@ class RknnEngine(InferenceEngine):
         except ImportError:
             if not self._cpu_fallback:
                 raise ModelRuntimeError("rknnlite 不可用且 CPU 降级未开启")
-            self._load_cpu_fallback(str(path))
+            self._load_cpu_fallback(str(onnx_path))
             return
 
         rknn = RKNNLite()
@@ -114,10 +118,10 @@ class RknnEngine(InferenceEngine):
         except ImportError:
             raise ModelRuntimeError("CPU 降级需要 onnxruntime")
 
-        self._model = ort.InferenceSession(
-            model_path.replace(".rknn", ".onnx"),
-            providers=["CPUExecutionProvider"],
-        )
+        path = Path(model_path)
+        if not path.is_file():
+            raise ModelRuntimeError(f"CPU 降级模型不存在: {path}")
+        self._model = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
         logger.info("RKNN 引擎（CPU 降级）已加载: %s", Path(model_path).name)
 
     def is_loaded(self) -> bool:
@@ -291,6 +295,14 @@ class OnnxEngine(InferenceEngine):
 
     def is_loaded(self) -> bool:
         return self._session is not None
+
+    def input_names(self) -> List[str]:
+        if self._session is None:
+            raise ModelNotLoadedError("ONNX 引擎未加载")
+        return [item.name for item in self._session.get_inputs()]
+
+    def unload(self) -> None:
+        self._session = None
 
     def run(self, output_names: List[str], input_feed: Dict[str, np.ndarray]) -> List[np.ndarray]:
         if self._session is None:

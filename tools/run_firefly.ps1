@@ -5,7 +5,7 @@ param(
     [string]$RemoteRoot = "/home/firefly/wwk/Visual_Companion_Robot",
     [string]$KeyPath = "$env:USERPROFILE\.ssh\id_ed25519_firefly",
     [string]$PythonCommand = "python3",
-    [string]$PythonVersion = "3.8",
+    [string]$PythonVersion = "3.11",
     [switch]$NoSync,
     [double]$DurationSec = 5,
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -16,6 +16,7 @@ $ErrorActionPreference = "Stop"
 
 $Remote = "${RemoteUser}@${RemoteHost}"
 $SyncScript = Join-Path $PSScriptRoot "sync_firefly.ps1"
+$Utf8Runner = Join-Path $PSScriptRoot "invoke_utf8_ps1.ps1"
 
 function Invoke-CheckedProcess {
     param(
@@ -32,7 +33,18 @@ function Invoke-CheckedProcess {
 
 if (-not $NoSync) {
     Write-Host "[运行] 执行前先同步项目到 Firefly"
-    & $SyncScript -RemoteHost $RemoteHost -RemoteUser $RemoteUser -RemoteRoot $RemoteRoot -KeyPath $KeyPath
+    $syncArguments = @(
+        "-RemoteHost", $RemoteHost,
+        "-RemoteUser", $RemoteUser,
+        "-RemoteRoot", $RemoteRoot,
+        "-KeyPath", $KeyPath
+    )
+    if ($PSVersionTable.PSVersion.Major -ge 6) {
+        & $SyncScript @syncArguments
+    }
+    else {
+        & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $Utf8Runner $SyncScript @syncArguments
+    }
     if ($LASTEXITCODE -ne 0) {
         throw "同步失败"
     }

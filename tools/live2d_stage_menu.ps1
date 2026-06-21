@@ -19,6 +19,7 @@ $StageRoot = Join-Path $ProjectRoot "main\live2d_stage"
 $TestStageScript = Join-Path $PSScriptRoot "test_live2d_stage.ps1"
 $TtsServerScript = Join-Path $PSScriptRoot "live2d_tts_server.ps1"
 $GenerateControlScript = Join-Path $PSScriptRoot "generate_llm_control.ps1"
+$Utf8Runner = Join-Path $PSScriptRoot "invoke_utf8_ps1.ps1"
 
 function Resolve-PowerShellExe {
     $fixedPwshPath = Join-Path $env:ProgramFiles "PowerShell\7\pwsh.exe"
@@ -53,7 +54,12 @@ function Invoke-ProjectScript {
     )
 
     Assert-RequiredPath $ScriptPath
-    & $PowerShellExe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $ScriptPath @Arguments
+    if ($PowerShellExe -like "*\powershell.exe") {
+        & $PowerShellExe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $Utf8Runner $ScriptPath @Arguments
+    }
+    else {
+        & $PowerShellExe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $ScriptPath @Arguments
+    }
     if ($LASTEXITCODE -ne 0) {
         throw "脚本执行失败：$ScriptPath，退出码 $LASTEXITCODE"
     }
@@ -72,7 +78,7 @@ function Show-Menu {
     Write-Host "网页地址：http://127.0.0.1:$Port/"
     Write-Host "控制服务：http://127.0.0.1:$TtsPort/health"
     Write-Host ""
-    Write-Host "1. 一键开启：控制服务 + Live2D 网页 + 浏览器"
+    Write-Host "1. 一键开启：控制服务 + FER+ 情绪服务 + Live2D 网页 + 浏览器"
     Write-Host "2. 只开启 Live2D 网页并打开浏览器"
     Write-Host "3. 只开启本地控制 / TTS 服务"
     Write-Host "4. 只打开浏览器网页"
@@ -95,6 +101,7 @@ function Start-StageOnly {
     Invoke-ProjectScript $TestStageScript @(
         "-Open",
         "-NoTts",
+        "-NoEmotion",
         "-EnvName", $EnvName,
         "-Port", "$Port",
         "-TtsPort", "$TtsPort"

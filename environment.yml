@@ -7,6 +7,14 @@ dependencies:
   - pyyaml>=5.3
   - pip:
       - pytest>=8.0
+      - numpy>=1.24
+      - requests>=2.31
+      - Pillow>=10.0
+      - opencv-python>=4.9
+      - onnxruntime>=1.18
+      - sherpa-onnx>=1.10
+      - webrtcvad-wheels>=2.0.14; platform_system == "Windows"
+      - webrtcvad>=2.0; platform_system != "Windows"
       - voxcpm==2.0.3
       - torch==2.11.0
       - torchaudio==2.11.0

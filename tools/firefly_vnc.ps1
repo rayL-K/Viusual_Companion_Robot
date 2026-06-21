@@ -47,7 +47,8 @@ function Restart-AsAdministrator {
         "-ViewerTarget",
         $ViewerTarget
     )
-    Start-Process -FilePath "pwsh.exe" -ArgumentList $args -WorkingDirectory $ProjectRoot -Verb RunAs
+    $powerShellExe = (Get-Process -Id $PID).Path
+    Start-Process -FilePath $powerShellExe -ArgumentList $args -WorkingDirectory $ProjectRoot -Verb RunAs
 }
 
 function Get-TailscaleExe {
@@ -217,7 +218,6 @@ function Open-VncViewer {
 }
 
 function Invoke-SelfTest {
-    Assert-CommandExists "pwsh.exe" "请安装 PowerShell 7.1 或更新版本。"
     Assert-CommandExists "ssh.exe" "请启用 Windows OpenSSH 客户端。"
     Write-Host "PowerShell: $($PSVersionTable.PSVersion)"
     Write-Host "Mode: $Mode"

@@ -93,6 +93,7 @@ class Live2DStageFrontendTest(unittest.TestCase):
     def test_audio_status_resets_after_playback_finishes(self) -> None:
         self.assertIn("音频播放完成", self.stage_source)
         self.assertIn("可以继续对话，或等待她做待机动作。", self.stage_source)
+        self.assertIn("hintEl.textContent = hint", self.stage_source)
 
     def test_local_voice_health_check_is_visible(self) -> None:
         self.assertIn("TTS_HEALTH_API_URL", self.stage_source)
@@ -100,22 +101,36 @@ class Live2DStageFrontendTest(unittest.TestCase):
         self.assertIn("voxcpm_project_local", self.stage_source)
         self.assertIn("VoxCPM 项目内本地推理", self.stage_source)
 
+    def test_backend_panel_only_describes_real_runtime_connections(self) -> None:
+        self.assertIn("RUNTIME_BACKENDS", self.stage_source)
+        self.assertIn("MediaPipe + 本机 FER+", self.stage_source)
+        self.assertNotIn("INFERENCE_BACKENDS", self.stage_source)
+        self.assertNotIn("applyBackendChange", self.stage_source)
+        self.assertNotIn("vc-backend-llm", self.stage_source)
+
+    def test_failed_voice_activation_rolls_back_the_selection(self) -> None:
+        self.assertIn("const activated = await synchronizeSelectedVoiceRuntime()", self.stage_source)
+        self.assertIn("modelState.selectedVoice = previousVoice", self.stage_source)
+        self.assertIn('addControlLog("恢复语音模型选择"', self.stage_source)
+        self.assertIn("语音切换失败，已恢复原模型", self.stage_source)
+
     def test_visual_context_is_sent_with_chat_request(self) -> None:
         self.assertIn("vision: perceptionClient.getContext()", self.stage_source)
         self.assertIn("getContext()", self.perception_source)
         self.assertIn("emotionSource", self.perception_source)
         self.assertIn("fullScores", self.perception_source)
         self.assertIn("headPose", self.perception_source)
+        self.assertIn('detecting: "等待人脸"', self.stage_source)
+        self.assertIn("摄像头画面正常，未检测到人脸。", self.stage_source)
 
-    def test_onnx_emotion_adapter_stays_optional(self) -> None:
+    def test_ferplus_emotion_backend_stays_optional(self) -> None:
         self.assertIn("emotionOnnxClient.classify(video, faceBox)", self.perception_source)
         self.assertIn('source: "blendshape_rule"', self.perception_source)
-        self.assertIn("EMOTION_ONNX_MODEL_URL", self.emotion_onnx_source)
-        self.assertIn("EMOTION_INPUT_SIZE = 224", self.emotion_onnx_source)
-        self.assertIn("EMOTION_INPUT_CHANNELS = 3", self.emotion_onnx_source)
-        self.assertIn('import("onnxruntime-web")', self.emotion_onnx_source)
-        self.assertIn("dims: [1, EMOTION_INPUT_CHANNELS, EMOTION_INPUT_SIZE, EMOTION_INPUT_SIZE]", self.emotion_onnx_source)
-        self.assertIn('source: "onnx"', self.emotion_onnx_source)
+        self.assertIn("EMOTION_BACKEND_URL", self.emotion_onnx_source)
+        self.assertIn("EMOTION_INPUT_SIZE = 64", self.emotion_onnx_source)
+        self.assertIn('method: "POST"', self.emotion_onnx_source)
+        self.assertIn('source: "ferplus"', self.emotion_onnx_source)
+        self.assertNotIn("onnxruntime-web", self.emotion_onnx_source)
 
 
 if __name__ == "__main__":

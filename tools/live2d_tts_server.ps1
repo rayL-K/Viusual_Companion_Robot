@@ -19,7 +19,7 @@ New-Item -ItemType Directory -Path $ReportsRoot -Force | Out-Null
 
 $LocalEnvPath = Join-Path $ProjectRoot "main\config\local.env"
 if (Test-Path -LiteralPath $LocalEnvPath) {
-    foreach ($line in Get-Content -LiteralPath $LocalEnvPath) {
+    foreach ($line in Get-Content -LiteralPath $LocalEnvPath -Encoding UTF8) {
         $trimmedLine = $line.Trim()
         if ([string]::IsNullOrWhiteSpace($trimmedLine) -or $trimmedLine.StartsWith("#")) {
             continue
@@ -52,16 +52,19 @@ if (-not (Get-Command conda -ErrorAction SilentlyContinue)) {
 
 $stdoutLogPath = Join-Path $ReportsRoot "live2d_tts_server.out.log"
 $stderrLogPath = Join-Path $ReportsRoot "live2d_tts_server.err.log"
-$pwshCommand = "`$env:LIVE2D_CONTROL_HOST = `"$HostAddress`"; `$env:LIVE2D_CONTROL_PORT = `"$Port`"; & conda run -n `"$EnvName`" python `"$ServerScript`""
+$env:LIVE2D_CONTROL_HOST = $HostAddress
+$env:LIVE2D_CONTROL_PORT = "$Port"
+$condaCommand = Get-Command conda -ErrorAction Stop
 $process = Start-Process `
-    -FilePath "pwsh" `
-    -ArgumentList @("-NoLogo", "-NoProfile", "-Command", $pwshCommand) `
+    -FilePath $condaCommand.Source `
+    -ArgumentList @("run", "-n", $EnvName, "python", $ServerScript) `
     -WindowStyle Hidden `
     -RedirectStandardOutput $stdoutLogPath `
     -RedirectStandardError $stderrLogPath `
     -PassThru
 
-Set-Content -LiteralPath (Join-Path $ReportsRoot "live2d_tts_server.pid") -Value $process.Id -Encoding utf8NoBOM
+$pidPath = Join-Path $ReportsRoot "live2d_tts_server.pid"
+[IO.File]::WriteAllText($pidPath, "$($process.Id)`r`n", [Text.UTF8Encoding]::new($false))
 
 $startupTimeoutSeconds = 30
 $Listening = $null

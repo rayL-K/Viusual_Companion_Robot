@@ -1,6 +1,5 @@
 const EMOTION_BACKEND_URL = "http://127.0.0.1:8766/emotion";
 const EMOTION_INPUT_SIZE = 64;
-const EMOTION_LABELS = ["neutral", "happiness", "surprise", "sadness", "anger", "disgust", "fear", "contempt"];
 
 let workCanvas = null;
 let workContext = null;
@@ -35,7 +34,11 @@ export const emotionOnnxClient = {
         return null;
       }
       const data = await resp.json();
+      if (typeof data.emotion !== "string" || typeof data.confidence !== "number") {
+        throw new Error("情绪服务返回格式无效");
+      }
       this.status = "ready";
+      this.error = "";
       return {
         emotion: data.emotion,
         confidence: data.confidence,

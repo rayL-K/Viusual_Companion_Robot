@@ -113,7 +113,7 @@ class SceneAnalyzer:
             frame.scene_caption = "视觉检测暂时不可用"
             return
 
-        frame.scene_caption = self._detector.detect_for_scene(frame_bgr)
+        frame.scene_caption = self._detector.describe(det_result)
         frame.objects_detected = [d.class_name for d in det_result.detections]
 
         if self._vision_llm and det_result.detections:

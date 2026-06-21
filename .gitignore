@@ -25,7 +25,8 @@ main/models/moondream2/tokenizer.json
 
 # Temp playwright test scripts
 main/live2d_stage/tmp/
-main/live2d_stage/_*.cjsmain/models/
+main/live2d_stage/_*.cjs
+main/models/
 
 # CodeGraph index
 .codegraph/

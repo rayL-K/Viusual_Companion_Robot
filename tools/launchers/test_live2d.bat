@@ -1,9 +1,5 @@
 @echo off
-setlocal
-where pwsh.exe >nul 2>&1
-if errorlevel 1 (
-    echo [ERROR] pwsh.exe was not found. Please install PowerShell 7.1 or later.
-    exit /b 1
-)
-pwsh -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0..\test_live2d.ps1" %*
+setlocal EnableExtensions
+set "VCR_PS_SCRIPT=%~dp0..\test_live2d.ps1"
+call "%~dp0run_ps1.bat" %*
 exit /b %ERRORLEVEL%

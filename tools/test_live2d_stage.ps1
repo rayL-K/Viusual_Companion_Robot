@@ -3,6 +3,7 @@ param(
     [switch]$Open,
     [switch]$GenerateControl,
     [switch]$NoTts,
+    [switch]$NoEmotion,
     [string]$EnvName = "visual-companion-robot",
     [int]$Port = 5174,
     [int]$TtsPort = 8765
@@ -18,6 +19,22 @@ $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $StageRoot = Join-Path $ProjectRoot "main\live2d_stage"
 $GenerateScript = Join-Path $ProjectRoot "main\scripts\generate_control_plan.py"
 $TtsScript = Join-Path $ProjectRoot "tools\live2d_tts_server.ps1"
+$EmotionScript = Join-Path $ProjectRoot "tools\emotion_server.ps1"
+$Utf8Runner = Join-Path $ProjectRoot "tools\invoke_utf8_ps1.ps1"
+
+function Invoke-Utf8ProjectScript {
+    param([string]$ScriptPath, [string[]]$Arguments = @())
+
+    if ($PSVersionTable.PSVersion.Major -ge 6) {
+        & $ScriptPath @Arguments
+    }
+    else {
+        & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $Utf8Runner $ScriptPath @Arguments
+    }
+    if ($LASTEXITCODE -ne 0) {
+        throw "脚本执行失败：$ScriptPath，退出码 $LASTEXITCODE"
+    }
+}
 
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
     throw "未找到 node。请先安装 Node.js 18 或更新版本。"
@@ -51,11 +68,21 @@ if ($GenerateControl) {
 if ($Open) {
     if (-not $NoTts) {
         try {
-            & $TtsScript -EnvName $EnvName -Port $TtsPort
+            Invoke-Utf8ProjectScript $TtsScript @("-EnvName", $EnvName, "-Port", "$TtsPort")
         }
         catch {
             Write-Warning "本地 TTS 服务启动失败：$($_.Exception.Message)"
             Write-Warning "展示台仍会打开，但声音会降级到浏览器语音或静默。"
+        }
+    }
+
+    if (-not $NoEmotion) {
+        try {
+            Invoke-Utf8ProjectScript $EmotionScript @("-EnvName", $EnvName, "-Port", "8766")
+        }
+        catch {
+            Write-Warning "FER+ 情绪服务启动失败：$($_.Exception.Message)"
+            Write-Warning "展示台仍会打开，情绪识别将回退到浏览器 blendshape 规则。"
         }
     }
 

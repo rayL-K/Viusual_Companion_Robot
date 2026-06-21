@@ -1,7 +1,7 @@
 import { emotionOnnxClient } from "./emotion-onnx-client.js";
 
 /**
- * 浏览器端视觉感知：MediaPipe 负责人脸关键点，ONNX 情绪模型作为可选增强。
+ * 浏览器端视觉感知：MediaPipe 负责人脸关键点，本机 FER+ 服务作为可选情绪增强。
  *
  * 检测 cameraPreviewEl 视频帧 → 输出 Live2D 参数与视觉上下文。
  */
@@ -13,7 +13,7 @@ let _onStatus = null;
 let _landmarker = null;
 
 /**
- * 状态: "loading" / "tracking" / "no_face" / "error" / "stopped"
+ * 状态: "loading" / "detecting" / "tracking" / "error" / "stopped"
  */
 export const perceptionClient = {
   _videoEl: null,

@@ -56,20 +56,26 @@ class FerPlusEmotionRecognizer:
             raise RuntimeError("FER+ 模型未加载，请先调用 load()")
 
         input_tensor = self._preprocess(face_patch)
-        outputs = self._engine.run(
-            output_names=[],
-            input_feed={self._engine._session.get_inputs()[0].name: input_tensor},
-        )
+        input_names = self._engine.input_names()
+        if not input_names:
+            raise RuntimeError("FER+ 模型没有输入节点")
+        outputs = self._engine.run(output_names=[], input_feed={input_names[0]: input_tensor})
+        if not outputs:
+            raise RuntimeError("FER+ 模型没有输出结果")
 
-        scores = outputs[0][0]
+        scores = np.asarray(outputs[0]).reshape(-1)
+        if scores.size != len(FERPLUS_LABELS):
+            raise RuntimeError(f"FER+ 输出维度无效: {scores.size}")
         probs = self._softmax(scores)
-        full_scores = {FERPLUS_LABELS[i]: float(probs[i]) for i in range(len(FERPLUS_LABELS))}
+        full_scores: Dict[str, float] = {}
+        for raw_label, probability in zip(FERPLUS_LABELS, probs):
+            label = EMOTION_MAP.get(raw_label, "neutral")
+            full_scores[label] = full_scores.get(label, 0.0) + float(probability)
 
-        best_idx = int(np.argmax(probs))
-        raw_emotion = FERPLUS_LABELS[best_idx]
+        emotion = max(full_scores, key=full_scores.get)
         return EmotionResult(
-            emotion=EMOTION_MAP.get(raw_emotion, "neutral"),
-            confidence=float(probs[best_idx]),
+            emotion=emotion,
+            confidence=full_scores[emotion],
             full_scores=full_scores,
         )
 

@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import logging
-import struct
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Iterator, Optional
@@ -45,11 +44,17 @@ class VoiceActivityDetector:
 
     def __init__(self, config: Optional[VADConfig] = None) -> None:
         self._cfg = config or VADConfig()
+        if self._cfg.frame_ms not in {10, 20, 30}:
+            raise ValueError("WebRTC VAD frame_ms 只能是 10、20 或 30")
+        if self._cfg.padding_ms <= 0:
+            raise ValueError("VAD padding_ms 必须大于 0")
+        if self._cfg.level not in {0, 1, 2, 3}:
+            raise ValueError("WebRTC VAD level 必须在 0 到 3 之间")
         try:
             import webrtcvad
             self._vad = webrtcvad.Vad(self._cfg.level)
         except ImportError:
-            logger.warning("webrtcvad 不可用，VAD 降级为始终通过")
+            logger.warning("webrtcvad 不可用，VAD 已禁用")
             self._vad = None
         self._state = VADState.IDLE
         self._silent_frames = 0

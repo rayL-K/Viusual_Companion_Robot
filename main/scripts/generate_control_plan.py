@@ -21,7 +21,7 @@ DEFAULT_MANIFEST = PROJECT_ROOT / "main" / "assets" / "live2d" / "Strawberry_Rab
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from visual_companion_robot.integrations.llm_client import DeepSeekLlmClient, LlmClientError
+from visual_companion_robot.integrations.llm_client import DeepSeekLlmClient, LlmClientError, LlmContext
 
 
 def parse_args() -> argparse.Namespace:
@@ -60,7 +60,13 @@ def main() -> int:
     try:
         expressions, motions = load_manifest(args.manifest)
         client = DeepSeekLlmClient(model=args.model)
-        plan = client.generate_live2d_control(args.prompt, expressions=expressions, motions=motions)
+        plan = client.generate_live2d_control(
+            LlmContext(
+                user_prompt=args.prompt,
+                expressions=expressions,
+                motions=motions,
+            )
+        )
     except (OSError, ValueError, LlmClientError) as exc:
         print("LLM 控制计划生成失败：{0}".format(exc))
         return 1

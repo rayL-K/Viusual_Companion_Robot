@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import json
 import unittest
+from http.client import HTTPConnection
+from http.server import ThreadingHTTPServer
 from pathlib import Path
+from threading import Thread
 from unittest.mock import patch
 
 from main.scripts.live2d_control_server import (
@@ -17,10 +21,64 @@ from main.scripts.live2d_control_server import (
     sanitize_vision_context,
     select_reference_config,
     select_voice_config,
+    ControlHandler,
 )
 
 
 class VoxcpmControlServerTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), ControlHandler)
+        cls.server_thread = Thread(target=cls.server.serve_forever, daemon=True)
+        cls.server_thread.start()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.server.shutdown()
+        cls.server.server_close()
+        cls.server_thread.join(timeout=2)
+
+    def request_json(self, method: str, path: str, body: str = "") -> tuple[int, dict]:
+        connection = HTTPConnection("127.0.0.1", self.server.server_port, timeout=5)
+        headers = {"Content-Type": "application/json"} if body else {}
+        connection.request(method, path, body=body.encode("utf-8"), headers=headers)
+        response = connection.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+        connection.close()
+        return response.status, payload
+
+    def test_http_routes_expose_health_voices_and_validation(self) -> None:
+        status, health = self.request_json("GET", "/health")
+        self.assertEqual(status, 200)
+        self.assertTrue(health["ok"])
+
+        status, voices = self.request_json("GET", "/voices")
+        self.assertEqual(status, 200)
+        self.assertIn(voices["active"], voices["models"])
+
+        status, error = self.request_json("POST", "/chat", '{"text":""}')
+        self.assertEqual(status, 400)
+        self.assertIn("text", error["error"])
+
+    def test_http_rejects_invalid_or_oversized_json_before_dispatch(self) -> None:
+        for body in ("[]", "{broken"):
+            status, error = self.request_json("POST", "/chat", body)
+            self.assertEqual(status, 400)
+            self.assertIn("JSON", error["error"])
+
+        status, error = self.request_json("POST", "/tts", '{"text":"测试","rate":"fast"}')
+        self.assertEqual(status, 400)
+        self.assertIn("rate", error["error"])
+
+        status, error = self.request_json("POST", "/chat", '{"text":"测试","rate":"fast"}')
+        self.assertEqual(status, 400)
+        self.assertIn("rate", error["error"])
+
+        oversized = json.dumps({"text": "x" * (128 * 1024)}, ensure_ascii=False)
+        status, error = self.request_json("POST", "/chat", oversized)
+        self.assertEqual(status, 413)
+        self.assertIn("128 KiB", error["error"])
+
     def test_detect_audio_content_type_uses_file_header(self) -> None:
         self.assertEqual(detect_audio_content_type(b"RIFFxxxxWAVEdata", "application/octet-stream"), "audio/wav")
         self.assertEqual(detect_audio_content_type(b"\xff\xfb\x90\x64", "application/octet-stream"), "audio/mpeg")
@@ -157,7 +215,7 @@ class VoxcpmControlServerTests(unittest.TestCase):
                 "status": "running-with-extra-long-status-that-should-be-trimmed",
                 "hasFace": True,
                 "emotion": "happy",
-                "emotionSource": "onnx",
+                "emotionSource": "ferplus",
                 "emotionConfidence": 1.5,
                 "fullScores": {"happy": 0.9, "sad": -1, "unknown": 9},
                 "headPose": {"angleX": 99, "angleY": "-99", "bodyAngleZ": 12.34},
@@ -169,7 +227,7 @@ class VoxcpmControlServerTests(unittest.TestCase):
         self.assertTrue(context["enabled"])
         self.assertTrue(context["has_face"])
         self.assertEqual(context["emotion"], "happy")
-        self.assertEqual(context["emotion_source"], "onnx")
+        self.assertEqual(context["emotion_source"], "ferplus")
         self.assertEqual(context["emotion_confidence"], 1.0)
         self.assertEqual(context["emotion_scores"], {"happy": 0.9, "sad": 0.0})
         self.assertEqual(context["head_pose"]["angle_x"], 45.0)

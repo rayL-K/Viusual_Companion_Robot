@@ -15,6 +15,7 @@ if str(SRC_ROOT) not in sys.path:
 
 from visual_companion_robot.integrations.llm_client import (
     DeepSeekLlmClient,
+    LlmContext,
     normalize_action_plan_for_user_text,
     parse_live2d_control_plan,
 )
@@ -155,7 +156,7 @@ class LlmControlPlanTest(unittest.TestCase):
     def test_client_falls_back_when_llm_returns_plain_text(self) -> None:
         client = FakeDeepSeekClient("主人，我现在可以继续陪你聊天，也会尽量保持动作稳定。")
 
-        plan = client.generate_live2d_control("你好", expressions=["question"], motions=["scene1"])
+        plan = client.generate_live2d_control(self._context(expressions=["question"]))
 
         self.assertEqual(plan.text, "主人，我现在可以继续陪你聊天，也会尽量保持动作稳定。")
         self.assertEqual(plan.emotion, "thinking")
@@ -166,7 +167,7 @@ class LlmControlPlanTest(unittest.TestCase):
     def test_client_fallback_extracts_text_from_broken_json(self) -> None:
         client = FakeDeepSeekClient('{"text": "主人，我收到了你的消息。", "emotion": "happy",')
 
-        plan = client.generate_live2d_control("你好", expressions=["question"], motions=["scene1"])
+        plan = client.generate_live2d_control(self._context(expressions=["question"]))
 
         self.assertEqual(plan.text, "主人，我收到了你的消息。")
         self.assertEqual(plan.parameters["ParamMouthForm"], 0.15)
@@ -189,7 +190,7 @@ class LlmControlPlanTest(unittest.TestCase):
             ]
         )
 
-        plan = client.generate_live2d_control("你好", expressions=["heart"], motions=["scene1"])
+        plan = client.generate_live2d_control(self._context(expressions=["heart"]))
 
         self.assertEqual(plan.text, "主人，我已经把回复整理成标准控制计划啦。")
         self.assertEqual(plan.emotion, "happy")
@@ -199,12 +200,14 @@ class LlmControlPlanTest(unittest.TestCase):
         client = FakeDeepSeekClient("{}")
 
         request = client._build_request(
-            "今日江宁天气如何",
-            expressions=["heart"],
-            motions=["scene1"],
-            memory_context=[{"time": "2026-05-17T17:28:00+08:00", "relative_time": "12 分钟前"}],
-            runtime_context={"current_time": "2026-05-17T17:40:00+08:00", "internet_enabled": True},
-            web_context={"enabled": True, "facts": [{"summary": "南京市江宁区当前多云，22°C"}], "errors": []},
+            LlmContext(
+                user_prompt="今日江宁天气如何",
+                expressions=["heart"],
+                motions=["scene1"],
+                memory_context=[{"time": "2026-05-17T17:28:00+08:00", "relative_time": "12 分钟前"}],
+                runtime_context={"current_time": "2026-05-17T17:40:00+08:00", "internet_enabled": True},
+                web_context={"enabled": True, "facts": [{"summary": "南京市江宁区当前多云，22°C"}], "errors": []},
+            )
         )
         user_content = json.loads(request["messages"][1]["content"])
 
@@ -212,6 +215,10 @@ class LlmControlPlanTest(unittest.TestCase):
         self.assertEqual(user_content["近期记忆"][0]["relative_time"], "12 分钟前")
         self.assertEqual(user_content["联网事实"]["facts"][0]["summary"], "南京市江宁区当前多云，22°C")
         self.assertIn("联网事实", request["messages"][0]["content"])
+
+    @staticmethod
+    def _context(expressions: list[str]) -> LlmContext:
+        return LlmContext(user_prompt="你好", expressions=expressions, motions=["scene1"])
 
 
 class FakeDeepSeekClient(DeepSeekLlmClient):

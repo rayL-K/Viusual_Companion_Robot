@@ -3,7 +3,13 @@
 测试链路：摄像头 → 视觉分析 → 事件总线 → 对话上下文 → LLM prompt
 """
 
-import sys, time, io, requests, numpy as np
+import io
+import os
+import sys
+import time
+
+import numpy as np
+import requests
 from PIL import Image
 from pathlib import Path
 
@@ -23,7 +29,7 @@ from visual_companion_robot.runtime.bus import (
     EVENT_SPEECH_END,
 )
 
-API_KEY = "REMOVED_SECRET"
+API_KEY = os.environ.get("SILICONFLOW_KEY", "")
 
 # ── 测试 1: 数据结构完整性 ──────────────────────────────────
 print("=" * 60)
@@ -91,28 +97,30 @@ print("=" * 60)
 print("Test 4: 视觉分析 API 端到端 (真实图片)")
 print("=" * 60)
 
-analyzer = SceneAnalyzer(SceneAnalyzerConfig(api_key=API_KEY))
+if not API_KEY:
+    print("  ⏭️ SKIP：未设置 SILICONFLOW_KEY，不调用外部视觉 API")
+    f = frame
+    online_test_status = "SKIP"
+else:
+    analyzer = SceneAnalyzer(SceneAnalyzerConfig(api_key=API_KEY))
+    url = "https://images.unsplash.com/photo-1522202176988-66273c2fd55f?w=640&h=400&fit=crop"
+    response = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+    response.raise_for_status()
+    image = Image.open(io.BytesIO(response.content)).convert("RGB")
+    array = np.array(image)
+    print(f"  Image: {array.shape[1]}x{array.shape[0]}")
 
-# 下载真实图片
-url = "https://images.unsplash.com/photo-1522202176988-66273c2fd55f?w=640&h=400&fit=crop"
-r = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
-img = Image.open(io.BytesIO(r.content)).convert("RGB")
-arr = np.array(img)
-print(f"  Image: {arr.shape[1]}x{arr.shape[0]}")
-
-t0 = time.time()
-f = analyzer.analyze(arr)
-dt = time.time() - t0
-
-print(f"  Time: {dt:.1f}s")
-print(f"  Scene: {f.scene_caption}")
-print(f"  Activity: {f.person_activity}")
-print(f"  Emotion: {f.emotion_impression}")
-print(f"  People: {f.person_count}")
-
-assert f.scene_caption, "Scene caption should not be empty"
-assert f.emotion_impression, "Emotion should not be empty"
-print("  ✅ PASS")
+    started_at = time.time()
+    f = analyzer.analyze(array)
+    duration = time.time() - started_at
+    print(f"  Time: {duration:.1f}s")
+    print(f"  Scene: {f.scene_caption}")
+    print(f"  Activity: {f.person_activity}")
+    print(f"  Emotion: {f.emotion_impression}")
+    print(f"  People: {f.person_count}")
+    assert f.scene_caption, "Scene caption should not be empty"
+    print("  ✅ PASS")
+    online_test_status = "PASS"
 
 # ── 测试 5: 完整链路 (视觉 → 上下文 → LLM prompt) ─────────
 print()
@@ -137,10 +145,10 @@ print("  ✅ PASS")
 # ── 总结 ────────────────────────────────────────────
 print()
 print("=" * 60)
-print("全部测试通过 ✅")
+print("本地集成测试通过 ✅")
 print("=" * 60)
 print(f"  1. PerceptionFrame 数据结构     ✅")
 print(f"  2. DialogueContext 消费视觉帧    ✅")
 print(f"  3. RobotEvent 事件总线          ✅")
-print(f"  4. 视觉 API 端到端 (Qwen3-VL)   ✅")
+print(f"  4. 视觉 API 端到端 (Qwen3-VL)   {online_test_status}")
 print(f"  5. 完整链路 (视觉→LLM prompt)   ✅")

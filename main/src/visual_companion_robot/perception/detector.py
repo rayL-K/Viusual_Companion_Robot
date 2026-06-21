@@ -81,7 +81,11 @@ class YoloDetector:
         Returns:
             中文场景描述，如"画面中有 1 个人，1 部手机"。
         """
-        result = self.detect(image)
+        return self.describe(self.detect(image))
+
+    @staticmethod
+    def describe(result: DetectionResult) -> str:
+        """把一次检测结果转成简短场景描述，避免重复推理。"""
 
         if not result.detections:
             return "画面中未检测到明显物体"

@@ -1,0 +1,109 @@
+from __future__ import annotations
+
+import json
+import sys
+import unittest
+from http.client import HTTPConnection
+from http.server import ThreadingHTTPServer
+from pathlib import Path
+from threading import Thread
+
+import numpy as np
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+SRC_ROOT = PROJECT_ROOT / "main" / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+
+from visual_companion_robot.perception.emotion import FerPlusEmotionRecognizer
+from visual_companion_robot.perception.emotion_server import EmotionRequestHandler
+
+
+class FakeEmotionEngine:
+    def input_names(self) -> list[str]:
+        return ["Input3"]
+
+    def run(self, output_names, input_feed):  # type: ignore[no-untyped-def]
+        self.input_feed = input_feed
+        return [np.array([[0.1, 3.0, 0.2, 0.3, 1.0, 0.8, 0.4, 0.1]], dtype=np.float32)]
+
+
+class FerPlusEmotionRecognizerTests(unittest.TestCase):
+    def test_classify_uses_public_engine_contract_and_normalized_labels(self) -> None:
+        recognizer = FerPlusEmotionRecognizer()
+        engine = FakeEmotionEngine()
+        recognizer._engine = engine  # type: ignore[assignment]
+
+        result = recognizer.classify(np.zeros((64, 64, 3), dtype=np.uint8))
+
+        self.assertEqual(result.emotion, "happy")
+        self.assertIn("Input3", engine.input_feed)
+        self.assertEqual(set(result.full_scores), {"neutral", "happy", "surprise", "sad", "angry"})
+        self.assertAlmostEqual(sum(result.full_scores.values()), 1.0, places=6)
+        self.assertEqual(result.confidence, result.full_scores["happy"])
+
+    def test_classify_rejects_unexpected_output_shape(self) -> None:
+        recognizer = FerPlusEmotionRecognizer()
+        engine = FakeEmotionEngine()
+        engine.run = lambda output_names, input_feed: [np.zeros((1, 7), dtype=np.float32)]  # type: ignore[method-assign]
+        recognizer._engine = engine  # type: ignore[assignment]
+
+        with self.assertRaisesRegex(RuntimeError, "输出维度无效"):
+            recognizer.classify(np.zeros((64, 64), dtype=np.uint8))
+
+
+class EmotionHttpBoundaryTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), EmotionRequestHandler)
+        cls.server_thread = Thread(target=cls.server.serve_forever, daemon=True)
+        cls.server_thread.start()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.server.shutdown()
+        cls.server.server_close()
+        cls.server_thread.join(timeout=2)
+
+    def request_json(self, body: str) -> tuple[int, dict]:
+        connection = HTTPConnection("127.0.0.1", self.server.server_port, timeout=5)
+        connection.request(
+            "POST",
+            "/emotion",
+            body=body.encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        response = connection.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+        connection.close()
+        return response.status, payload
+
+    def test_rejects_empty_non_object_and_oversized_requests(self) -> None:
+        status, error = self.request_json("")
+        self.assertEqual(status, 400)
+        self.assertIn("空", error["error"])
+
+        status, error = self.request_json("[]")
+        self.assertEqual(status, 400)
+        self.assertIn("JSON 对象", error["error"])
+
+        status, error = self.request_json("{}")
+        self.assertEqual(status, 400)
+        self.assertIn("image", error["error"])
+
+        connection = HTTPConnection("127.0.0.1", self.server.server_port, timeout=5)
+        connection.putrequest("POST", "/emotion")
+        connection.putheader("Content-Type", "application/json")
+        connection.putheader("Content-Length", str(2 * 1024 * 1024 + 1))
+        connection.endheaders()
+        response = connection.getresponse()
+        status = response.status
+        error = json.loads(response.read().decode("utf-8"))
+        connection.close()
+        self.assertEqual(status, 413)
+        self.assertIn("2 MiB", error["error"])
+
+
+if __name__ == "__main__":
+    unittest.main()

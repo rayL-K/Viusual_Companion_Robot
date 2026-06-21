@@ -1,8 +1,7 @@
 """Python 版本兼容性检查脚本。
 
-项目最终运行在 Firefly/RK3588 上，而当前 Firefly 系统自带 Python 3.8。
-Windows 本机可能安装了更新版本的 Python，所以本脚本用于在本地提前检查
-源码是否仍符合 Python 3.8 语法，避免代码在本机能跑、上板后导入失败。
+项目开发环境和 Firefly/RK3588 部署环境统一使用 Python 3.11。本脚本用于
+提前阻止误用更高版本语法，避免代码在开发机能跑、上板后导入失败。
 """
 
 from __future__ import annotations
@@ -15,7 +14,7 @@ from typing import Iterable, List, Sequence, Tuple
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_TARGET_VERSION = "3.8"
+DEFAULT_TARGET_VERSION = "3.11"
 DEFAULT_SCAN_PATHS = [
     PROJECT_ROOT / "main" / "app.py",
     PROJECT_ROOT / "main" / "scripts",
@@ -24,7 +23,7 @@ DEFAULT_SCAN_PATHS = [
 
 
 def parse_version(value: str) -> Tuple[int, int]:
-    """把 `3.8` 这类版本字符串转换为 `(3, 8)`。"""
+    """把 `3.11` 这类版本字符串转换为 `(3, 11)`。"""
 
     parts = value.strip().split(".")
     if len(parts) < 2:
@@ -55,7 +54,7 @@ def parse_with_target_grammar(source: str, path: Path, target_version: Tuple[int
     """用目标 Python 语法解析源码。
 
     新版 Python 支持 `feature_version` 参数，可以用新解释器模拟旧语法。
-    如果脚本正好运行在 Python 3.8 上，则退回普通解析，本身就是目标语法。
+    如果解释器不支持该参数，则退回普通解析。
     """
 
     try:
@@ -83,7 +82,7 @@ def parse_args() -> argparse.Namespace:
     """解析命令行参数。"""
 
     parser = argparse.ArgumentParser(description="检查源码是否兼容指定 Python 语法版本。")
-    parser.add_argument("--target", default=DEFAULT_TARGET_VERSION, help="目标 Python 版本，默认 3.8")
+    parser.add_argument("--target", default=DEFAULT_TARGET_VERSION, help="目标 Python 版本，默认 3.11")
     parser.add_argument("paths", nargs="*", type=Path, help="可选的检查路径")
     return parser.parse_args()
 
