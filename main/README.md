@@ -2,7 +2,7 @@
 
 这个目录是 Firefly/RK3588 端应用的主体代码。
 
-当前状态：先完成清晰的项目结构、模块边界和 Live2D 资源测试。真实摄像头、语音识别、对话模型、语音合成和图形渲染会按模块逐步接入。
+当前状态：Live2D、真实摄像头/麦克风、FER+、LLM 控制服务和 TTS 适配器均已接入；ELF2 板端模型、真人交互阈值和外部服务凭据仍需分别验收。
 
 ## 设计参考
 
@@ -30,10 +30,10 @@ LLM 输出到 Live2D 的结构化控制协议见：
 docs/live2d_control_protocol.md
 ```
 
-Live2D 展示台声音默认优先连接本地 TTS 服务：
+Live2D 展示台、控制/TTS 服务和 FER+ 服务使用统一启动菜单：
 
 ```text
-../tools/launchers/start_live2d_tts.bat
+../tools/launchers/live2d_stage.bat
 ```
 
 当前 Strawberry_Rabbit 模型的原始使用说明、热键和水印参数整理见：
@@ -51,16 +51,16 @@ main/
   docs/                          架构与任务文档
   scripts/                       本地测试与资源检查脚本
   src/visual_companion_robot/    可复用业务模块
-  tests/                         后续自动化测试
+  tests/                         自动化回归测试
 ```
 
 ## 运行方向
 
 Windows 笔记本作为主要编辑环境，Firefly 作为运行和硬件调试环境。
 
-Windows 本地终端默认使用 PowerShell 7.1 或更新版本，也就是 `pwsh`。根目录批处理脚本会检查并调用 `pwsh.exe`，避免退回 Windows PowerShell 5。
+Windows 本地可使用 PowerShell 7，也可只使用 Windows 10 自带的 Windows PowerShell 5.1。统一从 `tools/launchers/*.bat` 启动，入口会处理 UTF-8 脚本兼容。
 
-Python 版本以 Firefly 当前 Python 3.8.x 为目标。Windows 本地通过根目录的 Conda 环境 `visual-companion-robot` 运行测试，避免使用 `base` 环境。
+Windows 与 Firefly 统一以 Python 3.11 为目标。Windows 本地通过 Conda 环境 `visual-companion-robot` 运行测试，避免使用 `base` 环境。
 
 Firefly 远程项目路径：
 
@@ -97,22 +97,10 @@ tools\launchers\test_live2d.bat
 tools\launchers\test_mouth_visual.bat
 ```
 
-运行真实 Live2D 展示台静态检查：
+打开、检查或启动真实 Live2D 展示台：
 
 ```bat
-tools\launchers\test_live2d_stage.bat
-```
-
-生成一次 DeepSeek 结构化控制文件：
-
-```bat
-tools\launchers\generate_llm_control.bat
-```
-
-打开真实 Live2D 展示台：
-
-```bat
-tools\launchers\open_live2d_stage.bat
+tools\launchers\live2d_stage.bat
 ```
 
 展示台位于 `live2d_stage/`，通过 Vite 加载本地 Strawberry_Rabbit 模型。浏览器端只请求本地控制服务，由服务侧调用 LLM 和 VoxCPM，不接触 API key 或模型服务细节。

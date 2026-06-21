@@ -22,7 +22,7 @@ flowchart TB
         subgraph Vision["视觉分析"]
             SA["SceneAnalyzer (双后端)"]
             SA_C["Cloud: Qwen3-VL API"]
-            SA_L["Local: YOLO NPU(5ms)<br/>+ Qwen0.5B 描述"]
+            SA_L["Local: YOLO NPU<br/>+ Qwen0.5B 描述"]
             SA --- SA_C
             SA --- SA_L
         end
@@ -30,7 +30,7 @@ flowchart TB
         subgraph LLM["对话决策"]
             RT["RobotRuntime + DialogueContext"]
             LLM_C["Cloud: DeepSeek API"]
-            LLM_L["Local: Qwen2.5-1.5B<br/>(RKLLM, 8t/s)"]
+            LLM_L["Local: Qwen2.5-1.5B<br/>(GGUF / CPU)"]
             RT --- LLM_C
             RT --- LLM_L
         end
@@ -38,7 +38,7 @@ flowchart TB
         subgraph TTS["语音合成"]
             TTS_B["TTS (双后端)"]
             TTS_V["VoxCPM2 (2B)"]
-            TTS_S["sherpa-onnx TTS (~50MB)"]
+            TTS_S["sherpa-onnx VITS TTS"]
             TTS_B --- TTS_V
             TTS_B --- TTS_S
         end
@@ -65,14 +65,14 @@ flowchart TB
 
 | 模块 | 状态 | 说明 |
 |------|:----:|------|
-| **视觉感知** | ✅ | 双后端：云端 Qwen3-VL-8B API / 本地 YOLOv26N NPU (5ms) + Qwen0.5B 描述 |
-| **LLM 对话** | ✅ | 双后端：云端 DeepSeek-V3 API / 本地 Qwen2.5-1.5B (RKLLM, 8t/s) |
+| **视觉感知** | 🧪 | 云端 Qwen3-VL 与本地 YOLO/RKNN 双后端已实现；云端需密钥，NPU 路径待 ELF2 实机验证 |
+| **LLM 对话** | 🧪 | DeepSeek 与本地 GGUF 双后端及统一 `LlmContext` 已实现；在线与板端模型需分别验收 |
 | **Live2D 展示** | ✅ | Strawberry_Rabbit 模型，表情/动作/口型/鼠标跟随/待机/拖拽缩放 |
 | **动作映射** | ✅ | 80+ 关键词 + 缓存，精准映射到 27 个 Live2D 动作 |
-| **情绪识别** | ✅ | FER+ ONNX (Microsoft Model Zoo)，后端 HTTP 服务，<5ms/次 |
-| **语音合成 (TTS)** | ✅ | 双后端：VoxCPM2 (2B) / sherpa-onnx TTS (~50MB) |
+| **情绪识别** | 🧪 | FER+ ONNX、HTTP/CORS、真实摄像头预览与无脸回退已在 Win10 验证；真人表情和板端性能待验收 |
+| **语音合成 (TTS)** | 🧪 | sherpa-onnx Aishell3 已在 Win10 完成真实中文 WAV 合成；VoxCPM2 与板端音质/延迟待验收 |
 | **语音识别 (ASR)** | ⚙️ | sherpa-onnx 后端已实现，待接入麦克风 |
-| **语音打断 (VAD)** | ✅ | WebRTC VAD (webrtcvad)，去掉 PyTorch 依赖 |
+| **语音打断 (VAD)** | 🧪 | WebRTC VAD 状态机与 Win10 麦克风电平已验证，语音打断阈值待真人调校 |
 | **记忆模块** | ✅ | SQLite 对话轮次存储，DialogueContext 维护视觉+对话上下文 |
 | **消息总线** | ✅ | RobotEvent + 事件类型常量，解耦模块通信 |
 | **ELF2 部署** | ⚙️ | 配置就绪，待板端安装依赖 |
@@ -116,7 +116,7 @@ main/
 │       └── mouth_sync.py           #   口型同步
 ├── live2d_stage/                   # Vite Live2D 网页控制台
 │   └── src/
-│       ├── stage.js                #   主舞台 + 推理后端面板
+│       ├── stage.js                #   主舞台 + 真实运行后端状态面板
 │       ├── emotion-onnx-client.js  #   情绪分类（调用后端 FER+）
 │       └── perception-client.js    #   MediaPipe 人脸追踪
 └── tools/
@@ -130,26 +130,21 @@ main/
 ### 开发环境 (Windows 10)
 
 ```powershell
-# 1. 环境
-conda activate companion
+# 1. 创建/更新环境（PowerShell 7 非必需）
+tools\launchers\setup_conda.bat
 
-# 2. 密钥
-set SILICONFLOW_KEY=sk-your-key-here
+# 2. 自动化回归
+tools\launchers\test_live2d.bat
 
-# 3. 配置后端（开发机用 cloud）
-#    main/config/app.yaml 中 backend 全设为 cloud
+# 3. 启动 Live2D 菜单
+tools\launchers\live2d_stage.bat
+```
 
-# 4. 测试闭环
-python -c "
-import sys; sys.path.insert(0,'main/src')
-from visual_companion_robot.runtime.robot import RobotRuntime, RobotConfig
-from visual_companion_robot.integrations.llm_client import create_llm_client
-llm = create_llm_client(backend='cloud', api_key='sk-xxx')
-rt = RobotRuntime(RobotConfig(debug=True), llm_client=llm)
-resp = rt.run_once('你好！')
-print(resp.display_text)
-print(resp.emotion, resp.actions)
-"
+外部服务密钥只放在当前终端环境变量中，不写入代码或配置：
+
+```powershell
+$env:DEEPSEEK_API_KEY = "..."
+$env:SILICONFLOW_KEY = "..."
 ```
 
 ### 部署环境 (ELF2 RK3588)
@@ -186,7 +181,7 @@ python main/app.py
 
 ## 后续路线
 
-1. 接入麦克风 → VAD → ASR 语音输入闭环
-2. TTS 播放集成 → 口型同步
-3. Live2D 前端接收 RobotResponse 动作/情绪
-4. 人脸身份注册与识别
+1. 将 sherpa-onnx ASR 与 WebRTC VAD 接入当前浏览器/本地麦克风输入闭环
+2. 在真人交互中调校人脸情绪、语音打断与动作映射阈值
+3. 在 ELF2/RK3588 上验收 YOLO/RKNN、轻量 TTS 与本地 LLM 的延迟和内存占用
+4. 补齐 VoxCPM2 模型与授权音色资源后，验收音质、缓存和断网降级

@@ -1,6 +1,6 @@
 # Visual Companion Robot — 交接手册
 
-文档版本：2026-05-24
+文档版本：2026-06-21
 交接目标：让新线程或后续开发者在不读取旧聊天记录的情况下，快速接上当前比赛项目。
 
 ## 1. 当前仓库状态
@@ -8,26 +8,20 @@
 | 项目 | 状态 |
 | --- | --- |
 | 当前本地路径 | `E:\CODE\Visual_Companion_Robot` |
-| 当前分支 | `dev/rebuild-firefly-board-structure` |
-| 最近已知基线提交 | `842e294 docs: 视觉感知模块移交文档 (HANDBOOK.md)` |
+| 当前分支 | `dev/local-vision-emotion-context` |
+| 最近已知基线提交 | `2938eaa docs: 闭环架构图改用 Mermaid 渲染` |
 | 已合并 PR | PR #1 `完善 Live2D 控制台与多模态交互`，PR #2 `聊天气泡交互优化：拖拽/缩放/字体 + 角色右键拖拽 + 文件拖拽回画布` |
 | 当前主开发区域 | `main/live2d_stage/` |
 | 目标运行环境 | Windows 本机开发，Firefly/RK3588 板端迁移 |
 
-当前已确认的资源整理项：
-
-```text
-D main/live2d_stage/public/mediapipe/vision_bundle.mjs
-```
-
-`vision_bundle.mjs` 是历史遗留的重复静态包。当前实际运行代码使用的是：
+当前实际运行的 MediaPipe 资源是：
 
 ```text
 main/live2d_stage/src/mediapipe/vision_bundle.js
 main/live2d_stage/public/mediapipe/vision_bundle.js
 ```
 
-仓库内当前没有代码引用 `vision_bundle.mjs`，因此可以把它作为重复资源清理提交。
+历史重复文件 `vision_bundle.mjs` 已不在当前运行链路中。
 
 ## 2. 项目一句话
 
@@ -35,7 +29,7 @@ main/live2d_stage/public/mediapipe/vision_bundle.js
 
 ## 3. 快速启动
 
-Windows 本地终端默认使用 PowerShell 7+ 的 `pwsh`。
+PowerShell 7 可选；统一 `.bat` 入口也兼容 Windows 10 自带的 PowerShell 5.1。
 
 统一启动入口：
 
@@ -80,7 +74,7 @@ conda run -n visual-companion-robot python -m pytest main\tests -q
 | --- | --- | --- |
 | Live2D 舞台 | `main/live2d_stage/src/stage.js` | 主渲染循环、UI 状态、动作盘、摄像头/麦克风入口、LLM/TTS 请求。 |
 | 浏览器视觉感知 | `main/live2d_stage/src/perception-client.js` | MediaPipe FaceLandmarker，输出头部角度、眨眼、嘴部、微笑和情绪，并向 LLM 提供视觉上下文。 |
-| ONNX 情绪适配 | `main/live2d_stage/src/emotion-onnx-client.js` | 浏览器端 ONNX 情绪分类入口；模型缺失或加载失败时自动沿用 blendshape 规则。 |
+| FER+ 情绪适配 | `main/live2d_stage/src/emotion-onnx-client.js` | 把浏览器人脸裁剪发送到本机 8766 服务；服务不可用时沿用 blendshape 规则。 |
 | MediaPipe 本地资源 | `main/live2d_stage/src/mediapipe/` 与 `main/live2d_stage/public/mediapipe/` | 离线加载 Tasks Vision JS、WASM 和 face_landmarker 模型。 |
 | 控制服务 | `main/scripts/live2d_control_server.py` | 提供 `/chat`、`/tts`、`/voices` 等接口。 |
 | VoxCPM2 本地推理 | `main/src/visual_companion_robot/voice/voxcpm_local.py` | 项目内本地 TTS 推理入口，Firefly 迁移时优先沿用。 |
@@ -114,9 +108,9 @@ conda run -n visual-companion-robot python -m pytest main\tests -q
 | `mouthSmile` | `mouthSmileLeft/Right` blendshape | `ParamMouthSmile` |
 | `mouthOpen` | `jawOpen` blendshape | `ParamMouthOpenY` |
 | `eyeOpen` | `1 - eyeBlink` | `ParamEyeLOpen`、`ParamEyeROpen` |
-| `emotion` | ONNX 或规则打分结果 | 状态栏、Live2D 状态与 LLM 上下文 |
-| `emotionSource` | `onnx` 或 `blendshape_rule` | 调试当前情绪来源 |
-| `fullScores` | 7 类情绪分数 | LLM 上下文与后续表情联动 |
+| `emotion` | FER+ 或规则打分结果 | 状态栏、Live2D 状态与 LLM 上下文 |
+| `emotionSource` | `ferplus` 或 `blendshape_rule` | 调试当前情绪来源 |
+| `fullScores` | 归一化情绪分数 | LLM 上下文与后续表情联动 |
 
 ### 6.3 与鼠标/音频的关系
 
@@ -160,17 +154,17 @@ main/live2d_stage/public/mediapipe/model/face_landmarker.task
 
 如果升级 MediaPipe，需要同时确认 `src/mediapipe/` 与 `public/mediapipe/` 两侧资源是否匹配。
 
-### 7.3 情绪识别已经预留 ONNX 入口
+### 7.3 情绪识别使用本机 FER+ 服务
 
-当前主路径是：优先尝试 `main/live2d_stage/public/mediapipe/model/emotion.onnx`，如果模型不存在或加载失败，则继续使用 52 组 blendshapes 规则加权。当前模型来自 Hugging Face `dwest1507/emotion-detection-model`，为 FER-2013 七分类 EfficientNet-B0 ONNX，项目内已合并为单文件模型。
+当前主路径是：浏览器用 MediaPipe 定位人脸，将 64×64 裁剪发送到 `http://127.0.0.1:8766/emotion`；Python 服务使用 FER+ ONNX 推理。如果服务未启动、模型缺失或请求失败，前端继续使用 blendshape 规则，不中断 Live2D。
 
 当前前端预处理约定：
 
 ```text
-输入：1 x 3 x 224 x 224
-颜色：RGB
-归一化：ImageNet mean/std
-输出：angry, disgust, fear, happy, sad, surprise, neutral
+输入：1 x 1 x 64 x 64
+颜色：灰度
+归一化：0..1
+输出：neutral, happy, surprise, sad, angry（由 FER+ 8 类合并）
 ```
 
 ## 8. 近期优先级
@@ -178,7 +172,7 @@ main/live2d_stage/public/mediapipe/model/face_landmarker.task
 | 优先级 | 任务 | 说明 |
 | --- | --- | --- |
 | P0 | 真实浏览器回归 | 启动 Live2D 舞台，验证摄像头开启、面部追踪、鼠标回退、TTS 与聊天链路。 |
-| P0 | 真实浏览器情绪回归 | 当前 ONNX 模型已落盘，下一步要用真实摄像头观察不同表情下的识别稳定性。 |
+| P0 | 真实浏览器情绪回归 | 下载 FER+ 模型、启动 8766 服务，用真实摄像头观察不同表情下的识别稳定性。 |
 | P1 | 情绪联动 Live2D 表情 | 将 `emotion/fullScores` 映射到 Live2D 表情或动作盘效果。 |
 | P1 | 物体检测 | 浏览器端接入轻量 YOLO/RT-DETR ONNX，让角色能看见桌面物品。 |
 | P1 | 视觉上下文提示词优化 | 当前 `/chat` 已收到视觉上下文，后续需要让 LLM 更稳定地利用这些字段。 |
@@ -186,9 +180,9 @@ main/live2d_stage/public/mediapipe/model/face_landmarker.task
 
 ## 9. 建议的下一步开发顺序
 
-1. 跑 `npm run check`、Vite build 和 Python 测试，确认 ONNX 适配与视觉上下文链路没有破坏现有功能。
+1. 跑 `npm run check`、Vite build 和 Python 测试，确认 FER+ 适配与视觉上下文链路没有破坏现有功能。
 2. 启动 Live2D 舞台，打开摄像头，人工验证头部、眼神、表情和麦克风输入。
-3. 用真实摄像头测试 `emotionSource=onnx` 时的情绪稳定性，必要时增加置信度阈值或时间平滑。
+3. 用真实摄像头测试 `emotionSource=ferplus` 时的情绪稳定性，必要时增加置信度阈值或时间平滑。
 4. 将视觉上下文写进 LLM 提示词策略，让角色能主动提到用户表情、是否看向屏幕、是否正在说话。
 5. 再接入物体检测，先做少量可解释物体，例如人、手机、杯子、书。
 
@@ -216,7 +210,8 @@ main/live2d_stage/src/perception-client.js
 main/live2d_stage/src/emotion-onnx-client.js
 main/live2d_stage/src/mediapipe/vision_bundle.js
 main/live2d_stage/public/mediapipe/model/face_landmarker.task
-main/live2d_stage/public/mediapipe/model/emotion.onnx
+main/src/visual_companion_robot/perception/emotion.py
+main/src/visual_companion_robot/perception/emotion_server.py
 main/live2d_stage/public/mediapipe/wasm/
 main/scripts/live2d_control_server.py
 main/src/visual_companion_robot/voice/voxcpm_local.py

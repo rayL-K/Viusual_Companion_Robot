@@ -14,7 +14,7 @@
 - `speech`：语音输出层，负责文本转语音和音频播放。
 - `ui.live2d`：虚拟形象层，负责 Live2D 模型状态、口型同步、眨眼、呼吸、表情映射和动作播放。
 - `runtime`：运行时基础设施，负责进程生命周期、消息总线、日志和配置加载。
-- `integrations`：模型与外部能力适配层，后续集中放置 RKNN、RKLLM、ONNX Runtime 或其他本地推理封装。
+- `integrations`：模型与外部能力适配层，集中放置 RKNN、GGUF/llama.cpp、ONNX Runtime 和外部 API 封装。
 
 ## Live2D 方向
 

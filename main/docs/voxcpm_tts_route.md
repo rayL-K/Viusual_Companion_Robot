@@ -9,20 +9,21 @@
 - `app.py` 是 Gradio WebUI，不是主项目需要直接内嵌的轻量接口。
 - VoxCPM2 要求 Python 3.10+、PyTorch 2.5+、CUDA 12+，不适合塞进当前 Firefly 主环境。
 
-因此项目采用“主工程只调用 TTS 服务”的路线：
+因此项目通过统一 TTS 接口隔离前端和模型实现：
 
 ```text
-Live2D/LLM 控制服务 -> 统一 TTS HTTP 接口 -> VoxCPM2 API 或本地推理服务
+Live2D -> 本地控制服务 `/tts` -> VoxCPM2 公网/项目内/Gradio 兼容后端
 ```
 
-## 两种运行模式
+## 三种运行模式
 
 当前 `main/config/tts_models.json` 只保留 VoxCPM 路线：
 
 - `voxcpm_hf_space_test`：公网 API 测试模式，调用 OpenBMB 的 Hugging Face Space。
-- `voxcpm_local`：本地推理模式，默认连接 `http://127.0.0.1:7860`，也可以通过 `VOXCPM_LOCAL_URL` 覆盖。
+- `voxcpm_local`：项目内 Python 模块直接加载 VoxCPM2，模型路径由配置或 `VOXCPM_MODEL_PATH` 指定。
+- `voxcpm_local_gradio`：兼容外部 Gradio 服务，默认连接 `http://127.0.0.1:7860`。
 
-两种模式都走 Gradio 队列接口：
+公网 API 和 Gradio 兼容模式走 Gradio 队列接口：
 
 ```text
 POST /gradio_api/upload -> 参考音频服务端临时路径
@@ -31,7 +32,7 @@ GET  /gradio_api/call/generate/{event_id} -> 音频 URL
 GET  音频 URL -> 音频二进制
 ```
 
-公网 API 用来快速验证链路；本地推理模式用于后续正式比赛展示，避免依赖公网 Space 的排队、限流、休眠或接口变更。
+项目内模式不经过 HTTP 或 Gradio，直接使用进程内模型缓存。公网 API 仅用于临时验证；正式展示必须验证项目内模式或受控的局域网服务。
 
 ## 参考音频
 
@@ -56,7 +57,7 @@ main/assets/tts/voxcpm_samples/metadata.json
 页面请求 `/tts` 时会携带：
 
 ```text
-voice       = voxcpm_hf_space_test 或 voxcpm_local
+voice       = voxcpm_hf_space_test、voxcpm_local 或 voxcpm_local_gradio
 reference   = 参考音频 ID
 promptText  = 参考音频对应文本
 ```
@@ -71,15 +72,21 @@ promptText  = 参考音频对应文本
 conda run -n visual-companion-robot python main/scripts/test_voxcpm_hf_space.py --text "你好，我是草莓兔兔，现在正在测试 VoxCPM 语音。"
 ```
 
-测试本地推理模式时，先启动本地 VoxCPM Gradio 服务，再把 `voice` 切到 `voxcpm_local`。如果本地服务端口不是 `7860`，设置：
+测试项目内推理模式时，准备模型目录并设置：
 
 ```powershell
-$env:VOXCPM_LOCAL_URL = "http://127.0.0.1:<port>"
+$env:VOXCPM_MODEL_PATH = "E:\models\VoxCPM2"
 ```
+
+只有测试 `voxcpm_local_gradio` 时才需要先启动 Gradio 服务，并在
+`main/config/tts_models.json` 中调整 `endpoint`。
+
+sherpa-onnx VITS 是 `TTSInterface` 的另一种轻量实现，目前不在网页的 VoxCPM
+音色列表中；可通过 `create_tts_engine("sherpa")` 单独使用。
 
 ## 后续接入计划
 
-1. 保留 `voxcpm_hf_space_test`，只做公网 API 临时验证。
-2. 完善 `voxcpm_local`，对接本地 VoxCPM2 推理服务。
-3. VoxCPM2 服务可以运行在有 CUDA 的台式机、云 GPU 或其他局域网机器上。
-4. Firefly 只负责展示、控制、摄像头、麦克风和板端集成，不直接承受 20 亿参数 TTS 推理。
+1. `voxcpm_hf_space_test` 只用于公网 API 临时验证。
+2. `voxcpm_local` 作为项目内正式推理入口，缺少模型时必须明确失败并回退选择。
+3. `voxcpm_local_gradio` 只保留为受控局域网服务兼容模式。
+4. 是否在 Firefly 上运行 VoxCPM2，必须以实测内存、延迟和温度决定；无法满足时改用 sherpa VITS 或局域网推理。
