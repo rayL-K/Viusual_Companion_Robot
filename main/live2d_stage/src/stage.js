@@ -1,4 +1,10 @@
 import { perceptionClient } from "./perception-client.js";
+import {
+  ASR_SAMPLE_RATE,
+  PcmSpeechSegmenter,
+  offlineAsrClient,
+  resampleAudio,
+} from "./offline-asr-client.js";
 
 const MODEL_URL = "/live2d/Strawberry_Rabbit/Strawberry_Rabbit.model3.json";
 const MANIFEST_URL = "/live2d/Strawberry_Rabbit/manifest.json";
@@ -41,8 +47,6 @@ const MODEL_TRANSFORM_LIMITS = {
 };
 const MODEL_WHEEL_ZOOM_STEP = 0.0015;
 const MODEL_CLICK_MOVE_TOLERANCE_PX = 6;
-const SPEECH_RECOGNITION_LANG = "zh-CN";
-const SPEECH_RECOGNITION_RESTART_DELAY_MS = 500;
 const CAMERA_DEFAULT_STORAGE_KEY = "visual-companion.default-camera-id";
 const CAMERA_WINDOW_POSITION_STORAGE_KEY = "visual-companion.camera-window-position";
 const CAMERA_WINDOW_WIDTH_STORAGE_KEY = "visual-companion.camera-window-width";
@@ -188,6 +192,7 @@ const modelState = {
   selectedCameraId: "",
   defaultCameraId: "",
   cameraStream: null,
+  perceptionTimer: 0,
   cameraDrag: null,
   cameraResize: null,
   audioDevices: [],
@@ -200,11 +205,14 @@ const modelState = {
   audioLevelData: null,
   audioLevelFrame: 0,
   audioDrag: null,
-  audioRecognition: null,
-  audioRecognitionActive: false,
-  audioRecognitionRestartTimer: 0,
-  audioRecognitionPausedForSpeech: false,
-  audioRecognitionDraft: "",
+  audioWorklet: null,
+  audioSilentGain: null,
+  audioSegmenter: null,
+  audioTranscriptionPaused: false,
+  audioTranscriptionQueue: [],
+  audioTranscriptionRunning: false,
+  audioCaptureGeneration: 0,
+  audioSpeechActive: false,
   chatRequestInFlight: false,
 };
 
@@ -239,7 +247,9 @@ const logPanel = document.getElementById("logPanel");
 const historyPanel = document.getElementById("historyPanel");
 const actionListEl = document.getElementById("actionList");
 const voiceListEl = document.getElementById("voiceList");
+const voicePreviewButton = document.getElementById("voicePreviewButton");
 const referenceSelectEl = document.getElementById("referenceSelect");
+const referenceConfigFieldsEl = document.getElementById("referenceConfigFields");
 const referenceAudioPreviewEl = document.getElementById("referenceAudioPreview");
 const referenceTextInputEl = document.getElementById("referenceTextInput");
 const referenceHintEl = document.getElementById("referenceHint");
@@ -342,8 +352,8 @@ const RUNTIME_BACKENDS = [
   },
   {
     label: "ASR 语音识别",
-    value: "浏览器 Web Speech",
-    detail: "启动麦克风监听时使用浏览器提供的识别能力。",
+    value: "本机 SenseVoice + WebRTC VAD",
+    detail: "浏览器仅采集 PCM，识别由本地控制服务离线执行。",
   },
   {
     label: "视觉感知",
@@ -1542,7 +1552,7 @@ async function speakPlan(plan) {
   if (!modelState.generatingSpeech) {
     startThinkingAnimation();
   }
-  setSpeechStatus(requestId, `正在生成 ${currentBackendLabel()} 音频`, "VoxCPM 生成完成后会自动播放。");
+  setSpeechStatus(requestId, `正在生成 ${currentBackendLabel()} 音频`, "生成完成后会自动播放。");
 
   try {
     const audioBlob = await requestExternalTts(plan, rate);
@@ -1627,7 +1637,7 @@ function stopSpeechPlayback() {
     URL.revokeObjectURL(modelState.audioUrl);
     modelState.audioUrl = "";
   }
-  resumeSpeechRecognitionAfterPlayback();
+  resumeOfflineAsrAfterPlayback();
   stopThinkingAnimation({ restoreMotion: false, clearRoulette: false });
   stopMouthSync();
 }
@@ -1667,7 +1677,8 @@ async function requestExternalTts(plan, rate) {
 async function playExternalAudio(audioBlob, plan, rate, requestId) {
   const audioUrl = URL.createObjectURL(audioBlob);
   const audio = new Audio(audioUrl);
-  const playbackRate = applyAudioPlaybackRate(audio, rate);
+  applyAudioPlaybackRate(audio, 1.0);
+  const speechRate = clamp(rate || DEFAULT_SPEECH_RATE, 0.85, 1.35);
   modelState.audio = audio;
   modelState.audioUrl = audioUrl;
   updateVoiceStatus();
@@ -1676,12 +1687,12 @@ async function playExternalAudio(audioBlob, plan, rate, requestId) {
     if (requestId !== modelState.speechRequestId) {
       return;
     }
-    pauseSpeechRecognitionForPlayback();
+    pauseOfflineAsrForPlayback();
     applyPlanVisualsForSpeech(plan).catch((error) => {
       addControlLog("语音同步动作失败", { error: error.message });
     });
-    startMouthSync(plan, playbackRate);
-    startReplyStream(plan.text, playbackRate);
+    startMouthSync(plan, speechRate);
+    startReplyStream(plan.text, speechRate);
     const backend = currentVoiceConfig()?.backend || "unknown";
     if (backend === "voxcpm_hf_space") {
       setStatus("正在播放 VoxCPM 公网 API 音频", "当前音频由公网 Space 生成；如果排队或限流，后续要迁移到本地推理服务。");
@@ -1702,7 +1713,7 @@ async function playExternalAudio(audioBlob, plan, rate, requestId) {
     if (requestId === modelState.speechRequestId) {
       stopMouthSync();
       finishReplyStream();
-      resumeSpeechRecognitionAfterPlayback();
+      resumeOfflineAsrAfterPlayback();
       setSpeechStatus(requestId, `${currentBackendLabel()} 音频播放完成`, "可以继续对话，或等待她做待机动作。");
       scheduleIdleAction();
     }
@@ -1712,9 +1723,9 @@ async function playExternalAudio(audioBlob, plan, rate, requestId) {
       return;
     }
     stopMouthSync();
-    resumeSpeechRecognitionAfterPlayback();
+    resumeOfflineAsrAfterPlayback();
     setReplyText(plan.text);
-    setStatus(`${currentBackendLabel()} 音频播放失败`, "已收到音频数据，但浏览器解码或播放失败；请先点参考音频确认浏览器音频可用。");
+    setStatus(`${currentBackendLabel()} 音频播放失败`, "已收到音频数据，但浏览器解码或播放失败；请点击“试听当前模型”重试。");
   };
 
   try {
@@ -1726,7 +1737,7 @@ async function playExternalAudio(audioBlob, plan, rate, requestId) {
     URL.revokeObjectURL(audioUrl);
     modelState.audio = null;
     modelState.audioUrl = "";
-    resumeSpeechRecognitionAfterPlayback();
+    resumeOfflineAsrAfterPlayback();
     console.warn("TTS 音频播放失败。", error);
     return false;
   }
@@ -1773,6 +1784,8 @@ async function loadVoiceModels() {
     referenceTextInputEl.value = "";
     referenceAudioPreviewEl.removeAttribute("src");
     referenceHintEl.textContent = "语音服务未连接，无法读取参考音频。";
+    referenceConfigFieldsEl.hidden = true;
+    voicePreviewButton.disabled = true;
     voiceEl.textContent = "语音服务未连接";
     addControlLog("读取语音模型失败", { error: error.message });
   }
@@ -2049,10 +2062,10 @@ async function startCameraPreview() {
       };
       const text = labels[status] || status;
       if (status === "tracking") {
-        setCameraStatus(detail, "");
+        setCameraStatus("视觉追踪中。", detail || "已检测到人脸");
         // 定时更新视觉感知面板
-        if (!modelState._perceptionTimer) {
-          modelState._perceptionTimer = setInterval(() => {
+        if (!modelState.perceptionTimer) {
+          modelState.perceptionTimer = window.setInterval(() => {
             const ctx = perceptionClient.getContext();
             if (ctx) updatePerceptionPanel(ctx);
           }, 2000);
@@ -2097,6 +2110,10 @@ async function startCameraPreview() {
 }
 
 function stopCameraPreview(options = {}) {
+  if (modelState.perceptionTimer) {
+    window.clearInterval(modelState.perceptionTimer);
+    modelState.perceptionTimer = 0;
+  }
   perceptionClient.stop();
   if (modelState.cameraStream) {
     modelState.cameraStream.getTracks().forEach((track) => track.stop());
@@ -2284,22 +2301,21 @@ function audioContextCtor() {
   return window.AudioContext || window.webkitAudioContext || null;
 }
 
-function speechRecognitionAvailable() {
-  return Boolean(window.SpeechRecognition || window.webkitSpeechRecognition);
-}
-
-function createSpeechRecognition() {
-  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!Recognition) {
-    return null;
+async function previewSelectedVoice() {
+  if (!currentVoiceConfig()) {
+    setStatus("无法试听语音", "请先连接本地控制服务并选择语音模型。");
+    return;
   }
-
-  const recognition = new Recognition();
-  recognition.lang = SPEECH_RECOGNITION_LANG;
-  recognition.continuous = true;
-  recognition.interimResults = true;
-  recognition.maxAlternatives = 1;
-  return recognition;
+  const previewPlan = {
+    ...demoPlan,
+    text: "你好，我是草莓兔兔，这是当前本地语音模型的试听。",
+    speech: { ...demoPlan.speech, rate: currentSpeechRate(demoPlan) },
+  };
+  addControlLog("试听当前语音模型", {
+    voice: modelState.selectedVoice,
+    backend: currentVoiceConfig()?.backend,
+  });
+  await speakPlan(previewPlan);
 }
 
 function audioDeviceLabel(device, index) {
@@ -2333,10 +2349,6 @@ function renderAudioControls() {
     setAudioStatus("听觉模块不可用。", "请使用支持 getUserMedia 与 Web Audio 的浏览器。");
     setAudioTranscript("当前浏览器无法读取麦克风。");
     return;
-  }
-
-  if (!speechRecognitionAvailable()) {
-    setAudioTranscript("当前浏览器不支持语音转文字；音量监听可用，但不能自动对话。");
   }
 
   if (!modelState.audioDevices.length) {
@@ -2436,12 +2448,37 @@ async function startAudioMonitor() {
     const stream = await navigator.mediaDevices.getUserMedia(buildAudioConstraints());
     const AudioContextCtor = audioContextCtor();
     modelState.audioStream = stream;
-    modelState.audioContext = new AudioContextCtor();
+    try {
+      modelState.audioContext = new AudioContextCtor({ sampleRate: ASR_SAMPLE_RATE });
+    } catch {
+      modelState.audioContext = new AudioContextCtor();
+    }
+    if (modelState.audioContext.state === "suspended") {
+      await modelState.audioContext.resume();
+    }
+    if (!modelState.audioContext.audioWorklet || !window.AudioWorkletNode) {
+      throw new Error("当前浏览器不支持 AudioWorklet，无法运行离线语音识别。");
+    }
+    await modelState.audioContext.audioWorklet.addModule(
+      new URL("./pcm-capture-processor.js", import.meta.url),
+    );
     modelState.audioSource = modelState.audioContext.createMediaStreamSource(stream);
     modelState.audioAnalyser = modelState.audioContext.createAnalyser();
     modelState.audioAnalyser.fftSize = AUDIO_ANALYSER_FFT_SIZE;
     modelState.audioLevelData = new Uint8Array(modelState.audioAnalyser.fftSize);
     modelState.audioSource.connect(modelState.audioAnalyser);
+    modelState.audioWorklet = new AudioWorkletNode(modelState.audioContext, "pcm-capture-processor");
+    modelState.audioSilentGain = modelState.audioContext.createGain();
+    modelState.audioSilentGain.gain.value = 0;
+    modelState.audioSegmenter = new PcmSpeechSegmenter({ sampleRate: modelState.audioContext.sampleRate });
+    modelState.audioTranscriptionPaused = false;
+    modelState.audioTranscriptionQueue = [];
+    modelState.audioCaptureGeneration += 1;
+    modelState.audioSpeechActive = false;
+    modelState.audioWorklet.port.onmessage = handlePcmCapture;
+    modelState.audioSource.connect(modelState.audioWorklet);
+    modelState.audioWorklet.connect(modelState.audioSilentGain);
+    modelState.audioSilentGain.connect(modelState.audioContext.destination);
     audioWindowEl.hidden = false;
     restoreAudioWindowPosition();
     updateAudioLevelLoop();
@@ -2453,7 +2490,7 @@ async function startAudioMonitor() {
     }
     await refreshAudioDevices({ requestPermission: false });
     setAudioStatus("麦克风监听已打开。", selectedAudioLabel());
-    startSpeechRecognition();
+    setAudioTranscript("正在本机监听；检测到一句话结束后会离线识别并自动发送。");
     setStatus("麦克风监听已打开", "听觉模块会把最终识别到的语音自动发送给 Live2D 对话。");
     addControlLog("打开麦克风监听", {
       deviceId: modelState.selectedAudioId,
@@ -2489,7 +2526,12 @@ function updateAudioLevelLoop() {
 }
 
 function stopAudioMonitor(options = {}) {
-  stopSpeechRecognition({ quiet: options.quiet });
+  modelState.audioCaptureGeneration += 1;
+  modelState.audioTranscriptionPaused = true;
+  modelState.audioTranscriptionQueue = [];
+  modelState.audioSegmenter?.reset();
+  modelState.audioSegmenter = null;
+  modelState.audioSpeechActive = false;
   if (modelState.audioLevelFrame) {
     window.cancelAnimationFrame(modelState.audioLevelFrame);
     modelState.audioLevelFrame = 0;
@@ -2498,8 +2540,17 @@ function stopAudioMonitor(options = {}) {
     modelState.audioSource.disconnect();
     modelState.audioSource = null;
   }
+  if (modelState.audioWorklet) {
+    modelState.audioWorklet.port.onmessage = null;
+    modelState.audioWorklet.disconnect();
+    modelState.audioWorklet = null;
+  }
+  if (modelState.audioSilentGain) {
+    modelState.audioSilentGain.disconnect();
+    modelState.audioSilentGain = null;
+  }
   if (modelState.audioContext) {
-    modelState.audioContext.close();
+    void modelState.audioContext.close();
     modelState.audioContext = null;
   }
   modelState.audioAnalyser = null;
@@ -2521,147 +2572,89 @@ function stopAudioMonitor(options = {}) {
   renderAudioControls();
 }
 
-function startSpeechRecognition() {
-  if (!speechRecognitionAvailable()) {
-    setAudioTranscript("当前浏览器不支持语音转文字；请使用 Chrome/Edge 并允许麦克风权限。");
-    addControlLog("语音识别不可用", { userAgent: navigator.userAgent });
+function handlePcmCapture(event) {
+  if (modelState.audioTranscriptionPaused || !modelState.audioSegmenter) {
     return;
   }
 
-  clearSpeechRecognitionRestart();
-  stopSpeechRecognition({ quiet: true, keepActive: true });
-  const recognition = createSpeechRecognition();
-  if (!recognition) {
+  const segment = modelState.audioSegmenter.push(new Float32Array(event.data));
+  if (modelState.audioSegmenter.active && !modelState.audioSpeechActive) {
+    modelState.audioSpeechActive = true;
+    setAudioTranscript("检测到你正在说话，等待句尾……");
+  }
+  if (!segment) {
     return;
   }
 
-  modelState.audioRecognition = recognition;
-  modelState.audioRecognitionActive = true;
-  modelState.audioRecognitionPausedForSpeech = false;
-  modelState.audioRecognitionDraft = "";
+  modelState.audioSpeechActive = false;
+  const samples = resampleAudio(segment, modelState.audioContext?.sampleRate || ASR_SAMPLE_RATE);
+  if (modelState.audioTranscriptionQueue.length >= 2) {
+    addControlLog("语音片段已丢弃", { reason: "asr_queue_full", durationMs: samples.length / 16 });
+    return;
+  }
+  modelState.audioTranscriptionQueue.push({
+    samples,
+    generation: modelState.audioCaptureGeneration,
+  });
+  void processOfflineAsrQueue();
+}
 
-  recognition.onstart = () => {
-    setAudioTranscript("正在听你说话，识别完成后会自动发送。");
-    addControlLog("语音识别已启动", { lang: SPEECH_RECOGNITION_LANG });
-  };
-  recognition.onresult = handleSpeechRecognitionResult;
-  recognition.onerror = (event) => {
-    const message = event.error || "unknown";
-    setAudioTranscript(`语音识别异常：${message}`);
-    addControlLog("语音识别异常", { error: message });
-    if (["not-allowed", "service-not-allowed"].includes(message)) {
-      modelState.audioRecognitionActive = false;
-    }
-  };
-  recognition.onend = () => {
-    if (modelState.audioRecognition !== recognition) {
-      return;
-    }
-
-    modelState.audioRecognition = null;
-    if (modelState.audioRecognitionActive && modelState.audioStream && !modelState.audioRecognitionPausedForSpeech) {
-      scheduleSpeechRecognitionRestart();
-    }
-  };
-
+async function processOfflineAsrQueue() {
+  if (modelState.audioTranscriptionRunning) {
+    return;
+  }
+  modelState.audioTranscriptionRunning = true;
   try {
-    recognition.start();
-  } catch (error) {
-    setAudioTranscript(`语音识别启动失败：${error.message}`);
-    addControlLog("语音识别启动失败", { error: error.message });
-  }
-}
-
-function stopSpeechRecognition(options = {}) {
-  clearSpeechRecognitionRestart();
-  if (!options.keepActive) {
-    modelState.audioRecognitionActive = false;
-    modelState.audioRecognitionPausedForSpeech = false;
-  }
-  const recognition = modelState.audioRecognition;
-  modelState.audioRecognition = null;
-  if (!recognition) {
-    return;
-  }
-
-  recognition.onstart = null;
-  recognition.onresult = null;
-  recognition.onerror = null;
-  recognition.onend = null;
-  try {
-    recognition.stop();
-  } catch (error) {
-    addControlLog("语音识别停止失败", { error: error.message });
-  }
-}
-
-function clearSpeechRecognitionRestart() {
-  if (modelState.audioRecognitionRestartTimer) {
-    window.clearTimeout(modelState.audioRecognitionRestartTimer);
-    modelState.audioRecognitionRestartTimer = 0;
-  }
-}
-
-function scheduleSpeechRecognitionRestart() {
-  clearSpeechRecognitionRestart();
-  modelState.audioRecognitionRestartTimer = window.setTimeout(() => {
-    modelState.audioRecognitionRestartTimer = 0;
-    if (modelState.audioRecognitionActive && modelState.audioStream && !modelState.audioRecognition) {
-      startSpeechRecognition();
+    while (modelState.audioTranscriptionQueue.length && modelState.audioStream) {
+      const queued = modelState.audioTranscriptionQueue.shift();
+      const { samples, generation } = queued;
+      setAudioTranscript("正在用本机 SenseVoice 识别……首次运行会自动下载约 155 MB 模型。");
+      try {
+        const result = await offlineAsrClient.transcribe(samples);
+        if (generation !== modelState.audioCaptureGeneration || !modelState.audioStream) {
+          addControlLog("已丢弃过期语音识别结果", { generation });
+          continue;
+        }
+        const text = String(result.text || "").trim();
+        if (!text) {
+          setAudioTranscript(result.speech_detected ? "检测到了语音，但没有识别出文字。" : "未检测到有效语音，请靠近麦克风重试。");
+          addControlLog("离线语音未识别", result);
+          continue;
+        }
+        if (modelState.speaking || modelState.generatingSpeech) {
+          addControlLog("语音输入已忽略", { text, reason: "robot_speaking" });
+          continue;
+        }
+        setAudioTranscript(`已识别并发送：${text}`);
+        addControlLog("离线语音输入", { text, durationMs: result.duration_ms });
+        submitChatText(text, { source: "speech" });
+      } catch (error) {
+        setAudioTranscript(`离线语音识别失败：${error.message}`);
+        addControlLog("离线语音识别失败", { error: error.message });
+      }
     }
-  }, SPEECH_RECOGNITION_RESTART_DELAY_MS);
+  } finally {
+    modelState.audioTranscriptionRunning = false;
+  }
 }
 
-function pauseSpeechRecognitionForPlayback() {
-  if (!modelState.audioRecognitionActive || !modelState.audioStream) {
+function pauseOfflineAsrForPlayback() {
+  if (!modelState.audioStream) {
     return;
   }
-
-  modelState.audioRecognitionPausedForSpeech = true;
-  stopSpeechRecognition({ quiet: true, keepActive: true });
+  modelState.audioTranscriptionPaused = true;
+  modelState.audioSegmenter?.reset();
+  modelState.audioSpeechActive = false;
   setAudioTranscript("兔兔正在说话，暂时暂停语音识别，避免把外放声音误当成你的输入。");
 }
 
-function resumeSpeechRecognitionAfterPlayback() {
-  if (!modelState.audioRecognitionActive || !modelState.audioStream || !modelState.audioRecognitionPausedForSpeech) {
+function resumeOfflineAsrAfterPlayback() {
+  if (!modelState.audioStream || !modelState.audioTranscriptionPaused) {
     return;
   }
-
-  modelState.audioRecognitionPausedForSpeech = false;
-  scheduleSpeechRecognitionRestart();
-}
-
-function handleSpeechRecognitionResult(event) {
-  let interimText = "";
-  const finalTexts = [];
-  for (let index = event.resultIndex; index < event.results.length; index += 1) {
-    const result = event.results[index];
-    const transcript = String(result[0]?.transcript || "").trim();
-    if (!transcript) {
-      continue;
-    }
-    if (result.isFinal) {
-      finalTexts.push(transcript);
-    } else {
-      interimText += transcript;
-    }
-  }
-
-  if (interimText) {
-    modelState.audioRecognitionDraft = interimText;
-    setAudioTranscript(`正在识别：${interimText}`);
-  }
-
-  finalTexts.forEach((text) => {
-    if (modelState.speaking || modelState.generatingSpeech) {
-      addControlLog("语音输入已忽略", { text, reason: "robot_speaking" });
-      return;
-    }
-
-    setAudioTranscript(`已识别并发送：${text}`);
-    addControlLog("语音输入", { text });
-    submitChatText(text, { source: "speech" });
-  });
+  modelState.audioSegmenter?.reset();
+  modelState.audioTranscriptionPaused = false;
+  setAudioTranscript("正在本机监听；检测到一句话结束后会离线识别并自动发送。");
 }
 
 function saveDefaultAudio() {
@@ -2758,8 +2751,15 @@ function initializeAudioControls() {
 
 function updateVoiceStatus() {
   const config = currentVoiceConfig();
+  const usesReferenceAudio = Boolean(config && config.backend !== "sherpa_onnx");
+  referenceConfigFieldsEl.hidden = !usesReferenceAudio;
+  voicePreviewButton.disabled = !config;
   if (!config) {
     voiceEl.textContent = modelState.selectedVoice || "等待 TTS 服务";
+    return;
+  }
+  if (config.backend === "sherpa_onnx") {
+    voiceEl.textContent = backendLabel(config.backend);
     return;
   }
   const referenceName = currentReferenceConfig()?.display_name || modelState.selectedReference || "未选参考音频";
@@ -2768,7 +2768,7 @@ function updateVoiceStatus() {
 
 async function checkSelectedVoiceHealth() {
   const config = currentVoiceConfig();
-  if (!config || !["voxcpm_project_local", "voxcpm_local", "voxcpm_local_gradio"].includes(config.backend)) {
+  if (!config || !["sherpa_onnx", "voxcpm_project_local", "voxcpm_local", "voxcpm_local_gradio"].includes(config.backend)) {
     return;
   }
   try {
@@ -2795,9 +2795,10 @@ async function synchronizeSelectedVoiceRuntime() {
   modelState.voiceRuntimeRequestId = requestId;
   const backend = config.backend;
   const isProjectLocal = backend === "voxcpm_project_local";
+  const isSherpaLocal = backend === "sherpa_onnx";
   setStatus(
-    isProjectLocal ? "正在启动 VoxCPM 本地推理" : "正在切换到云端语音",
-    isProjectLocal ? "首次加载模型可能需要较长时间，请等待本地推理进程准备完成。" : "正在通知后端释放本地 VoxCPM 模型缓存。",
+    isSherpaLocal ? "正在启动本机轻量 VITS" : isProjectLocal ? "正在启动 VoxCPM 本地推理" : "正在切换语音运行时",
+    (isSherpaLocal || isProjectLocal) ? "首次加载模型可能需要较长时间，请等待本地推理进程准备完成。" : "正在通知后端释放未使用的本地模型缓存。",
   );
 
   try {
@@ -2816,11 +2817,11 @@ async function synchronizeSelectedVoiceRuntime() {
       setStatus("语音运行时切换失败", payload.message || payload.error || "请检查控制服务日志。");
       return false;
     }
-    if (isProjectLocal) {
-      setStatus("VoxCPM 本地推理已启动", payload.model_path || payload.message || "模型已加载到控制服务进程。");
+    if (isSherpaLocal || isProjectLocal) {
+      setStatus(`${backendLabel(backend)} 已启动`, payload.model_path || payload.message || "模型已加载到控制服务进程。");
       return true;
     }
-    setStatus("已切换到云端语音", payload.message || "本地 VoxCPM 模型缓存已释放。");
+    setStatus("语音运行时已切换", payload.message || "未使用的本地模型缓存已释放。");
     return true;
   } catch (error) {
     if (requestId === modelState.voiceRuntimeRequestId) {
@@ -2833,6 +2834,7 @@ async function synchronizeSelectedVoiceRuntime() {
 
 function backendLabel(backend) {
   const labels = {
+    sherpa_onnx: "sherpa-onnx 本地 VITS",
     voxcpm_hf_space: "VoxCPM 公网 API",
     voxcpm_project_local: "VoxCPM 项目内本地推理",
     voxcpm_local: "VoxCPM 本地 Gradio 桥接",
@@ -2857,6 +2859,10 @@ function setTtsErrorStatus(error, requestId) {
   }
   const message = error.message || "请检查 TTS 配置或启动语音服务。";
   const backend = currentVoiceConfig()?.backend || "";
+  if (backend === "sherpa_onnx") {
+    setStatus("sherpa-onnx 本地 VITS 不可用", message);
+    return;
+  }
   if (backend === "voxcpm_hf_space") {
     setStatus("VoxCPM 公网 API 生成失败", message);
     return;
@@ -3352,6 +3358,7 @@ audioDetectButton.addEventListener("click", () => refreshAudioDevices({ requestP
 audioStartButton.addEventListener("click", startAudioMonitor);
 audioStopButton.addEventListener("click", () => stopAudioMonitor());
 audioDefaultButton.addEventListener("click", saveDefaultAudio);
+voicePreviewButton.addEventListener("click", previewSelectedVoice);
 referenceSelectEl.addEventListener("change", () => selectReference(referenceSelectEl.value));
 referenceTextInputEl.addEventListener("input", () => {
   markUserActivity();

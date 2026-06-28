@@ -610,6 +610,15 @@ button:nth-child(2) {
   gap: 14px;
 }
 
+.reference-config-fields {
+  display: grid;
+  gap: 14px;
+}
+
+.reference-config-fields[hidden] {
+  display: none;
+}
+
 .voice-config h3 {
   margin: 0 0 8px;
   font-size: 14px;

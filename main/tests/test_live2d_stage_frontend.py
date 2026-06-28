@@ -21,10 +21,11 @@ class Live2DStageFrontendTest(unittest.TestCase):
         cls.perception_source = PERCEPTION_JS_PATH.read_text(encoding="utf-8")
         cls.emotion_onnx_source = EMOTION_ONNX_JS_PATH.read_text(encoding="utf-8")
 
-    def test_speech_rate_controls_real_audio_playback(self) -> None:
+    def test_speech_rate_is_applied_once_by_tts_backend(self) -> None:
         self.assertIn("audio.playbackRate = safeRate", self.stage_source)
         self.assertIn("audio.defaultPlaybackRate = safeRate", self.stage_source)
-        self.assertIn("startMouthSync(plan, playbackRate)", self.stage_source)
+        self.assertIn("applyAudioPlaybackRate(audio, 1.0)", self.stage_source)
+        self.assertIn("startMouthSync(plan, speechRate)", self.stage_source)
         self.assertIn("syncActiveSpeechRate(safeRate)", self.stage_source)
 
     def test_tts_request_still_sends_selected_rate(self) -> None:
@@ -63,7 +64,7 @@ class Live2DStageFrontendTest(unittest.TestCase):
         self.assertIn("THINKING_MOTION_SEQUENCE", self.stage_source)
         self.assertIn("startThinkingAnimation();", self.stage_source)
         self.assertIn("stopThinkingAnimation({ restoreMotion: false, clearRoulette: false })", self.stage_source)
-        self.assertIn("startReplyStream(plan.text, playbackRate)", self.stage_source)
+        self.assertIn("startReplyStream(plan.text, speechRate)", self.stage_source)
         self.assertIn("finishReplyStream()", self.stage_source)
 
     def test_llm_visual_plan_starts_with_speech_playback(self) -> None:

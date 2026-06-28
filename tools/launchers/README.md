@@ -8,4 +8,6 @@
 
 `live2d_stage.bat` 是 Live2D 网页开发的统一入口。双击后可在菜单中选择一键开启控制服务、Live2D 网页和浏览器，也可单独开启网页、控制服务、运行静态检查或刷新 LLM 控制文件。旧的网页相关分散启动器已经合并到这个菜单中，避免误点不同入口导致状态不一致。
 
-VoxCPM 本地推理的模型路径不要写死进脚本。复制 `main/config/local.env.example` 为 `main/config/local.env`，再在其中设置 `VOXCPM_MODEL_PATH`。该文件会被 Git 忽略，只保存在本机。
+VoxCPM 本地推理的模型路径和可选外部服务密钥不要写死进脚本。复制
+`main/config/local.env.example` 为 `main/config/local.env`，再按需设置
+`VOXCPM_MODEL_PATH`、`DEEPSEEK_API_KEY` 等。该文件会被 Git 忽略，只保存在本机。

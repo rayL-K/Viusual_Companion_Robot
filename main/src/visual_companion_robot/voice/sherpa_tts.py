@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
+import importlib.util
 import logging
 import tarfile
-import tempfile
-import urllib.request
 import wave
 from pathlib import Path
 from typing import Optional
@@ -13,6 +12,7 @@ from typing import Optional
 import numpy as np
 
 from visual_companion_robot.speech.tts_interface import TTSInterface
+from visual_companion_robot.integrations.model_assets import download_tar_bz2, extract_tar_safely
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +66,35 @@ class SherpaOnnxTTS:
 
     def is_loaded(self) -> bool:
         return self._tts is not None
+
+    def model_root(self) -> Optional[Path]:
+        """Return the installed model root without triggering a download."""
+
+        return self._find_model_root()
+
+    def environment_status(self) -> dict[str, object]:
+        model_root = self.model_root()
+        dependency_ready = importlib.util.find_spec("sherpa_onnx") is not None
+        ok = dependency_ready and model_root is not None
+        messages = []
+        if not dependency_ready:
+            messages.append("缺少 sherpa-onnx Python 依赖")
+        if model_root is None:
+            messages.append("本地 VITS 模型尚未下载；首次使用会自动下载")
+        if ok:
+            messages.append("本地 sherpa-onnx VITS 可用")
+        return {
+            "ok": ok,
+            "backend": "sherpa_onnx",
+            "loaded": self.is_loaded(),
+            "model_path": str(model_root or self._model_dir.resolve()),
+            "message": "；".join(messages),
+        }
+
+    def release(self) -> bool:
+        was_loaded = self._tts is not None
+        self._tts = None
+        return was_loaded
 
     def synthesize(self, text: str, sid: int = 0, speed: float = 1.0) -> tuple[np.ndarray, int]:
         if self._tts is None:
@@ -128,26 +157,10 @@ class SherpaOnnxTTS:
         return path
 
     def _download(self, url: str) -> None:
-        archive_path = ""
-        try:
-            with tempfile.NamedTemporaryFile(suffix=".tar.bz2", delete=False) as archive:
-                archive_path = archive.name
-            urllib.request.urlretrieve(url, archive_path)
-            with tarfile.open(archive_path, "r:bz2") as bundle:
-                self._extract_safely(bundle)
-        finally:
-            if archive_path:
-                Path(archive_path).unlink(missing_ok=True)
+        download_tar_bz2(url, self._model_dir)
 
     def _extract_safely(self, bundle: tarfile.TarFile) -> None:
-        target_root = self._model_dir.resolve()
-        for member in bundle.getmembers():
-            if not (member.isfile() or member.isdir()):
-                raise RuntimeError(f"模型压缩包含不安全的特殊文件: {member.name}")
-            target = (target_root / member.name).resolve()
-            if not target.is_relative_to(target_root):
-                raise RuntimeError(f"模型压缩包包含越界路径: {member.name}")
-        bundle.extractall(path=target_root)
+        extract_tar_safely(bundle, self._model_dir)
 
 
 class SherpaOnnxTTSAdapter(TTSInterface):

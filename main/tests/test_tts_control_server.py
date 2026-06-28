@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+import io
 import json
 import unittest
+import wave
+from concurrent.futures import ThreadPoolExecutor
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
 from unittest.mock import patch
 
+import numpy as np
+
+from main.scripts import live2d_control_server as control_server
 from main.scripts.live2d_control_server import (
     activate_tts_runtime,
     build_gradio_file_data,
@@ -21,8 +27,10 @@ from main.scripts.live2d_control_server import (
     sanitize_vision_context,
     select_reference_config,
     select_voice_config,
+    synthesize_sherpa_onnx,
     ControlHandler,
 )
+from visual_companion_robot.perception.offline_asr_service import OfflineAsrResult
 
 
 class VoxcpmControlServerTests(unittest.TestCase):
@@ -47,6 +55,23 @@ class VoxcpmControlServerTests(unittest.TestCase):
         connection.close()
         return response.status, payload
 
+    def request_bytes(self, path: str, body: bytes, content_type: str) -> tuple[int, dict]:
+        connection = HTTPConnection("127.0.0.1", self.server.server_port, timeout=5)
+        connection.request("POST", path, body=body, headers={"Content-Type": content_type})
+        response = connection.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+        connection.close()
+        return response.status, payload
+
+    def request_with_origin(self, origin: str) -> tuple[int, dict, str | None]:
+        connection = HTTPConnection("127.0.0.1", self.server.server_port, timeout=5)
+        connection.request("GET", "/health", headers={"Origin": origin})
+        response = connection.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+        allowed_origin = response.getheader("Access-Control-Allow-Origin")
+        connection.close()
+        return response.status, payload, allowed_origin
+
     def test_http_routes_expose_health_voices_and_validation(self) -> None:
         status, health = self.request_json("GET", "/health")
         self.assertEqual(status, 200)
@@ -56,9 +81,20 @@ class VoxcpmControlServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn(voices["active"], voices["models"])
 
+        status, asr_health = self.request_json("GET", "/asr-health")
+        self.assertEqual(status, 200)
+        self.assertEqual(asr_health["backend"], "sherpa-onnx-sensevoice")
+
         status, error = self.request_json("POST", "/chat", '{"text":""}')
         self.assertEqual(status, 400)
         self.assertIn("text", error["error"])
+
+    def test_read_only_routes_handle_concurrent_requests(self) -> None:
+        paths = ["/health", "/voices", "/asr-health"] * 8
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            results = list(executor.map(lambda path: self.request_json("GET", path), paths))
+
+        self.assertTrue(all(status == 200 for status, _ in results))
 
     def test_http_rejects_invalid_or_oversized_json_before_dispatch(self) -> None:
         for body in ("[]", "{broken"):
@@ -79,6 +115,46 @@ class VoxcpmControlServerTests(unittest.TestCase):
         self.assertEqual(status, 413)
         self.assertIn("128 KiB", error["error"])
 
+        for invalid_rate in ('"NaN"', '"Infinity"'):
+            status, error = self.request_json("POST", "/tts", f'{{"text":"测试","rate":{invalid_rate}}}')
+            self.assertEqual(status, 400)
+            self.assertIn("有限", error["error"])
+
+    def test_cors_only_allows_local_browser_origins(self) -> None:
+        status, payload, allowed_origin = self.request_with_origin("https://malicious.example")
+        self.assertEqual(status, 403)
+        self.assertIn("Origin", payload["error"])
+        self.assertIsNone(allowed_origin)
+
+        local_origin = "http://127.0.0.1:5174"
+        status, payload, allowed_origin = self.request_with_origin(local_origin)
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(allowed_origin, local_origin)
+
+    def test_asr_route_accepts_pcm16_and_rejects_wrong_content_type(self) -> None:
+        result = OfflineAsrResult("你好", True, 0.5, 600)
+        pcm = b"\x00\x00" * (16_000 * 600 // 1000)
+        with patch.object(control_server.ASR_SERVICE, "transcribe_pcm16", return_value=result) as transcribe:
+            status, payload = self.request_bytes("/asr", pcm, "audio/pcm; rate=16000")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["text"], "你好")
+        transcribe.assert_called_once_with(pcm)
+
+        status, error = self.request_bytes("/asr", pcm, "application/octet-stream")
+        self.assertEqual(status, 400)
+        self.assertIn("audio/pcm", error["error"])
+
+        status, error = self.request_bytes("/asr", pcm, "audio/pcm; rate=8000")
+        self.assertEqual(status, 400)
+        self.assertIn("16000", error["error"])
+
+        with patch.object(control_server.ASR_SERVICE, "transcribe_pcm16", side_effect=RuntimeError("model unavailable")):
+            status, error = self.request_bytes("/asr", pcm, "audio/pcm; rate=16000")
+        self.assertEqual(status, 503)
+        self.assertIn("model unavailable", error["error"])
+
     def test_detect_audio_content_type_uses_file_header(self) -> None:
         self.assertEqual(detect_audio_content_type(b"RIFFxxxxWAVEdata", "application/octet-stream"), "audio/wav")
         self.assertEqual(detect_audio_content_type(b"\xff\xfb\x90\x64", "application/octet-stream"), "audio/mpeg")
@@ -95,6 +171,15 @@ class VoxcpmControlServerTests(unittest.TestCase):
         self.assertEqual(reference_id, "soft_girl")
         self.assertEqual(runtime_config["ref_audio_path"], reference_config["audio_path"])
         self.assertEqual(runtime_config["prompt_text"], "用户编辑后的参考文本。")
+
+    def test_sherpa_runtime_config_does_not_require_reference_audio(self) -> None:
+        runtime_config = build_runtime_voice_config(
+            {"backend": "sherpa_onnx", "speaker_id": 5},
+            "missing-reference",
+            None,
+        )
+
+        self.assertEqual(runtime_config, {"backend": "sherpa_onnx", "speaker_id": 5})
 
     def test_project_local_runtime_config_keeps_selected_reference(self) -> None:
         _, voice_config = select_voice_config("voxcpm_local")
@@ -176,6 +261,44 @@ class VoxcpmControlServerTests(unittest.TestCase):
 
         self.assertEqual(health["backend"], "voxcpm_project_local")
         self.assertIn("model_path", health)
+
+    def test_sherpa_voice_is_default_and_checked_locally(self) -> None:
+        selected, voice_config = select_voice_config("")
+        health = probe_voxcpm_backend(voice_config)
+
+        self.assertEqual(selected, "sherpa_vits")
+        self.assertEqual(health["backend"], "sherpa_onnx")
+        self.assertIn("model_path", health)
+
+    def test_sherpa_synthesis_returns_valid_wav(self) -> None:
+        samples = np.array([0.0, 0.25, -0.25], dtype=np.float32)
+        with (
+            patch.object(control_server.SHERPA_TTS_ENGINE, "load") as load,
+            patch.object(control_server.SHERPA_TTS_ENGINE, "synthesize", return_value=(samples, 8000)) as synthesize,
+        ):
+            audio, content_type = synthesize_sherpa_onnx("你好", 1.1, {"speaker_id": 3})
+
+        load.assert_called_once_with()
+        synthesize.assert_called_once_with("你好", sid=3, speed=1.1)
+        self.assertEqual(content_type, "audio/wav")
+        with wave.open(io.BytesIO(audio), "rb") as wav_file:
+            self.assertEqual(wav_file.getframerate(), 8000)
+            self.assertEqual(wav_file.getnframes(), 3)
+
+    def test_sherpa_runtime_loads_model_and_releases_voxcpm(self) -> None:
+        status = {"ok": True, "backend": "sherpa_onnx", "loaded": True, "model_path": "model"}
+        with (
+            patch("main.scripts.live2d_control_server.release_cached_models", return_value=1) as release_cache,
+            patch.object(control_server.SHERPA_TTS_ENGINE, "load") as load,
+            patch.object(control_server.SHERPA_TTS_ENGINE, "environment_status", return_value=status),
+        ):
+            result = activate_tts_runtime("sherpa_vits")
+
+        release_cache.assert_called_once_with()
+        load.assert_called_once_with()
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["voice"], "sherpa_vits")
+        self.assertEqual(result["action"], "prepare_local_model")
 
     def test_cloud_runtime_releases_project_local_model_cache(self) -> None:
         with patch("main.scripts.live2d_control_server.release_cached_models", return_value=2) as release_cache:

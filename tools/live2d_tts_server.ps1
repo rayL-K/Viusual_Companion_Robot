@@ -58,6 +58,7 @@ $condaCommand = Get-Command conda -ErrorAction Stop
 $process = Start-Process `
     -FilePath $condaCommand.Source `
     -ArgumentList @("run", "-n", $EnvName, "python", $ServerScript) `
+    -WorkingDirectory $ProjectRoot `
     -WindowStyle Hidden `
     -RedirectStandardOutput $stdoutLogPath `
     -RedirectStandardError $stderrLogPath `

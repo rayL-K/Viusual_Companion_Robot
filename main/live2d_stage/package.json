@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5174",
-    "check": "node scripts/check-stage.mjs",
+    "build": "vite build",
+    "check": "node scripts/check-stage.mjs && node scripts/test-offline-audio.mjs",
     "dev:perception": "vite --host 127.0.0.1 --port 5174"
   },
   "devDependencies": {

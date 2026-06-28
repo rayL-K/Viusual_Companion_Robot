@@ -12,13 +12,14 @@
 因此项目通过统一 TTS 接口隔离前端和模型实现：
 
 ```text
-Live2D -> 本地控制服务 `/tts` -> VoxCPM2 公网/项目内/Gradio 兼容后端
+Live2D -> 本地控制服务 `/tts` -> sherpa-onnx VITS 或 VoxCPM2 后端
 ```
 
-## 三种运行模式
+## 四种运行模式
 
-当前 `main/config/tts_models.json` 只保留 VoxCPM 路线：
+当前 `main/config/tts_models.json` 默认使用轻量离线后端，同时保留三种 VoxCPM 路线：
 
+- `sherpa_vits`：默认模式，进程内加载 Aishell3 VITS，完全离线且不需要参考音频。
 - `voxcpm_hf_space_test`：公网 API 测试模式，调用 OpenBMB 的 Hugging Face Space。
 - `voxcpm_local`：项目内 Python 模块直接加载 VoxCPM2，模型路径由配置或 `VOXCPM_MODEL_PATH` 指定。
 - `voxcpm_local_gradio`：兼容外部 Gradio 服务，默认连接 `http://127.0.0.1:7860`。
@@ -52,14 +53,16 @@ main/assets/tts/voxcpm_samples/metadata.json
 
 ## 前端与服务端职责
 
-前端展示台从 `/voices` 读取语音模式和参考音频列表。“更换语音模型”面板可以选择 VoxCPM 公网 API 或 VoxCPM 本地推理，也可以选择并试听参考音频、编辑参考文本。
+前端展示台从 `/voices` 读取语音模式和参考音频列表。“语音模型”面板可选择
+sherpa-onnx 或 VoxCPM 后端，并可直接试听当前模型。选择 sherpa-onnx 时隐藏无关的
+参考音频设置；选择 VoxCPM 时才显示参考音频和对应文本。
 
 页面请求 `/tts` 时会携带：
 
 ```text
-voice       = voxcpm_hf_space_test、voxcpm_local 或 voxcpm_local_gradio
-reference   = 参考音频 ID
-promptText  = 参考音频对应文本
+voice       = sherpa_vits、voxcpm_hf_space_test、voxcpm_local 或 voxcpm_local_gradio
+reference   = 参考音频 ID（仅 VoxCPM 使用）
+promptText  = 参考音频对应文本（仅 VoxCPM 使用）
 ```
 
 本地控制服务负责上传参考音频、调用 VoxCPM、修正音频 MIME，并把音频二进制返回给浏览器。浏览器只负责播放和驱动 Live2D 口型。
@@ -81,8 +84,8 @@ $env:VOXCPM_MODEL_PATH = "E:\models\VoxCPM2"
 只有测试 `voxcpm_local_gradio` 时才需要先启动 Gradio 服务，并在
 `main/config/tts_models.json` 中调整 `endpoint`。
 
-sherpa-onnx VITS 是 `TTSInterface` 的另一种轻量实现，目前不在网页的 VoxCPM
-音色列表中；可通过 `create_tts_engine("sherpa")` 单独使用。
+sherpa-onnx VITS 已接入网页和 `/tts`，首次缺少模型时会自动下载，也可通过
+`create_tts_engine("sherpa")` 单独使用。
 
 ## 后续接入计划
 

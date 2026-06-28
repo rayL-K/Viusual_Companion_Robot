@@ -115,19 +115,22 @@
           <section>
             <h3>生成方式</h3>
             <div id="voiceList" class="voice-list">正在读取语音服务...</div>
+            <button id="voicePreviewButton" type="button">试听当前模型</button>
           </section>
 
-          <label class="reference-picker" for="referenceSelect">
-            <span>参考音频</span>
-            <select id="referenceSelect"></select>
-          </label>
-          <audio id="referenceAudioPreview" controls preload="none"></audio>
+          <div id="referenceConfigFields" class="reference-config-fields">
+            <label class="reference-picker" for="referenceSelect">
+              <span>参考音频</span>
+              <select id="referenceSelect"></select>
+            </label>
+            <audio id="referenceAudioPreview" controls preload="none"></audio>
 
-          <label class="reference-text" for="referenceTextInput">
-            <span>参考文本</span>
-            <textarea id="referenceTextInput" rows="4" placeholder="这里填写参考音频对应的原文。"></textarea>
-          </label>
-          <p id="referenceHint">参考音频会传给 VoxCPM，用来约束音色；文本必须尽量与音频内容一致。</p>
+            <label class="reference-text" for="referenceTextInput">
+              <span>参考文本</span>
+              <textarea id="referenceTextInput" rows="4" placeholder="这里填写参考音频对应的原文。"></textarea>
+            </label>
+            <p id="referenceHint">参考音频会传给 VoxCPM，用来约束音色；文本必须尽量与音频内容一致。</p>
+          </div>
         </div>
       </section>
 
@@ -167,7 +170,7 @@
           <button id="closeAudioPanelButton" type="button" aria-label="收起听觉面板">收起</button>
         </header>
         <div class="audio-config">
-          <p>Windows 开发环境下可在这里选择测试麦克风；浏览器首次授权后才会显示真实设备名称。</p>
+          <p>Windows 开发环境下可在这里选择测试麦克风；PCM 只发送给本机控制服务，并由 SenseVoice 离线识别。</p>
           <label for="audioSelect">
             <span>麦克风设备</span>
             <select id="audioSelect"></select>
@@ -180,7 +183,7 @@
           </div>
           <div class="audio-transcript">
             <span>语音识别</span>
-            <strong id="audioTranscript">开启监听后会自动把你的语音转成文字并发送。</strong>
+            <strong id="audioTranscript">开启监听后会在本机把你的语音转成文字并发送。</strong>
           </div>
           <p id="audioStatus">尚未检测麦克风。</p>
         </div>

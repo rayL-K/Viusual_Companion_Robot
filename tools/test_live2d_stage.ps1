@@ -72,7 +72,7 @@ if ($Open) {
         }
         catch {
             Write-Warning "本地 TTS 服务启动失败：$($_.Exception.Message)"
-            Write-Warning "展示台仍会打开，但声音会降级到浏览器语音或静默。"
+            Write-Warning "展示台仍会打开，但本地语音与离线识别会显示不可用状态。"
         }
     }
 

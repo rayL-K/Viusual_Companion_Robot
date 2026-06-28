@@ -73,21 +73,24 @@ class VoiceActivityDetector:
         if self._vad is None:
             return
 
+        for frame in self._split_frames(audio_bytes):
+            event = self._transition(self._vad.is_speech(frame, self._sample_rate))
+            if event:
+                yield event
+
+    def speech_ratio(self, audio_bytes: bytes) -> float:
+        """返回有效帧中被 WebRTC VAD 判定为语音的比例。"""
+
+        if self._vad is None:
+            raise RuntimeError("webrtcvad 不可用")
         frames = self._split_frames(audio_bytes)
-        is_speech_count = 0
-        total_frames = 0
+        if not frames:
+            return 0.0
+        speech_frames = sum(self._vad.is_speech(frame, self._sample_rate) for frame in frames)
+        return speech_frames / len(frames)
 
-        for frame in frames:
-            is_speech = self._vad.is_speech(frame, self._sample_rate)
-            total_frames += 1
-            if is_speech:
-                is_speech_count += 1
-
-        has_speech = is_speech_count > total_frames // 2 if total_frames > 0 else False
-
-        event = self._transition(has_speech)
-        if event:
-            yield event
+    def is_available(self) -> bool:
+        return self._vad is not None
 
     def reset(self) -> None:
         self._state = VADState.IDLE

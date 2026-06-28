@@ -79,6 +79,28 @@ class EmotionHttpBoundaryTests(unittest.TestCase):
         connection.close()
         return response.status, payload
 
+    def request_health(self, origin: str = "") -> tuple[int, dict, str | None]:
+        connection = HTTPConnection("127.0.0.1", self.server.server_port, timeout=5)
+        headers = {"Origin": origin} if origin else {}
+        connection.request("GET", "/health", headers=headers)
+        response = connection.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+        allowed_origin = response.getheader("Access-Control-Allow-Origin")
+        connection.close()
+        return response.status, payload, allowed_origin
+
+    def test_health_and_cors_are_limited_to_local_origins(self) -> None:
+        status, payload, allowed = self.request_health("https://malicious.example")
+        self.assertEqual(status, 403)
+        self.assertIn("Origin", payload["error"])
+        self.assertIsNone(allowed)
+
+        origin = "http://127.0.0.1:5174"
+        status, payload, allowed = self.request_health(origin)
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["service"], "visual-companion-emotion")
+        self.assertEqual(allowed, origin)
+
     def test_rejects_empty_non_object_and_oversized_requests(self) -> None:
         status, error = self.request_json("")
         self.assertEqual(status, 400)

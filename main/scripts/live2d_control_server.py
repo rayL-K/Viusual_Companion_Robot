@@ -2,19 +2,24 @@
 
 浏览器只连接这个本地服务：
 - `/chat`：调用 LLM，返回结构化 Live2D 控制计划。
-- `/tts`：代理 VoxCPM 公网 API 或本地推理接口，返回音频二进制。
+- `/tts`：调用 sherpa-onnx 或 VoxCPM 后端，返回音频二进制。
+- `/asr`：接收本机浏览器采集的 PCM，使用 VAD + SenseVoice 离线识别。
 
 这样 API key、VoxCPM 服务地址和参考音频都留在本地服务侧，不进入前端页面。
 """
 
 from __future__ import annotations
 
+import io
 import json
+import math
 import mimetypes
 import os
 import sys
+import threading
 import urllib.error
 import urllib.request
+import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
@@ -32,6 +37,9 @@ if str(SRC_ROOT) not in sys.path:
 from visual_companion_robot.integrations.llm_client import DeepSeekLlmClient, LlmClientError, LlmContext
 from visual_companion_robot.integrations.web_context import build_web_context
 from visual_companion_robot.brain.memory import SqliteMemoryStore, current_local_time
+from visual_companion_robot.perception.offline_asr_service import OfflineAsrService
+from visual_companion_robot.perception.sherpa_onnx_asr import SherpaOnnxASR
+from visual_companion_robot.voice.sherpa_tts import SherpaOnnxTTS
 from visual_companion_robot.voice.voxcpm_local import (
     VoxCpmLocalConfig,
     VoxCpmLocalSynthesizer,
@@ -44,7 +52,16 @@ DEFAULT_PORT = 8765
 DEFAULT_VOXCPM_LOCAL_URL = "http://127.0.0.1:7860"
 MAX_TEXT_LENGTH = 500
 MAX_REQUEST_BODY_BYTES = 128 * 1024
+MAX_ASR_REQUEST_BYTES = 16_000 * 2 * 30
 MEMORY_DB_PATH = PROJECT_ROOT / "main" / "data" / "memory.sqlite3"
+ASR_MODEL_ROOT = Path(os.environ.get("SHERPA_ONNX_MODEL_ROOT") or PROJECT_ROOT / "main" / "models" / "asr")
+if not ASR_MODEL_ROOT.is_absolute():
+    ASR_MODEL_ROOT = PROJECT_ROOT / ASR_MODEL_ROOT
+ASR_SERVICE = OfflineAsrService(
+    engine=SherpaOnnxASR(str(ASR_MODEL_ROOT.resolve())),
+)
+SHERPA_TTS_ENGINE = SherpaOnnxTTS(str(PROJECT_ROOT / "main" / "models" / "tts" / "sherpa-onnx"))
+SHERPA_TTS_LOCK = threading.Lock()
 
 
 class RequestBodyError(ValueError):
@@ -158,8 +175,10 @@ def build_runtime_voice_config(
 ) -> Dict[str, Any]:
     """把用户选择的参考音频和可编辑文本合并到当前 TTS 后端配置。"""
 
-    _, reference_config = select_reference_config(reference_id)
     runtime_config = dict(voice_config)
+    if runtime_config.get("backend") == "sherpa_onnx":
+        return runtime_config
+    _, reference_config = select_reference_config(reference_id)
     runtime_config["ref_audio_path"] = reference_config.get("audio_path", "")
     selected_prompt = reference_config.get("prompt_text") if prompt_text is None else prompt_text
     runtime_config["prompt_text"] = str(selected_prompt or "").strip()
@@ -290,6 +309,8 @@ def probe_voxcpm_backend(voice_config: Dict[str, Any], timeout_sec: int = 5) -> 
     """
 
     backend = str(voice_config.get("backend") or "")
+    if backend == "sherpa_onnx":
+        return SHERPA_TTS_ENGINE.environment_status()
     if backend == "voxcpm_project_local":
         config = VoxCpmLocalConfig.from_mapping(voice_config, PROJECT_ROOT)
         return VoxCpmLocalSynthesizer.environment_status(config)
@@ -415,6 +436,26 @@ def synthesize_voxcpm_project_local(text: str, rate: float, voice_config: Dict[s
     )
 
 
+def synthesize_sherpa_onnx(text: str, rate: float, voice_config: Dict[str, Any]) -> Tuple[bytes, str]:
+    """Use the cached lightweight local VITS model and return a WAV payload."""
+
+    with SHERPA_TTS_LOCK:
+        SHERPA_TTS_ENGINE.load()
+        samples, sample_rate = SHERPA_TTS_ENGINE.synthesize(
+            text,
+            sid=int(voice_config.get("speaker_id") or 0),
+            speed=clamp(float(rate), 0.85, 1.35),
+        )
+    pcm = (samples.clip(-1.0, 1.0) * 32767.0).astype("<i2").tobytes()
+    output = io.BytesIO()
+    with wave.open(output, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(sample_rate)
+        wav_file.writeframes(pcm)
+    return output.getvalue(), "audio/wav"
+
+
 def synthesize_with_tts_backend(
     text: str,
     rate: float,
@@ -425,6 +466,10 @@ def synthesize_with_tts_backend(
     selected_voice, voice_config = select_voice_config(voice_id)
     voice_config = build_runtime_voice_config(voice_config, reference_id, prompt_text)
     backend = voice_config.get("backend") or "voxcpm_hf_space"
+    if backend == "sherpa_onnx":
+        audio, content_type = synthesize_sherpa_onnx(text, rate, voice_config)
+        print(f"[TTS] voice={selected_voice} backend={backend}")
+        return audio, content_type
     if backend == "voxcpm_project_local":
         audio, content_type = synthesize_voxcpm_project_local(text, rate, voice_config)
         print(f"[TTS] voice={selected_voice} backend={backend}")
@@ -433,7 +478,7 @@ def synthesize_with_tts_backend(
         audio, content_type = synthesize_voxcpm_gradio(text, rate, voice_config)
         print(f"[TTS] voice={selected_voice} backend={backend}")
         return audio, content_type
-    raise RuntimeError(f"暂不支持的 VoxCPM backend：{backend}")
+    raise RuntimeError(f"暂不支持的 TTS backend：{backend}")
 
 
 def activate_tts_runtime(voice_id: str) -> Dict[str, Any]:
@@ -441,7 +486,16 @@ def activate_tts_runtime(voice_id: str) -> Dict[str, Any]:
 
     selected_voice, voice_config = select_voice_config(voice_id)
     backend = str(voice_config.get("backend") or "voxcpm_hf_space")
+    if backend == "sherpa_onnx":
+        release_cached_models()
+        with SHERPA_TTS_LOCK:
+            SHERPA_TTS_ENGINE.load()
+            status = SHERPA_TTS_ENGINE.environment_status()
+        status.update({"voice": selected_voice, "action": "prepare_local_model"})
+        return status
     if backend == "voxcpm_project_local":
+        with SHERPA_TTS_LOCK:
+            SHERPA_TTS_ENGINE.release()
         config = VoxCpmLocalConfig.from_mapping(voice_config, PROJECT_ROOT)
         status = VoxCpmLocalSynthesizer(config).prepare()
         status["voice"] = selected_voice
@@ -449,13 +503,16 @@ def activate_tts_runtime(voice_id: str) -> Dict[str, Any]:
         return status
 
     released_count = release_cached_models()
+    with SHERPA_TTS_LOCK:
+        sherpa_released = SHERPA_TTS_ENGINE.release()
     return {
         "ok": True,
         "voice": selected_voice,
         "backend": backend,
         "action": "release_local_model",
         "released_models": released_count,
-        "message": "已切换到非项目内本地推理模式，本地 VoxCPM 模型缓存已释放。",
+        "released_sherpa": sherpa_released,
+        "message": "语音运行时已切换，未使用的本地模型缓存已释放。",
     }
 
 
@@ -466,13 +523,14 @@ class ControlHandler(BaseHTTPRequestHandler):
     WebSocket handler 模式。新增路由只需在分发表中添加一行。
     """
 
-    server_version = "VisualCompanionControl/0.3"
+    server_version = "VisualCompanionControl/0.5"
 
     # ---- GET 路由分发表 ----
     _GET_ROUTES: Dict[str, str] = {
         "/health": "handle_health",
         "/voices": "handle_voices",
         "/tts-health": "handle_tts_health",
+        "/asr-health": "handle_asr_health",
         "/reference-audio": "handle_reference_audio",
     }
 
@@ -481,14 +539,21 @@ class ControlHandler(BaseHTTPRequestHandler):
         "/chat": "handle_chat",
         "/tts": "handle_tts",
         "/tts-runtime": "handle_tts_runtime",
+        "/asr": "handle_asr",
     }
 
     def do_OPTIONS(self) -> None:
+        if not self.is_request_origin_allowed():
+            self.send_json({"error": "Origin 不允许访问本地控制服务。"}, status=403)
+            return
         self.send_response(204)
         self.send_cors_headers()
         self.end_headers()
 
     def do_GET(self) -> None:
+        if not self.is_request_origin_allowed():
+            self.send_json({"error": "Origin 不允许访问本地控制服务。"}, status=403)
+            return
         parsed_url = urlparse(self.path)
         path = parsed_url.path
         handler_name = self._GET_ROUTES.get(path)
@@ -498,6 +563,9 @@ class ControlHandler(BaseHTTPRequestHandler):
             self.send_json({"error": "Not found"}, status=404)
 
     def do_POST(self) -> None:
+        if not self.is_request_origin_allowed():
+            self.send_json({"error": "Origin 不允许访问本地控制服务。"}, status=403)
+            return
         path = urlparse(self.path).path
         handler_name = self._POST_ROUTES.get(path)
         if handler_name:
@@ -516,6 +584,9 @@ class ControlHandler(BaseHTTPRequestHandler):
             self.send_json(load_tts_config())
         except (OSError, RuntimeError, json.JSONDecodeError) as exc:
             self.send_json({"error": str(exc)}, status=500)
+
+    def handle_asr_health(self, _raw_query: str) -> None:
+        self.send_json(ASR_SERVICE.health())
 
     def handle_chat(self) -> None:
         try:
@@ -620,19 +691,23 @@ class ControlHandler(BaseHTTPRequestHandler):
         except (RuntimeError, OSError) as exc:
             self.send_json({"ok": False, "error": str(exc)}, status=200)
 
-    def read_json(self) -> Dict[str, Any]:
+    def handle_asr(self) -> None:
+        content_type = str(self.headers.get("Content-Type") or "").lower()
+        if not content_type.startswith("audio/pcm"):
+            raise RequestBodyError("ASR 请求必须使用 audio/pcm 内容类型。")
+        if "rate=16000" not in content_type.replace(" ", ""):
+            raise RequestBodyError("ASR 请求必须声明 16000 Hz 采样率。")
+        pcm_bytes = self.read_request_body(MAX_ASR_REQUEST_BYTES, "30 秒音频")
         try:
-            length = int(self.headers.get("Content-Length") or 0)
+            result = ASR_SERVICE.transcribe_pcm16(pcm_bytes)
+            self.send_json({"ok": True, **result.to_dict()})
         except ValueError as exc:
-            raise RequestBodyError("Content-Length 无效。") from exc
-        if length <= 0:
-            raise RequestBodyError("请求体不能为空。")
-        if length > MAX_REQUEST_BODY_BYTES:
-            raise RequestBodyError("请求体超过 128 KiB 限制。", status=413)
+            raise RequestBodyError(str(exc)) from exc
+        except (RuntimeError, OSError) as exc:
+            self.send_json({"ok": False, "error": str(exc)}, status=503)
 
-        raw = self.rfile.read(length)
-        if len(raw) != length:
-            raise RequestBodyError("请求体读取不完整。")
+    def read_json(self) -> Dict[str, Any]:
+        raw = self.read_request_body(MAX_REQUEST_BODY_BYTES, "128 KiB")
         try:
             payload = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -641,12 +716,30 @@ class ControlHandler(BaseHTTPRequestHandler):
             raise RequestBodyError("请求体必须是 JSON 对象。")
         return payload
 
+    def read_request_body(self, max_bytes: int, limit_label: str) -> bytes:
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError as exc:
+            raise RequestBodyError("Content-Length 无效。") from exc
+        if length <= 0:
+            raise RequestBodyError("请求体不能为空。")
+        if length > max_bytes:
+            raise RequestBodyError(f"请求体超过 {limit_label} 限制。", status=413)
+
+        raw = self.rfile.read(length)
+        if len(raw) != length:
+            raise RequestBodyError("请求体读取不完整。")
+        return raw
+
     @staticmethod
     def parse_number(value: Any, field_name: str) -> float:
         try:
-            return float(value)
+            number = float(value)
         except (TypeError, ValueError) as exc:
             raise RequestBodyError(f"{field_name} 必须是数字。") from exc
+        if not math.isfinite(number):
+            raise RequestBodyError(f"{field_name} 必须是有限数字。")
+        return number
 
     def send_json(self, payload: Dict[str, Any], status: int = 200) -> None:
         raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -659,9 +752,19 @@ class ControlHandler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def send_cors_headers(self) -> None:
-        self.send_header("Access-Control-Allow-Origin", "*")
+        origin = str(self.headers.get("Origin") or "").strip()
+        if origin and self.is_request_origin_allowed():
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
+
+    def is_request_origin_allowed(self) -> bool:
+        origin = str(self.headers.get("Origin") or "").strip()
+        if not origin:
+            return True
+        parsed = urlparse(origin)
+        return parsed.scheme in {"http", "https"} and parsed.hostname in {"127.0.0.1", "localhost", "::1"}
 
     def log_message(self, format: str, *args: Any) -> None:
         print(f"[Control] {self.address_string()} - {format % args}")

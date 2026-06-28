@@ -8,6 +8,7 @@ from .vision import PerceptionFrame, DetectedObject, encode_frame_to_base64, now
 from .scene_analyzer import SceneAnalyzer, SceneAnalyzerConfig
 from .asr_interface import ASRInterface, create_asr_engine
 from .sherpa_onnx_asr import SherpaOnnxASR
+from .offline_asr_service import OfflineAsrResult, OfflineAsrService
 from .vad import VoiceActivityDetector, VADConfig, VAD_SPEECH_START, VAD_SPEECH_END
 from .emotion import FerPlusEmotionRecognizer, EmotionResult
 from .detector import YoloDetector
@@ -26,6 +27,8 @@ __all__ = [
     "SceneAnalyzer",
     "ASRInterface",
     "SherpaOnnxASR",
+    "OfflineAsrResult",
+    "OfflineAsrService",
     "create_asr_engine",
     "VoiceActivityDetector",
     "VADConfig",

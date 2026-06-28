@@ -21,6 +21,21 @@ tools\launchers\test_live2d.bat
 该入口会使用 `conda run -n visual-companion-robot`，不会误用 `base` 或系统
 Python。`main/scripts/check_python_compat.py` 默认按 Python 3.11 语法检查。
 
+控制服务和 Vite 页面启动后，可运行 30 分钟 Windows 稳定性回归：
+
+```bat
+conda run -n visual-companion-robot python tools\soak_windows_runtime.py --duration-sec 1800
+```
+
+报告写入 `main/reports/windows_runtime_soak.json`，覆盖页面、健康检查、并发静默
+ASR、周期性本地 TTS、失败计数和进程内存采样。
+
+本地控制服务运行时，可单独复验真实语音闭环：
+
+```bat
+conda run -n visual-companion-robot python tools\test_speech_loopback.py
+```
+
 ## Windows PowerShell
 
 PowerShell 7 是可选项，不是前置条件。`tools/launchers/*.bat` 会优先使用

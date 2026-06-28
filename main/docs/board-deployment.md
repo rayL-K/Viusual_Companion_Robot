@@ -26,7 +26,7 @@ Visual_Companion_Robot/
 | 本地视觉 | `YoloDetector` + `RknnEngine` | `main/models/yolo/*.rknn` | 仅 `backend.vision=local` 时 |
 | 本地 LLM | GGUF/llama.cpp 路线 | `main/models/qwen/*.gguf` | 仅 `backend.llm=local` 时 |
 | 浏览器情绪 | FER+ ONNX 服务 | `main/models/emotion/emotion-ferplus-8.onnx` | 需要 FER+ 增强时 |
-| 离线 ASR | sherpa-onnx SenseVoice/Paraformer | `main/models/asr/` | 接入离线语音识别时 |
+| 离线 ASR | sherpa-onnx SenseVoice INT8 | `main/models/asr/` | 使用麦克风离线识别时 |
 | 轻量 TTS | sherpa-onnx VITS | `main/models/tts/sherpa-onnx/` | 使用轻量本地 TTS 时 |
 | VoxCPM2 | 项目内 Python 推理 | `main/models/voxcpm/VoxCPM2/` | 可选；必须先评估板端资源 |
 

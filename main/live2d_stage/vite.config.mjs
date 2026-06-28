@@ -20,11 +20,24 @@ function live2dAssetPlugin() {
     name: "serve-live2d-assets",
     configureServer(server) {
       server.middlewares.use("/live2d", (req, res, next) => {
-        const rawUrl = decodeURIComponent((req.url || "").split("?")[0] || "/");
+        let rawUrl;
+        try {
+          rawUrl = decodeURIComponent((req.url || "").split("?")[0] || "/");
+        } catch {
+          res.statusCode = 400;
+          res.end("Bad Request");
+          return;
+        }
+        if (rawUrl.includes("\0")) {
+          res.statusCode = 400;
+          res.end("Bad Request");
+          return;
+        }
         const relativeUrl = rawUrl.replace(/^\/+/, "");
         const filePath = path.resolve(live2dRoot, relativeUrl);
+        const relativePath = path.relative(live2dRoot, filePath);
 
-        if (!filePath.startsWith(live2dRoot)) {
+        if (relativePath.startsWith(`..${path.sep}`) || relativePath === ".." || path.isAbsolute(relativePath)) {
           res.statusCode = 403;
           res.end("Forbidden");
           return;
@@ -40,9 +53,6 @@ function live2dAssetPlugin() {
     },
   };
 }
-
-
-
 export default defineConfig({
   plugins: [live2dAssetPlugin()],
   server: {

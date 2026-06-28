@@ -16,6 +16,7 @@ import json
 import logging
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
 import cv2
 import numpy as np
@@ -34,7 +35,26 @@ _recognizer: Optional[FerPlusEmotionRecognizer] = None
 class EmotionRequestHandler(BaseHTTPRequestHandler):
     """情绪推理 HTTP 处理器。"""
 
+    def do_GET(self) -> None:
+        if not self._is_request_origin_allowed():
+            self._send_json(403, {"error": "Origin 不允许访问本地情绪服务"})
+            return
+        if self.path != "/health":
+            self._send_json(404, {"error": "not found"})
+            return
+        self._send_json(
+            200,
+            {
+                "ok": _recognizer is not None and _recognizer.is_loaded(),
+                "service": "visual-companion-emotion",
+                "backend": "ferplus-onnx",
+            },
+        )
+
     def do_POST(self) -> None:
+        if not self._is_request_origin_allowed():
+            self._send_json(403, {"error": "Origin 不允许访问本地情绪服务"})
+            return
         if self.path != "/emotion":
             self._send_json(404, {"error": "not found"})
             return
@@ -93,16 +113,32 @@ class EmotionRequestHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))
-        self.send_header("Access-Control-Allow-Origin", "*")
+        origin = str(self.headers.get("Origin") or "").strip()
+        if origin and self._is_request_origin_allowed():
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
         self.end_headers()
         self.wfile.write(payload)
 
     def do_OPTIONS(self) -> None:
+        if not self._is_request_origin_allowed():
+            self._send_json(403, {"error": "Origin 不允许访问本地情绪服务"})
+            return
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+        origin = str(self.headers.get("Origin") or "").strip()
+        if origin:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
+
+    def _is_request_origin_allowed(self) -> bool:
+        origin = str(self.headers.get("Origin") or "").strip()
+        if not origin:
+            return True
+        parsed = urlparse(origin)
+        return parsed.scheme in {"http", "https"} and parsed.hostname in {"127.0.0.1", "localhost", "::1"}
 
     def log_message(self, fmt, *args) -> None:
         logger.debug(fmt, *args)

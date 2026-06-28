@@ -7,7 +7,7 @@
 
     from .asr_interface import create_asr_engine
 
-    engine = create_asr_engine("sherpa-onnx", model_type="paraformer", ...)
+    engine = create_asr_engine("sherpa-onnx", language="zh")
     text = engine.transcribe_np(audio_chunk)        # 同步
     text = await engine.async_transcribe_np(chunk)   # 异步
 """

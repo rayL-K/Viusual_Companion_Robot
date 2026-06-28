@@ -1,7 +1,14 @@
 {
-  "active": "voxcpm_hf_space_test",
+  "active": "sherpa_vits",
   "active_reference": "soft_girl",
   "models": {
+    "sherpa_vits": {
+      "backend": "sherpa_onnx",
+      "display_name": "本机轻量 VITS",
+      "model_path": "main/models/tts/sherpa-onnx",
+      "speaker_id": 0,
+      "description": "sherpa-onnx Aishell3 中文多说话人模型。完全离线、低延迟，首次使用会自动下载模型。"
+    },
     "voxcpm_hf_space_test": {
       "backend": "voxcpm_hf_space",
       "display_name": "公网 API 模式",

@@ -70,9 +70,9 @@ flowchart TB
 | **Live2D 展示** | ✅ | Strawberry_Rabbit 模型，表情/动作/口型/鼠标跟随/待机/拖拽缩放 |
 | **动作映射** | ✅ | 80+ 关键词 + 缓存，精准映射到 27 个 Live2D 动作 |
 | **情绪识别** | 🧪 | FER+ ONNX、HTTP/CORS、真实摄像头预览与无脸回退已在 Win10 验证；真人表情和板端性能待验收 |
-| **语音合成 (TTS)** | 🧪 | sherpa-onnx Aishell3 已在 Win10 完成真实中文 WAV 合成；VoxCPM2 与板端音质/延迟待验收 |
-| **语音识别 (ASR)** | ⚙️ | sherpa-onnx 后端已实现，待接入麦克风 |
-| **语音打断 (VAD)** | 🧪 | WebRTC VAD 状态机与 Win10 麦克风电平已验证，语音打断阈值待真人调校 |
+| **语音合成 (TTS)** | 🧪 | sherpa-onnx Aishell3 已接入网页并在 Win10 完成真实播放；VoxCPM2 与板端音质/延迟待验收 |
+| **语音识别 (ASR)** | 🧪 | AudioWorklet → WebRTC VAD → SenseVoice INT8 离线闭环已在 Win10 验证；真人识别率待调校 |
+| **语音打断 (VAD)** | 🧪 | WebRTC VAD 已用于句段过滤，播放期间会暂停采集防回声；真人打断策略待实现和调校 |
 | **记忆模块** | ✅ | SQLite 对话轮次存储，DialogueContext 维护视觉+对话上下文 |
 | **消息总线** | ✅ | RobotEvent + 事件类型常量，解耦模块通信 |
 | **ELF2 部署** | ⚙️ | 配置就绪，待板端安装依赖 |
@@ -87,6 +87,7 @@ main/
 ├── src/visual_companion_robot/
 │   ├── integrations/               # 模型运行时 + 外部服务集成
 │   │   ├── model_runtime.py        #   RknnEngine / RkllmEngine / OnnxEngine
+│   │   ├── model_assets.py         #   模型安全下载与解压
 │   │   ├── llm_client.py           #   LlmClient 抽象 + DeepSeek/Local 双实现
 │   │   └── web_context.py          #   Open-Meteo 天气查询
 │   ├── perception/                 # 感知层
@@ -97,7 +98,8 @@ main/
 │   │   ├── emotion_server.py       #   情绪推理 HTTP 服务
 │   │   ├── perception_loop.py      #   摄像头→视觉→总线 主循环
 │   │   ├── asr_interface.py        #   ASR 抽象基类 + 工厂
-│   │   ├── sherpa_onnx_asr.py      #   sherpa-onnx ASR 后端
+│   │   ├── sherpa_onnx_asr.py      #   SenseVoice INT8 后端
+│   │   ├── offline_asr_service.py  #   PCM16 / VAD / ASR 编排
 │   │   └── vad.py                  #   WebRTC VAD 语音打断
 │   ├── brain/                      # 对话决策层
 │   │   ├── dialogue.py             #   DialogueContext + DialogueTurn
@@ -117,6 +119,7 @@ main/
 ├── live2d_stage/                   # Vite Live2D 网页控制台
 │   └── src/
 │       ├── stage.js                #   主舞台 + 真实运行后端状态面板
+│       ├── offline-asr-client.js   #   PCM 句段切分与本机 ASR 客户端
 │       ├── emotion-onnx-client.js  #   情绪分类（调用后端 FER+）
 │       └── perception-client.js    #   MediaPipe 人脸追踪
 └── tools/
@@ -140,7 +143,8 @@ tools\launchers\test_live2d.bat
 tools\launchers\live2d_stage.bat
 ```
 
-外部服务密钥只放在当前终端环境变量中，不写入代码或配置：
+外部服务密钥只放在当前终端环境变量，或被 Git 忽略的
+`main/config/local.env` 中；不得写入受版本控制的文件：
 
 ```powershell
 $env:DEEPSEEK_API_KEY = "..."
@@ -181,7 +185,7 @@ python main/app.py
 
 ## 后续路线
 
-1. 将 sherpa-onnx ASR 与 WebRTC VAD 接入当前浏览器/本地麦克风输入闭环
-2. 在真人交互中调校人脸情绪、语音打断与动作映射阈值
-3. 在 ELF2/RK3588 上验收 YOLO/RKNN、轻量 TTS 与本地 LLM 的延迟和内存占用
-4. 补齐 VoxCPM2 模型与授权音色资源后，验收音质、缓存和断网降级
+1. 在真人交互中调校 SenseVoice 句段阈值、人脸情绪、语音打断与动作映射
+2. 在 ELF2/RK3588 上验收 YOLO/RKNN、SenseVoice、轻量 TTS 与本地 LLM 的延迟和内存占用
+3. 补齐 VoxCPM2 模型与授权音色资源后，验收音质、缓存和断网降级
+4. 实现可抢占当前 TTS 的真人语音打断策略

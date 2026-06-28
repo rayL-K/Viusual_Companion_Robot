@@ -11,6 +11,19 @@ let _onStatus = null;
 
 /** @type {import('@mediapipe/tasks-vision').FaceLandmarker} */
 let _landmarker = null;
+let _landmarkerLoadPromise = null;
+
+async function loadFaceLandmarker() {
+  const { FilesetResolver, FaceLandmarker } = await import("./mediapipe/vision_bundle.js");
+  const vision = await FilesetResolver.forVisionTasks("/mediapipe/wasm/");
+  return FaceLandmarker.createFromOptions(vision, {
+    baseOptions: {
+      modelAssetPath: "/mediapipe/model/face_landmarker.task",
+    },
+    outputFaceBlendshapes: true,
+    numFaces: 1,
+  });
+}
 
 /**
  * 状态: "loading" / "detecting" / "tracking" / "error" / "stopped"
@@ -19,6 +32,8 @@ export const perceptionClient = {
   _videoEl: null,
   _running: false,
   _timer: 0,
+  _startTimer: 0,
+  _generation: 0,
   _result: null,
   _status: "stopped",
   _lastEmotion: "",
@@ -66,36 +81,38 @@ export const perceptionClient = {
 
   async start(videoEl) {
     if (this._running) this.stop();
+    const generation = ++this._generation;
     this._videoEl = videoEl;
 
-      // 第一次动态加载 vision 库 + 模型
+    // 第一次动态加载 vision 库 + 模型；并发启动复用同一个加载任务。
     if (!_landmarker) {
       this._setStatus("loading", "加载模型...");
       try {
-        const { FilesetResolver, FaceLandmarker } = await import("./mediapipe/vision_bundle.js");
-        const vision = await FilesetResolver.forVisionTasks("/mediapipe/wasm/");
-        _landmarker = await FaceLandmarker.createFromOptions(vision, {
-          baseOptions: {
-            modelAssetPath: "/mediapipe/model/face_landmarker.task",
-          },
-          outputFaceBlendshapes: true,
-          numFaces: 1,
-        });
+        _landmarkerLoadPromise ||= loadFaceLandmarker();
+        _landmarker = await _landmarkerLoadPromise;
       } catch (err) {
         console.warn("[Perception] 模型加载失败:", err);
-        this._setStatus("error", err.message);
+        if (generation === this._generation) this._setStatus("error", err.message);
         return;
+      } finally {
+        _landmarkerLoadPromise = null;
       }
     }
+    if (generation !== this._generation || this._videoEl !== videoEl) return;
 
     this._running = true;
     this._setStatus("detecting", "等待人脸...");
     // 启动延迟 500ms，等视频流稳定后再开始检测避免闪烁
-    setTimeout(() => { if (this._running) this._detectLoop(); }, 500);
+    this._startTimer = setTimeout(() => {
+      this._startTimer = 0;
+      if (this._running && generation === this._generation) this._detectLoop();
+    }, 500);
   },
 
   stop() {
+    this._generation += 1;
     this._running = false;
+    if (this._startTimer) { clearTimeout(this._startTimer); this._startTimer = 0; }
     if (this._timer) { clearTimeout(this._timer); this._timer = 0; }
     this._result = null;
     this._videoEl = null;
@@ -104,6 +121,7 @@ export const perceptionClient = {
     this._lastOnnxAt = 0;
     this._reportedOnnxStatus = "";
     this._latestParams = null;
+    this._emoHistory = [];
     this._setStatus("stopped");
   },
 
@@ -216,6 +234,7 @@ export const perceptionClient = {
 
   async _detectLoop() {
     if (!this._running || !this._videoEl) return;
+    const generation = this._generation;
     const video = this._videoEl;
     if (video.readyState >= 2 && video.videoWidth > 0) {
       try {
@@ -228,16 +247,17 @@ export const perceptionClient = {
             this._setStatus("detecting", "无人脸");
           }
         } else {
-          await this._updateOnnxEmotion(video);
+          await this._updateOnnxEmotion(video, generation);
         }
       } catch (error) {
-        this._setStatus("error", error.message || "视觉感知失败");
+        if (generation === this._generation) this._setStatus("error", error.message || "视觉感知失败");
       }
     }
+    if (!this._running || generation !== this._generation) return;
     this._timer = setTimeout(() => this._detectLoop(), DETECT_INTERVAL_MS);
   },
 
-  async _updateOnnxEmotion(video) {
+  async _updateOnnxEmotion(video, generation) {
     const now = performance.now();
     if (now - this._lastOnnxAt < ONNX_EMOTION_INTERVAL_MS) {
       return;
@@ -249,6 +269,7 @@ export const perceptionClient = {
     }
 
     const result = await emotionOnnxClient.classify(video, faceBox);
+    if (!this._running || generation !== this._generation) return;
     if (result) {
       this._onnxEmotion = result;
       return;
