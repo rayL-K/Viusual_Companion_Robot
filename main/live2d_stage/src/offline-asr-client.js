@@ -139,6 +139,59 @@ export class PcmSpeechSegmenter {
   }
 }
 
+export class PcmBargeInDetector {
+  constructor(options = {}) {
+    this.sampleRate = options.sampleRate || ASR_SAMPLE_RATE;
+    this.energyThreshold = options.energyThreshold ?? 0.045;
+    this.baselineMultiplier = options.baselineMultiplier ?? 1.8;
+    this.warmupSamples = Math.round(this.sampleRate * (options.warmupMs ?? 320) / 1000);
+    this.minSpeechSamples = Math.round(this.sampleRate * (options.minSpeechMs ?? 240) / 1000);
+    this.reset();
+  }
+
+  reset() {
+    this.baselineRms = 0;
+    this.observedSamples = 0;
+    this.#clearCandidate();
+  }
+
+  #clearCandidate() {
+    this.chunks = [];
+    this.totalLength = 0;
+  }
+
+  push(samples) {
+    if (!(samples instanceof Float32Array) || samples.length === 0) {
+      return null;
+    }
+    const rms = audioRms(samples);
+    if (this.observedSamples < this.warmupSamples) {
+      this.observedSamples += samples.length;
+      this.baselineRms = Math.max(this.baselineRms, rms);
+      this.#clearCandidate();
+      return null;
+    }
+
+    const threshold = Math.max(this.energyThreshold, this.baselineRms * this.baselineMultiplier);
+    if (rms < threshold) {
+      this.baselineRms = this.baselineRms * 0.98 + rms * 0.02;
+      this.#clearCandidate();
+      return null;
+    }
+
+    const chunk = samples.slice();
+    this.chunks.push(chunk);
+    this.totalLength += chunk.length;
+    if (this.totalLength < this.minSpeechSamples) {
+      return null;
+    }
+
+    const detected = concatChunks(this.chunks, this.totalLength);
+    this.#clearCandidate();
+    return detected;
+  }
+}
+
 export class OfflineAsrClient {
   constructor(options = {}) {
     this.asrUrl = options.asrUrl || DEFAULT_ASR_URL;

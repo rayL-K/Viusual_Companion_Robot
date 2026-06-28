@@ -72,7 +72,7 @@ flowchart TB
 | **情绪识别** | 🧪 | FER+ ONNX、HTTP/CORS、真实摄像头预览与无脸回退已在 Win10 验证；真人表情和板端性能待验收 |
 | **语音合成 (TTS)** | 🧪 | sherpa-onnx Aishell3 已接入网页并在 Win10 完成真实播放；VoxCPM2 与板端音质/延迟待验收 |
 | **语音识别 (ASR)** | 🧪 | AudioWorklet → WebRTC VAD → SenseVoice INT8 离线闭环已在 Win10 验证；真人识别率待调校 |
-| **语音打断 (VAD)** | 🧪 | WebRTC VAD 已用于句段过滤，播放期间会暂停采集防回声；真人打断策略待实现和调校 |
+| **语音打断 (VAD)** | 🧪 | WebRTC VAD 用于句段过滤，TTS 播放期间启用高阈值持续语音检测并支持用户抢占；阈值待真人调校 |
 | **记忆模块** | ✅ | SQLite 对话轮次存储，DialogueContext 维护视觉+对话上下文 |
 | **消息总线** | ✅ | RobotEvent + 事件类型常量，解耦模块通信 |
 | **ELF2 部署** | ⚙️ | 配置就绪，待板端安装依赖 |
@@ -188,4 +188,4 @@ python main/app.py
 1. 在真人交互中调校 SenseVoice 句段阈值、人脸情绪、语音打断与动作映射
 2. 在 ELF2/RK3588 上验收 YOLO/RKNN、SenseVoice、轻量 TTS 与本地 LLM 的延迟和内存占用
 3. 补齐 VoxCPM2 模型与授权音色资源后，验收音质、缓存和断网降级
-4. 实现可抢占当前 TTS 的真人语音打断策略
+4. 在真人连续对话中调校 TTS 抢占阈值，记录扬声器回声与环境噪声误触发率

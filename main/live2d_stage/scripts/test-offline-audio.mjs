@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 
 import {
+  PcmBargeInDetector,
   PcmSpeechSegmenter,
   audioRms,
   floatToPcm16,
@@ -51,5 +52,33 @@ assert.equal(maxLengthSegmenter.active, false);
 const quietSegmenter = new PcmSpeechSegmenter({ sampleRate: 16000, energyThreshold: 0.2 });
 assert.equal(quietSegmenter.push(speech), null);
 assert.equal(quietSegmenter.flush(), null);
+
+const bargeIn = new PcmBargeInDetector({
+  sampleRate: 16000,
+  energyThreshold: 0.05,
+  warmupMs: 0,
+  minSpeechMs: 200,
+});
+assert.equal(bargeIn.push(speech.slice(0, 1600)), null);
+const interruptionAudio = bargeIn.push(speech.slice(1600, 3200));
+assert(interruptionAudio instanceof Float32Array);
+assert.equal(interruptionAudio.length, 3200);
+assert.equal(bargeIn.push(speech.slice(0, 1600)), null);
+assert.equal(bargeIn.push(silence), null);
+assert.equal(bargeIn.push(speech.slice(1600, 3200)), null);
+
+const echoProtectedBargeIn = new PcmBargeInDetector({
+  sampleRate: 16000,
+  energyThreshold: 0.02,
+  baselineMultiplier: 1.8,
+  warmupMs: 200,
+  minSpeechMs: 200,
+});
+const echo = Float32Array.from({ length: 1600 }, (_, index) => 0.03 * Math.sin(index / 4));
+assert.equal(echoProtectedBargeIn.push(echo), null);
+assert.equal(echoProtectedBargeIn.push(echo), null);
+assert.equal(echoProtectedBargeIn.push(echo), null);
+assert.equal(echoProtectedBargeIn.push(speech.slice(0, 1600)), null);
+assert(echoProtectedBargeIn.push(speech.slice(1600, 3200)) instanceof Float32Array);
 
 console.log("offline audio tests passed");

@@ -1,6 +1,7 @@
 import { perceptionClient } from "./perception-client.js";
 import {
   ASR_SAMPLE_RATE,
+  PcmBargeInDetector,
   PcmSpeechSegmenter,
   offlineAsrClient,
   resampleAudio,
@@ -208,6 +209,8 @@ const modelState = {
   audioWorklet: null,
   audioSilentGain: null,
   audioSegmenter: null,
+  audioBargeInDetector: null,
+  audioPlaybackGuardActive: false,
   audioTranscriptionPaused: false,
   audioTranscriptionQueue: [],
   audioTranscriptionRunning: false,
@@ -1556,6 +1559,9 @@ async function speakPlan(plan) {
 
   try {
     const audioBlob = await requestExternalTts(plan, rate);
+    if (requestId !== modelState.speechRequestId) {
+      return;
+    }
     const played = await playExternalAudio(audioBlob, plan, rate, requestId);
     if (!played) {
       stopThinkingAnimation({ restoreMotion: true, clearRoulette: true });
@@ -1639,7 +1645,23 @@ function stopSpeechPlayback() {
   }
   resumeOfflineAsrAfterPlayback();
   stopThinkingAnimation({ restoreMotion: false, clearRoulette: false });
+  clearReplyStream();
   stopMouthSync();
+}
+
+function releaseExternalAudio(audio, audioUrl) {
+  audio.onplay = null;
+  audio.onpause = null;
+  audio.onended = null;
+  audio.onerror = null;
+  if (modelState.audio === audio) {
+    modelState.audio = null;
+  }
+  if (modelState.audioUrl === audioUrl) {
+    modelState.audioUrl = "";
+  }
+  URL.revokeObjectURL(audioUrl);
+  audio.src = "";
 }
 
 async function requestExternalTts(plan, rate) {
@@ -1685,9 +1707,10 @@ async function playExternalAudio(audioBlob, plan, rate, requestId) {
 
   audio.onplay = () => {
     if (requestId !== modelState.speechRequestId) {
+      releaseExternalAudio(audio, audioUrl);
       return;
     }
-    pauseOfflineAsrForPlayback();
+    armOfflineAsrBargeIn();
     applyPlanVisualsForSpeech(plan).catch((error) => {
       addControlLog("语音同步动作失败", { error: error.message });
     });
@@ -1710,6 +1733,7 @@ async function playExternalAudio(audioBlob, plan, rate, requestId) {
     }
   };
   audio.onended = () => {
+    releaseExternalAudio(audio, audioUrl);
     if (requestId === modelState.speechRequestId) {
       stopMouthSync();
       finishReplyStream();
@@ -1719,6 +1743,7 @@ async function playExternalAudio(audioBlob, plan, rate, requestId) {
     }
   };
   audio.onerror = () => {
+    releaseExternalAudio(audio, audioUrl);
     if (requestId !== modelState.speechRequestId) {
       return;
     }
@@ -1731,12 +1756,14 @@ async function playExternalAudio(audioBlob, plan, rate, requestId) {
   try {
     stopThinkingAnimation({ restoreMotion: false, clearRoulette: false });
     await clearRouletteMotionArtifacts();
+    if (requestId !== modelState.speechRequestId) {
+      releaseExternalAudio(audio, audioUrl);
+      return true;
+    }
     await audio.play();
     return true;
   } catch (error) {
-    URL.revokeObjectURL(audioUrl);
-    modelState.audio = null;
-    modelState.audioUrl = "";
+    releaseExternalAudio(audio, audioUrl);
     resumeOfflineAsrAfterPlayback();
     console.warn("TTS 音频播放失败。", error);
     return false;
@@ -2471,6 +2498,8 @@ async function startAudioMonitor() {
     modelState.audioSilentGain = modelState.audioContext.createGain();
     modelState.audioSilentGain.gain.value = 0;
     modelState.audioSegmenter = new PcmSpeechSegmenter({ sampleRate: modelState.audioContext.sampleRate });
+    modelState.audioBargeInDetector = new PcmBargeInDetector({ sampleRate: modelState.audioContext.sampleRate });
+    modelState.audioPlaybackGuardActive = false;
     modelState.audioTranscriptionPaused = false;
     modelState.audioTranscriptionQueue = [];
     modelState.audioCaptureGeneration += 1;
@@ -2531,6 +2560,9 @@ function stopAudioMonitor(options = {}) {
   modelState.audioTranscriptionQueue = [];
   modelState.audioSegmenter?.reset();
   modelState.audioSegmenter = null;
+  modelState.audioBargeInDetector?.reset();
+  modelState.audioBargeInDetector = null;
+  modelState.audioPlaybackGuardActive = false;
   modelState.audioSpeechActive = false;
   if (modelState.audioLevelFrame) {
     window.cancelAnimationFrame(modelState.audioLevelFrame);
@@ -2577,7 +2609,22 @@ function handlePcmCapture(event) {
     return;
   }
 
-  const segment = modelState.audioSegmenter.push(new Float32Array(event.data));
+  const samples = new Float32Array(event.data);
+  if (modelState.audioPlaybackGuardActive) {
+    const interruptionAudio = modelState.audioBargeInDetector?.push(samples);
+    if (!interruptionAudio) {
+      return;
+    }
+    stopSpeechPlayback();
+    modelState.audioSegmenter.reset();
+    modelState.audioSegmenter.push(interruptionAudio);
+    setAudioTranscript("检测到你正在说话，已停止兔兔的语音并继续识别……");
+    setStatus("已响应语音打断", "请继续说完当前这句话。");
+    addControlLog("用户语音打断 TTS", { durationMs: interruptionAudio.length / modelState.audioContext.sampleRate * 1000 });
+    return;
+  }
+
+  const segment = modelState.audioSegmenter.push(samples);
   if (modelState.audioSegmenter.active && !modelState.audioSpeechActive) {
     modelState.audioSpeechActive = true;
     setAudioTranscript("检测到你正在说话，等待句尾……");
@@ -2587,13 +2634,13 @@ function handlePcmCapture(event) {
   }
 
   modelState.audioSpeechActive = false;
-  const samples = resampleAudio(segment, modelState.audioContext?.sampleRate || ASR_SAMPLE_RATE);
+  const resampledSamples = resampleAudio(segment, modelState.audioContext?.sampleRate || ASR_SAMPLE_RATE);
   if (modelState.audioTranscriptionQueue.length >= 2) {
-    addControlLog("语音片段已丢弃", { reason: "asr_queue_full", durationMs: samples.length / 16 });
+    addControlLog("语音片段已丢弃", { reason: "asr_queue_full", durationMs: resampledSamples.length / 16 });
     return;
   }
   modelState.audioTranscriptionQueue.push({
-    samples,
+    samples: resampledSamples,
     generation: modelState.audioCaptureGeneration,
   });
   void processOfflineAsrQueue();
@@ -2638,21 +2685,24 @@ async function processOfflineAsrQueue() {
   }
 }
 
-function pauseOfflineAsrForPlayback() {
+function armOfflineAsrBargeIn() {
   if (!modelState.audioStream) {
     return;
   }
-  modelState.audioTranscriptionPaused = true;
   modelState.audioSegmenter?.reset();
+  modelState.audioBargeInDetector?.reset();
+  modelState.audioPlaybackGuardActive = true;
   modelState.audioSpeechActive = false;
-  setAudioTranscript("兔兔正在说话，暂时暂停语音识别，避免把外放声音误当成你的输入。");
+  setAudioTranscript("兔兔正在说话；已启用高阈值监听，你开口时会自动打断播放。");
 }
 
 function resumeOfflineAsrAfterPlayback() {
-  if (!modelState.audioStream || !modelState.audioTranscriptionPaused) {
+  if (!modelState.audioStream) {
     return;
   }
   modelState.audioSegmenter?.reset();
+  modelState.audioBargeInDetector?.reset();
+  modelState.audioPlaybackGuardActive = false;
   modelState.audioTranscriptionPaused = false;
   setAudioTranscript("正在本机监听；检测到一句话结束后会离线识别并自动发送。");
 }
