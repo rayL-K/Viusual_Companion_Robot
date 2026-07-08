@@ -54,6 +54,9 @@ const MODEL_WHEEL_ZOOM_STEP = 0.0015;
 const MODEL_CLICK_MOVE_TOLERANCE_PX = 6;
 const ACTION_UI_INTERVAL_MS = 125;
 const RENDER_SAMPLE_MS = 2000;
+const PERCEPTION_PANEL_REFRESH_MS = 1000;
+const AUDIO_LEVEL_STYLE_REFRESH_MS = 50;
+const AUDIO_LEVEL_TEXT_REFRESH_MS = 300;
 const HIDDEN_MODEL_PARAMETERS = Object.freeze({
   Param44: 0,
   Param59: 0,
@@ -223,6 +226,8 @@ const modelState = {
   audioAnalyser: null,
   audioLevelData: null,
   audioLevelFrame: 0,
+  lastAudioLevelStyleAt: 0,
+  lastAudioLevelTextAt: 0,
   audioDrag: null,
   audioWorklet: null,
   audioScriptProcessor: null,
@@ -2277,8 +2282,8 @@ function buildCameraConstraints() {
     return {
       video: {
         deviceId: { exact: modelState.selectedCameraId },
-        width: { ideal: 640 },
-        height: { ideal: 480 },
+        width: { ideal: 640, max: 640 },
+        height: { ideal: 480, max: 480 },
         frameRate: { ideal: 60, max: 60 },
       },
       audio: false,
@@ -2287,8 +2292,8 @@ function buildCameraConstraints() {
   return {
     video: {
       facingMode: { ideal: "user" },
-      width: { ideal: 640 },
-      height: { ideal: 480 },
+      width: { ideal: 640, max: 640 },
+      height: { ideal: 480, max: 480 },
       frameRate: { ideal: 60, max: 60 },
     },
     audio: false,
@@ -2336,7 +2341,7 @@ async function startCameraPreview() {
           modelState.perceptionTimer = window.setInterval(() => {
             const ctx = perceptionClient.getContext();
             if (ctx) updatePerceptionPanel(ctx);
-          }, 250);
+          }, PERCEPTION_PANEL_REFRESH_MS);
         }
       } else if (status === "starting" || status === "analyzing") {
         setCameraStatus(detail || text, "");
@@ -2835,8 +2840,15 @@ function updateAudioLevelLoop() {
     sum += normalized * normalized;
   }
   const level = clamp(Math.sqrt(sum / data.length) * 3.2, 0, 1);
-  audioWindowEl.style.setProperty("--audio-level", level.toFixed(3));
-  audioWindowStatusEl.textContent = `当前麦克风音量 ${Math.round(level * 100)}%。`;
+  const audioLevelNow = performance.now();
+  if (audioLevelNow - modelState.lastAudioLevelStyleAt >= AUDIO_LEVEL_STYLE_REFRESH_MS) {
+    modelState.lastAudioLevelStyleAt = audioLevelNow;
+    audioWindowEl.style.setProperty("--audio-level", level.toFixed(3));
+  }
+  if (audioLevelNow - modelState.lastAudioLevelTextAt >= AUDIO_LEVEL_TEXT_REFRESH_MS) {
+    modelState.lastAudioLevelTextAt = audioLevelNow;
+    audioWindowStatusEl.textContent = `当前麦克风音量 ${Math.round(level * 100)}%。`;
+  }
   modelState.audioLevelFrame = window.requestAnimationFrame(updateAudioLevelLoop);
 }
 
@@ -2850,6 +2862,8 @@ function stopAudioMonitor(options = {}) {
   modelState.audioBargeInDetector = null;
   modelState.audioPlaybackGuardActive = false;
   modelState.audioSpeechActive = false;
+  modelState.lastAudioLevelStyleAt = 0;
+  modelState.lastAudioLevelTextAt = 0;
   if (modelState.audioRealtimeStreaming) {
     realtimeAsrClient.cancel();
     modelState.audioRealtimeStreaming = false;

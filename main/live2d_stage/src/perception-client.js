@@ -7,8 +7,11 @@ const CONTEXT_MAX_AGE_MS = 15000;
 const SEMANTIC_CONTEXT_MAX_AGE_MS = 30000;
 const CHAT_SEMANTIC_WAIT_MS = 1200;
 const CHAT_SEMANTIC_POLL_MS = 100;
-const CAPTURE_MAX_WIDTH = 480;
-const SPEAKER_CAPTURE_INTERVAL_MS = 125;
+const CAPTURE_MAX_WIDTH = 320;
+const CAPTURE_JPEG_QUALITY = 0.48;
+const CAPTURE_IDLE_TIMEOUT_MS = 900;
+const SPEAKER_CAPTURE_INTERVAL_MS = 333;
+const SPEAKER_FRAME_LIMIT = 8;
 const SPEAKER_CONTEXT_MAX_AGE_MS = 10000;
 let onStatus = null;
 
@@ -260,7 +263,9 @@ export const perceptionClient = {
       if (!this._context.receivedAt) {
         this._setStatus("analyzing", "ELF2 正在分析当前画面...");
       }
-      const image = await this._captureJpegBase64(video, CAPTURE_MAX_WIDTH, 0.62, "_canvas");
+      await waitForCaptureIdle(CAPTURE_IDLE_TIMEOUT_MS);
+      if (!this._isCurrent(generation)) return;
+      const image = await this._captureJpegBase64(video, CAPTURE_MAX_WIDTH, CAPTURE_JPEG_QUALITY, "_canvas");
       const result = await this._requestVision(image);
       if (!this._isCurrent(generation)) return;
       const receivedAt = Date.now();
@@ -320,8 +325,8 @@ export const perceptionClient = {
     const height = Math.max(1, Math.round(video.videoHeight * scale));
     this[canvasProperty] ||= document.createElement("canvas");
     const canvas = this[canvasProperty];
-    canvas.width = width;
-    canvas.height = height;
+    if (canvas.width !== width) canvas.width = width;
+    if (canvas.height !== height) canvas.height = height;
     const context = canvas.getContext("2d", { alpha: false });
     if (!context) throw new Error("浏览器无法创建摄像头帧画布");
     context.drawImage(video, 0, 0, width, height);
@@ -344,10 +349,12 @@ export const perceptionClient = {
     }
     this._speakerCaptureBusy = true;
     try {
-      const image = await this._captureJpegBase64(video, 160, 0.45, "_speakerCanvas");
+      await waitForCaptureIdle(120);
+      if (!this._speakerCapturing) return;
+      const image = await this._captureJpegBase64(video, 144, 0.42, "_speakerCanvas");
       if (!this._speakerCapturing) return;
       this._speakerFrames.push({ image, timestamp_ms: Date.now() - this._speakerStartedAt });
-      if (this._speakerFrames.length > 16) this._speakerFrames.shift();
+      if (this._speakerFrames.length > SPEAKER_FRAME_LIMIT) this._speakerFrames.shift();
     } finally {
       this._speakerCaptureBusy = false;
       this._scheduleSpeakerFrame(SPEAKER_CAPTURE_INTERVAL_MS);
@@ -459,6 +466,15 @@ function live2dParamsFromContext(context) {
     emotionConfidence: confidence,
     fullScores: context.fullScores || {},
   };
+}
+
+function waitForCaptureIdle(timeoutMs) {
+  if (typeof window === "undefined" || typeof window.requestIdleCallback !== "function") {
+    return new Promise((resolve) => globalThis.setTimeout(resolve, 0));
+  }
+  return new Promise((resolve) => {
+    window.requestIdleCallback(() => resolve(), { timeout: timeoutMs });
+  });
 }
 
 function blobToBase64(blob) {

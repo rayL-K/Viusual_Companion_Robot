@@ -947,6 +947,8 @@ button {
   box-shadow: 0 18px 56px rgba(17, 24, 20, 0.24);
   cursor: grab;
   user-select: none;
+  contain: layout paint style;
+  transform: translateZ(0);
 }
 
 .camera-window:active {
@@ -960,6 +962,8 @@ button {
   background: #101511;
   object-fit: cover;
   pointer-events: none;
+  transform: translateZ(0);
+  backface-visibility: hidden;
 }
 
 .camera-resize-handle {
