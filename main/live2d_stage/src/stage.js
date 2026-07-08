@@ -1696,8 +1696,7 @@ async function speakPlan(plan) {
   if (!modelState.generatingSpeech) {
     startThinkingAnimation();
   }
-  setReplyText(plan.text);
-  setSpeechStatus(requestId, `正在生成 ${currentBackendLabel()} 音频`, "文字已先显示，音频生成完成后会自动播放。");
+  setSpeechStatus(requestId, `正在生成 ${currentBackendLabel()} 音频`, "音频生成完成后会自动播放。");
 
   try {
     const ttsStartedAt = performance.now();
