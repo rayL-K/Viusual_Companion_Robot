@@ -580,6 +580,33 @@ class VoxcpmControlServerTests(unittest.TestCase):
         self.assertNotIn("动作状态是", plan.text)
         self.assertNotIn("画面中有人", plan.text)
 
+    def test_visual_detail_followup_uses_current_vision_without_llm(self) -> None:
+        context = sanitize_vision_context(
+            {
+                "enabled": True,
+                "status": "running",
+                "semanticCaption": "人物：青年男性；外观和表情：戴眼镜，神情专注；环境：室内昏暗",
+                "sceneCaption": "画面中有1人",
+                "personActivity": "画面中有人",
+                "personCount": 1,
+                "objectsDetected": ["person"],
+            }
+        )
+
+        plan = build_direct_vision_control_plan(
+            "具体一点的特征呢。",
+            context,
+            expressions=["heart", "question"],
+            motions=["scene1", "captain"],
+        )
+
+        self.assertIsNotNone(plan)
+        assert plan is not None
+        self.assertIn("青年男性", plan.text)
+        self.assertIn("戴眼镜", plan.text)
+        self.assertNotIn("画面中有1人", plan.text)
+        self.assertNotIn("person", plan.text)
+
     def test_visual_question_reports_missing_context_instead_of_guessing(self) -> None:
         plan = build_direct_vision_control_plan(
             "你现在看到了什么？",

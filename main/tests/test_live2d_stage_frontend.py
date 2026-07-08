@@ -177,7 +177,9 @@ class Live2DStageFrontendTest(unittest.TestCase):
         self.assertIn("语音切换失败，已恢复原模型", self.stage_source)
 
     def test_visual_context_is_sent_with_chat_request(self) -> None:
-        self.assertIn("vision: perceptionClient.getContext()", self.stage_source)
+        self.assertIn("await perceptionClient.getContextForChat()", self.stage_source)
+        self.assertIn("getContextForChat(timeoutMs = CHAT_SEMANTIC_WAIT_MS)", self.perception_source)
+        self.assertIn("SEMANTIC_CONTEXT_MAX_AGE_MS", self.perception_source)
         self.assertIn("getContext(now = Date.now())", self.perception_source)
         self.assertIn("emotionSource", self.perception_source)
         self.assertIn("semanticCaption", self.perception_source)

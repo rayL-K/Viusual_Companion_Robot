@@ -4,6 +4,9 @@ const VISION_API_URL = apiUrl("/vision");
 export const VISION_FRAME_GAP_MS = 40;
 const START_DELAY_MS = 700;
 const CONTEXT_MAX_AGE_MS = 15000;
+const SEMANTIC_CONTEXT_MAX_AGE_MS = 30000;
+const CHAT_SEMANTIC_WAIT_MS = 1200;
+const CHAT_SEMANTIC_POLL_MS = 100;
 const CAPTURE_MAX_WIDTH = 480;
 const SPEAKER_CAPTURE_INTERVAL_MS = 125;
 const SPEAKER_CONTEXT_MAX_AGE_MS = 10000;
@@ -130,6 +133,7 @@ export const perceptionClient = {
   _speakerCapturing: false,
   _speakerCaptureBusy: false,
   _lastActiveSpeaker: null,
+  _lastSemanticContext: null,
   _live2dParams: null,
   _failureCount: 0,
   _lastTrackingStatusAt: 0,
@@ -142,10 +146,25 @@ export const perceptionClient = {
   get status() { return this._context.status || "stopped"; },
 
   getContext(now = Date.now()) {
-    const context = { ...this._context };
+    const context = this._withCachedSemantic({ ...this._context }, now);
     if (!context.enabled || !context.receivedAt) return context;
     if (now - context.receivedAt <= CONTEXT_MAX_AGE_MS) return context;
     return { ...context, status: "stale", stale: true };
+  },
+
+  async getContextForChat(timeoutMs = CHAT_SEMANTIC_WAIT_MS) {
+    const startedAt = Date.now();
+    while (this._running) {
+      const context = this.getContext();
+      if (!context.enabled || context.semanticCaption || context.status === "stale") {
+        return context;
+      }
+      if (Date.now() - startedAt >= timeoutMs) {
+        return { ...context, semanticStatus: context.semanticStatus || "waiting_timeout" };
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, CHAT_SEMANTIC_POLL_MS));
+    }
+    return this.getContext();
   },
 
   getLive2DParams() {
@@ -245,7 +264,8 @@ export const perceptionClient = {
       const result = await this._requestVision(image);
       if (!this._isCurrent(generation)) return;
       const receivedAt = Date.now();
-      this._context = normalizeVisionResult(result, receivedAt);
+      this._context = this._withCachedSemantic(normalizeVisionResult(result, receivedAt), receivedAt);
+      this._rememberSemanticContext(this._context, receivedAt);
       this._live2dParams = live2dParamsFromContext(this._context);
       this._failureCount = 0;
       if (
@@ -349,6 +369,29 @@ export const perceptionClient = {
 
   _isCurrent(generation) {
     return this._running && generation === this._generation;
+  },
+
+  _rememberSemanticContext(context, now = Date.now()) {
+    if (!context.semanticCaption) return;
+    this._lastSemanticContext = {
+      semanticCaption: context.semanticCaption,
+      semanticStatus: context.semanticStatus || "ready",
+      sceneCaption: context.sceneCaption || "",
+      receivedAt: now,
+    };
+  },
+
+  _withCachedSemantic(context, now = Date.now()) {
+    if (!context.enabled || context.semanticCaption) return context;
+    const cached = this._lastSemanticContext;
+    if (!cached || now - cached.receivedAt > SEMANTIC_CONTEXT_MAX_AGE_MS) return context;
+    return {
+      ...context,
+      semanticCaption: cached.semanticCaption,
+      semanticStatus: context.semanticStatus === "ready" ? "ready" : "cached",
+      semanticAgeMs: now - cached.receivedAt,
+      sceneCaption: context.sceneCaption || cached.sceneCaption,
+    };
   },
 
   _setStatus(status, detail = "") {

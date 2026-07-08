@@ -3629,13 +3629,14 @@ function holdVisibleAction(action, options = {}) {
 }
 
 async function requestChatPlan(userText) {
+  const visionContext = await perceptionClient.getContextForChat();
   const response = await fetch(CHAT_API_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       text: String(userText || "").trim(),
       rate: currentSpeechRate(),
-      vision: perceptionClient.getContext(),
+      vision: visionContext,
     }),
   });
   const payload = await response.json().catch(() => ({}));

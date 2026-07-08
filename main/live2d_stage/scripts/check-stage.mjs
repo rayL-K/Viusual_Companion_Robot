@@ -112,7 +112,7 @@ assert(stageScript.includes("用户语音打断 TTS"), "stage.js 缺少语音打
 assert(!stageScript.includes("webkitSpeechRecognition"), "stage.js 不应继续依赖联网的浏览器 Web Speech。");
 assert(pcmCaptureScript.includes("BATCH_SAMPLES = 1024"), "AudioWorklet 应批量投递 PCM，避免高频跨线程消息。");
 assert(viteConfig.includes("path.relative(live2dRoot, filePath)"), "Vite Live2D 资源服务必须使用真实路径边界检查。");
-assert(stageScript.includes("vision: perceptionClient.getContext()"), "stage.js 聊天请求缺少视觉上下文。");
+assert(stageScript.includes("await perceptionClient.getContextForChat()"), "stage.js 聊天请求缺少带语义等待的视觉上下文。");
 assert(stageScript.includes("STAGE_VIEW_MODE = \"fullbody\""), "stage.js 未启用全身构图。");
 assert(stageScript.includes("ACTION_FADE_MS = 300"), "stage.js 未把动作渐入渐出限制在 0.3 秒。");
 assert(stageScript.includes("openSidePanel"), "stage.js 缺少右侧面板展开逻辑。");
@@ -144,6 +144,7 @@ assert(perceptionScript.includes("this._scheduleNext(generation, retryDelay)"), 
 assert(!perceptionScript.includes("setInterval"), "浏览器视觉不能用定时并发堆积请求。");
 assert(perceptionScript.includes('method: "POST"'), "perception-client.js 未上传摄像头帧。");
 assert(perceptionScript.includes("getContext(now = Date.now())"), "perception-client.js 缺少给 LLM 使用的视觉上下文。");
+assert(perceptionScript.includes("getContextForChat(timeoutMs = CHAT_SEMANTIC_WAIT_MS)"), "perception-client.js 聊天上下文必须等待语义结果。");
 assert(perceptionScript.includes("emotionSource"), "perception-client.js 缺少情绪来源字段。");
 assert(perceptionScript.includes("fullScores"), "perception-client.js 缺少完整情绪分数字段。");
 assert(perceptionScript.includes("generation === this._generation"), "perception-client.js 缺少摄像头异步启动取消保护。");

@@ -100,7 +100,7 @@ VISION_SERVICE = BoardVisionService(
         pose_model_path=Path(os.environ.get("VISUAL_COMPANION_POSE_MODEL") or DEFAULT_POSE_MODEL_PATH),
         emotion_service_url=EMOTION_SERVICE_URL,
         semantic_service_url=SEMANTIC_VLM_SERVICE_URL,
-        semantic_refresh_seconds=float(os.environ.get("VISUAL_COMPANION_VLM_REFRESH_SECONDS") or 6.0),
+        semantic_refresh_seconds=float(os.environ.get("VISUAL_COMPANION_VLM_REFRESH_SECONDS") or 2.0),
         confidence_threshold=float(os.environ.get("VISUAL_COMPANION_VISION_CONFIDENCE") or 0.35),
     )
 )
@@ -387,6 +387,20 @@ VISION_QUESTION_KEYWORDS = (
     "现在环境",
 )
 
+VISION_DETAIL_FOLLOWUP_KEYWORDS = (
+    "具体一点",
+    "具体点",
+    "详细一点",
+    "详细点",
+    "细节",
+    "特征",
+    "再说说",
+    "再讲讲",
+    "展开说",
+    "清楚一点",
+    "清楚点",
+)
+
 
 OBJECT_NAME_MAP = {
     "person": "",
@@ -408,6 +422,7 @@ OBJECT_NAME_MAP = {
 }
 
 GENERIC_ACTIVITY_TEXTS = {"画面中有人", "有人", "person", "unknown", "未知"}
+GENERIC_SCENE_TEXTS = {"画面中有1人", "画面中有人", "有1人", "有人"}
 
 
 def is_visual_description_request(user_text: str) -> bool:
@@ -419,6 +434,22 @@ def is_visual_description_request(user_text: str) -> bool:
     if any(keyword in text for keyword in VISION_QUESTION_KEYWORDS):
         return True
     return ("你" in text and ("看到" in text or "看见" in text) and ("画面" in text or "什么" in text))
+
+
+def is_visual_detail_followup_request(user_text: str) -> bool:
+    text = str(user_text or "").strip()
+    return bool(text) and any(keyword in text for keyword in VISION_DETAIL_FOLLOWUP_KEYWORDS)
+
+
+def has_visual_context_for_followup(vision_context: Dict[str, Any]) -> bool:
+    if not vision_context.get("enabled") or vision_context.get("status") == "stale":
+        return False
+    return bool(
+        vision_context.get("semantic_caption")
+        or vision_context.get("scene_caption")
+        or int(vision_context.get("person_count") or 0) > 0
+        or vision_context.get("objects_detected")
+    )
 
 
 def _clean_visual_text(value: Any) -> str:
@@ -505,7 +536,7 @@ def _polish_visual_description(
     if object_names:
         _append_unique(clauses, "画面里还能看到" + "、".join(object_names[:6]))
 
-    if not clauses and scene:
+    if not clauses and scene and scene not in GENERIC_SCENE_TEXTS:
         _append_unique(clauses, scene)
     return "；".join(clauses)
 
@@ -525,7 +556,9 @@ def build_direct_vision_control_plan(
 ) -> Optional[Live2DControlPlan]:
     """视觉询问走板端事实直答，避免 LLM 在摄像头问题上编造画面。"""
 
-    if not is_visual_description_request(user_text):
+    if not is_visual_description_request(user_text) and not (
+        is_visual_detail_followup_request(user_text) and has_visual_context_for_followup(vision_context)
+    ):
         return None
 
     expression = _pick_allowed(["question", "heart", "blush"], expressions)
@@ -551,7 +584,10 @@ def build_direct_vision_control_plan(
 
     details = _polish_visual_description(semantic, scene, activity, objects, person_count)
     if not details:
-        text = "主人，我拿到了摄像头画面，但当前结构化视觉结果还不够明确；请稍等下一帧更新。"
+        if person_count > 0:
+            text = "主人，我能看到画面里有人，但更具体的外观和环境语义还在更新，请再等我一两秒。"
+        else:
+            text = "主人，我拿到了摄像头画面，但当前结构化视觉结果还不够明确；请稍等下一帧更新。"
     else:
         text = "主人，我看到" + details + "。"
     return Live2DControlPlan(
