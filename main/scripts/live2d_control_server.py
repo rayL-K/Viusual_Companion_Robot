@@ -100,7 +100,7 @@ VISION_SERVICE = BoardVisionService(
         pose_model_path=Path(os.environ.get("VISUAL_COMPANION_POSE_MODEL") or DEFAULT_POSE_MODEL_PATH),
         emotion_service_url=EMOTION_SERVICE_URL,
         semantic_service_url=SEMANTIC_VLM_SERVICE_URL,
-        semantic_refresh_seconds=float(os.environ.get("VISUAL_COMPANION_VLM_REFRESH_SECONDS") or 2.0),
+        semantic_refresh_seconds=float(os.environ.get("VISUAL_COMPANION_VLM_REFRESH_SECONDS") or 5.0),
         confidence_threshold=float(os.environ.get("VISUAL_COMPANION_VISION_CONFIDENCE") or 0.35),
     )
 )

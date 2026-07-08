@@ -2224,7 +2224,10 @@ async function refreshCameraDevices(options = {}) {
   try {
     if (options.requestPermission) {
       permissionStream = await getUserMedia({
-        video: { facingMode: { ideal: "user" } },
+        video: {
+          facingMode: { ideal: "user" },
+          frameRate: { ideal: 60, max: 60 },
+        },
         audio: false,
       });
     }
@@ -2272,7 +2275,12 @@ function selectedCameraLabel() {
 function buildCameraConstraints() {
   if (modelState.selectedCameraId) {
     return {
-      video: { deviceId: { exact: modelState.selectedCameraId } },
+      video: {
+        deviceId: { exact: modelState.selectedCameraId },
+        width: { ideal: 640 },
+        height: { ideal: 480 },
+        frameRate: { ideal: 60, max: 60 },
+      },
       audio: false,
     };
   }
@@ -2281,7 +2289,7 @@ function buildCameraConstraints() {
       facingMode: { ideal: "user" },
       width: { ideal: 640 },
       height: { ideal: 480 },
-      frameRate: { ideal: 24, max: 30 },
+      frameRate: { ideal: 60, max: 60 },
     },
     audio: false,
   };

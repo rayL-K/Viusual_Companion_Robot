@@ -187,6 +187,7 @@ class Live2DStageFrontendTest(unittest.TestCase):
         self.assertIn('apiUrl("/vision")', self.perception_source)
         self.assertIn('analyzing: "板端分析中"', self.stage_source)
         self.assertIn("ELF2 正在分析当前画面", self.stage_source)
+        self.assertIn("frameRate: { ideal: 60, max: 60 }", self.stage_source)
 
     def test_browser_has_no_visual_inference_fallback(self) -> None:
         self.assertNotIn("MediaPipe", self.perception_source)
