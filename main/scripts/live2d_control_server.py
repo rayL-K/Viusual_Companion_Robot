@@ -388,6 +388,28 @@ VISION_QUESTION_KEYWORDS = (
 )
 
 
+OBJECT_NAME_MAP = {
+    "person": "",
+    "people": "",
+    "headphones": "耳机",
+    "headphone": "耳机",
+    "headset": "耳机",
+    "microphone": "麦克风",
+    "mic": "麦克风",
+    "toothbrush": "牙刷",
+    "laptop": "笔记本电脑",
+    "cell phone": "手机",
+    "phone": "手机",
+    "keyboard": "键盘",
+    "mouse": "鼠标",
+    "chair": "椅子",
+    "cup": "杯子",
+    "bottle": "水瓶",
+}
+
+GENERIC_ACTIVITY_TEXTS = {"画面中有人", "有人", "person", "unknown", "未知"}
+
+
 def is_visual_description_request(user_text: str) -> bool:
     """判断用户是否在询问当前摄像头画面，命中后必须优先使用板端事实。"""
 
@@ -397,6 +419,95 @@ def is_visual_description_request(user_text: str) -> bool:
     if any(keyword in text for keyword in VISION_QUESTION_KEYWORDS):
         return True
     return ("你" in text and ("看到" in text or "看见" in text) and ("画面" in text or "什么" in text))
+
+
+def _clean_visual_text(value: Any) -> str:
+    return str(value or "").strip().strip("。；;，, ")
+
+
+def _split_visual_items(value: str) -> List[str]:
+    items: List[str] = []
+    for separator in ("、", "，", ",", "和", "及"):
+        value = value.replace(separator, "、")
+    for item in value.split("、"):
+        cleaned = _clean_visual_text(item)
+        if cleaned:
+            items.append(cleaned)
+    return items
+
+
+def _append_unique(items: List[str], value: str) -> None:
+    cleaned = _clean_visual_text(value)
+    if cleaned and cleaned not in items:
+        items.append(cleaned)
+
+
+def _localized_object_name(value: str) -> str:
+    cleaned = _clean_visual_text(value)
+    mapped = OBJECT_NAME_MAP.get(cleaned.lower(), cleaned)
+    return _clean_visual_text(mapped)
+
+
+def _semantic_fields(semantic: str) -> Tuple[Dict[str, str], List[str]]:
+    fields: Dict[str, str] = {}
+    free_clauses: List[str] = []
+    for raw_clause in semantic.replace("。", "；").replace(";", "；").split("；"):
+        clause = _clean_visual_text(raw_clause)
+        if not clause:
+            continue
+        if "：" in clause:
+            key, value = clause.split("：", 1)
+        elif ":" in clause:
+            key, value = clause.split(":", 1)
+        else:
+            free_clauses.append(clause)
+            continue
+        fields[_clean_visual_text(key)] = _clean_visual_text(value)
+    return fields, free_clauses
+
+
+def _polish_visual_description(
+    semantic: str,
+    scene: str,
+    activity: str,
+    objects: List[str],
+    person_count: int,
+) -> str:
+    fields, free_clauses = _semantic_fields(semantic)
+    subject = fields.get("人物", "")
+    appearance = fields.get("外观和表情") or fields.get("外观") or fields.get("表情") or ""
+    action = fields.get("动作") or _clean_visual_text(activity)
+    environment = fields.get("环境", "")
+
+    object_names: List[str] = []
+    for value in _split_visual_items(fields.get("物体", "")):
+        _append_unique(object_names, value)
+    for value in objects[:8]:
+        _append_unique(object_names, _localized_object_name(value))
+
+    clauses: List[str] = []
+    for clause in free_clauses:
+        _append_unique(clauses, clause)
+
+    if subject:
+        person_phrase = f"一位{subject}" if person_count == 1 and not subject.startswith(("一", "1")) else subject
+        if appearance:
+            person_phrase += f"，{appearance}"
+        if action and action not in GENERIC_ACTIVITY_TEXTS and action not in person_phrase:
+            person_phrase += f"，正在{action}" if len(action) <= 8 and not action.startswith(("正在", "人物")) else f"，{action}"
+        _append_unique(clauses, person_phrase)
+    elif person_count > 0:
+        _append_unique(clauses, f"画面中有{person_count}人")
+
+    if environment:
+        _append_unique(clauses, f"环境是{environment}")
+
+    if object_names:
+        _append_unique(clauses, "画面里还能看到" + "、".join(object_names[:6]))
+
+    if not clauses and scene:
+        _append_unique(clauses, scene)
+    return "；".join(clauses)
 
 
 def _pick_allowed(preferences: List[str], allowed: List[str]) -> str:
@@ -438,24 +549,11 @@ def build_direct_vision_control_plan(
     objects = [str(item).strip() for item in vision_context.get("objects_detected") or [] if str(item).strip()]
     person_count = int(vision_context.get("person_count") or 0)
 
-    details: List[str] = []
-    if semantic:
-        details.append(semantic.rstrip("。；;"))
-    if scene and scene not in semantic:
-        details.append(scene.rstrip("。；;"))
-    if activity and activity not in semantic:
-        details.append(f"动作状态是{activity.rstrip('。；;')}")
-    if person_count > 0 and "人" not in "".join(details):
-        details.append(f"画面中有{person_count}人")
-    if objects:
-        joined_objects = "、".join(objects[:6])
-        if joined_objects and joined_objects not in "".join(details):
-            details.append(f"检测到的物体包括{joined_objects}")
-
+    details = _polish_visual_description(semantic, scene, activity, objects, person_count)
     if not details:
         text = "主人，我拿到了摄像头画面，但当前结构化视觉结果还不够明确；请稍等下一帧更新。"
     else:
-        text = "主人，我看到" + "；".join(details) + "。"
+        text = "主人，我看到" + details + "。"
     return Live2DControlPlan(
         text=text[:220],
         emotion="thinking",

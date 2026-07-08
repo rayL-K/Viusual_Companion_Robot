@@ -197,7 +197,7 @@ class VoxcpmControlServerTests(unittest.TestCase):
 
         self.assertEqual(status, 200)
         self.assertIn("青年男性", payload["text"])
-        self.assertIn("toothbrush", payload["text"])
+        self.assertIn("牙刷", payload["text"])
         self.assertNotIn("蓝天", payload["text"])
 
     def test_chat_short_followup_uses_llm_with_recent_turn(self) -> None:
@@ -540,10 +540,45 @@ class VoxcpmControlServerTests(unittest.TestCase):
         self.assertIn("青年男性", plan.text)
         self.assertIn("戴眼镜", plan.text)
         self.assertIn("室内", plan.text)
-        self.assertIn("toothbrush", plan.text)
+        self.assertIn("牙刷", plan.text)
+        self.assertNotIn("person", plan.text)
+        self.assertNotIn("检测到的物体包括", plan.text)
         self.assertNotIn("蓝天", plan.text)
         self.assertEqual(plan.expression, "question")
         self.assertEqual(plan.motion, "captain")
+
+    def test_visual_question_polishes_machine_labels_before_speaking(self) -> None:
+        context = sanitize_vision_context(
+            {
+                "enabled": True,
+                "status": "running",
+                "semanticCaption": (
+                    "人物：青年男性；外观和表情：戴眼镜，神情专注；"
+                    "动作：静坐；环境：室内昏暗；物体：耳机、麦克风"
+                ),
+                "personActivity": "画面中有人",
+                "personCount": 1,
+                "objectsDetected": ["person"],
+            }
+        )
+
+        plan = build_direct_vision_control_plan(
+            "你看到了什么东西？",
+            context,
+            expressions=["heart", "question"],
+            motions=["scene1", "captain"],
+        )
+
+        self.assertIsNotNone(plan)
+        assert plan is not None
+        self.assertIn("一位青年男性", plan.text)
+        self.assertIn("戴眼镜，神情专注", plan.text)
+        self.assertIn("正在静坐", plan.text)
+        self.assertIn("环境是室内昏暗", plan.text)
+        self.assertIn("耳机、麦克风", plan.text)
+        self.assertNotIn("person", plan.text)
+        self.assertNotIn("动作状态是", plan.text)
+        self.assertNotIn("画面中有人", plan.text)
 
     def test_visual_question_reports_missing_context_instead_of_guessing(self) -> None:
         plan = build_direct_vision_control_plan(
