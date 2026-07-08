@@ -1,0 +1,33 @@
+# ELF2 (RK3588) 板端 Python 依赖
+# ARM64 Ubuntu 22.04、出厂 Python 3.10、CPU + NPU 推理
+
+# ── 核心运行时 ──
+setuptools>=65,<81  # webrtcvad 2.0.10 运行时仍会导入 pkg_resources
+PyYAML>=6.0,<7.0
+numpy>=1.24,<2.0
+
+# ── 摄像头采集 ──
+opencv-python-headless>=4.9,<4.12
+Pillow>=10.0
+
+# ── 视觉感知：YOLO NPU 推理 ──
+# 必须安装与板端 librknnrt 2.1.0 匹配的官方 ARM64 wheel：
+# rknn_toolkit_lite2-2.1.0-cp310-cp310-linux_aarch64.whl
+# 来源：airockchip/rknn-toolkit2 v2.1.0 release；不允许用 ONNX CPU 降级。
+
+# ── FER+ 情绪识别 ──
+onnxruntime>=1.18,<2.0
+python_speech_features>=0.6  # Light-ASD 的 16 kHz MFCC 前处理
+scipy>=1.9,<2.0             # MFCC 的 DCT 实现
+
+# ── LLM 对话：Qwen2.5-1.5B 本地推理 ──
+# llama-cpp-python    # pip install llama-cpp-python (ARM 需编译)
+
+# ── 语音识别 + 合成 + VAD：sherpa-onnx ──
+sherpa-onnx>=1.10     # ARM64 预编译包
+
+# ── 语音打断 (VAD) ──
+webrtcvad>=2.0        # 轻量 C 扩展，替代 Silero VAD + PyTorch
+
+# ── Web 服务 ──
+requests>=2.31,<3.0

@@ -1,0 +1,16 @@
+{
+  "name": "visual-companion-live2d-stage",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5174",
+    "build": "vite build",
+    "test": "node --test tests/*.test.js",
+    "check": "node scripts/check-stage.mjs && node scripts/test-offline-audio.mjs",
+    "dev:perception": "vite --host 127.0.0.1 --port 5174"
+  },
+  "devDependencies": {
+    "vite": "^8.0.16"
+  }
+}

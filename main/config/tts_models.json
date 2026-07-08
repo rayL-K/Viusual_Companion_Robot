@@ -1,0 +1,60 @@
+{
+  "active": "matcha_baker",
+  "active_reference": "soft_girl",
+  "models": {
+    "matcha_baker": {
+      "backend": "sherpa_onnx",
+      "display_name": "本机自然女声 Matcha",
+      "model_path": "main/models/tts/matcha-zh-baker",
+      "speaker_id": 0,
+      "description": "sherpa-onnx Matcha Baker 中文女声与 Vocos 声码器。完全离线，兼顾自然度与 RK3588 实时速度。"
+    },
+    "voxcpm_board": {
+      "backend": "voxcpm_cpp_local",
+      "display_name": "开发板 VoxCPM 参考音色",
+      "endpoint": "http://127.0.0.1:8770",
+      "model": "voxcpm-1.5",
+      "auto_start": true,
+      "executable_path": "/opt/visual-companion-voxcpm/bin/voxcpm-server",
+      "model_path": "/opt/visual-companion-voxcpm/models/voxcpm1.5-q4_k-audiovae-f16.gguf",
+      "voice_dir": "/var/lib/visual-companion-voxcpm/voices",
+      "inference_timesteps": 4,
+      "threads": 4,
+      "health_timeout_sec": 3,
+      "synthesis_timeout_sec": 300,
+      "description": "ELF2 开发板本地运行 VoxCPM.cpp 与 Q4 量化 VoxCPM1.5，通过回环接口复用参考音色；不依赖 PC 或公网推理。"
+    }
+  },
+  "references": {
+    "clear_young_girl": {
+      "audio_path": "main/assets/tts/voxcpm_samples/clear_young_girl.mp3",
+      "content_type": "audio/mpeg",
+      "display_name": "清脆少女",
+      "prompt_text": "你是否会停下脚步，在结束忙碌的一天后，认真感受身边的世界？"
+    },
+    "soft_girl": {
+      "audio_path": "main/assets/tts/voxcpm_samples/soft_girl.mp3",
+      "content_type": "audio/mpeg",
+      "display_name": "软软女孩",
+      "prompt_text": "很高兴认识你哦，我刚刚买了杯珍珠奶茶，我们一起去公园长椅上坐坐吧。"
+    },
+    "sweet_female": {
+      "audio_path": "main/assets/tts/voxcpm_samples/sweet_female.mp3",
+      "content_type": "audio/mpeg",
+      "display_name": "甜美女声",
+      "prompt_text": "有时候我的心里会有很多话想说，可是到了嘴边就变得笨拙了，好像总也说不好。"
+    },
+    "warm_young_girl": {
+      "audio_path": "main/assets/tts/voxcpm_samples/warm_young_girl.mp3",
+      "content_type": "audio/mpeg",
+      "display_name": "温暖少女",
+      "prompt_text": "或许今天的你并不完美，或许你还在寻找那个属于自己的方向，但不要急，再给自己一点时间吧。"
+    },
+    "gentle_senior_girl": {
+      "audio_path": "main/assets/tts/voxcpm_samples/gentle_senior_girl.mp3",
+      "content_type": "audio/mpeg",
+      "display_name": "温柔学姐",
+      "prompt_text": "只要心中有坚定的目标，我相信前方的路总会越来越明朗的。"
+    }
+  }
+}

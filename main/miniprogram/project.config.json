@@ -1,0 +1,27 @@
+{
+  "appid": "wx8b9c56c00cb5c9ec",
+  "compileType": "game",
+  "libVersion": "3.7.12",
+  "miniprogramRoot": "./",
+  "projectname": "visual-companion-robot",
+  "setting": {
+    "es6": true,
+    "enhance": true,
+    "postcss": true,
+    "minified": true,
+    "urlCheck": false,
+    "coverView": true,
+    "lazyloadPlaceholderEnable": true,
+    "minifyWXML": true
+  },
+  "condition": {},
+  "packOptions": {
+    "ignore": [
+      { "type": "folder", "value": "tests" },
+      { "type": "folder", "value": "scripts" },
+      { "type": "file", "value": "package.json" },
+      { "type": "file", "value": "README.md" },
+      { "type": "file", "value": "THIRD_PARTY_NOTICES.md" }
+    ]
+  }
+}

@@ -1,0 +1,28 @@
+[Unit]
+Description=Visual Companion Robot Cloudflare Tunnel
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/cloudflared/token
+
+[Service]
+Type=simple
+ExecStartPre=/bin/sh -c 'i=0; until getent ahostsv4 region1.v2.argotunnel.com >/dev/null 2>&1; do i=$((i + 1)); [ "$i" -ge 60 ] && exit 1; sleep 1; done'
+ExecStart=/usr/bin/cloudflared tunnel --no-autoupdate --protocol auto --edge-ip-version 4 --url http://127.0.0.1:8765 run --token-file /etc/cloudflared/token
+Restart=always
+RestartSec=5
+TimeoutStartSec=90
+TimeoutStopSec=20
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+LockPersonality=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

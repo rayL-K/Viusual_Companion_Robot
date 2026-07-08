@@ -1,0 +1,38 @@
+{
+  "source_package": "E:\\jieya\\yzylauncher-voxcpm2-tts\\python\\saved_voices",
+  "source_project": "OpenBMB/VoxCPM",
+  "license": "Apache-2.0",
+  "transcript_note": "以下文本由本地 ASR 转写得到，用于开发期参考文本和提示词测试；正式训练或演示前应重新人工校对。",
+  "samples": [
+    {
+      "id": "clear_young_girl",
+      "audio_path": "main/assets/tts/voxcpm_samples/clear_young_girl.mp3",
+      "display_name": "清脆少女",
+      "transcript": "你是否会停下脚步，在结束忙碌的一天后，认真感受身边的世界？"
+    },
+    {
+      "id": "soft_girl",
+      "audio_path": "main/assets/tts/voxcpm_samples/soft_girl.mp3",
+      "display_name": "软软女孩",
+      "transcript": "很高兴认识你哦，我刚刚买了杯珍珠奶茶，我们一起去公园长椅上坐坐吧。"
+    },
+    {
+      "id": "sweet_female",
+      "audio_path": "main/assets/tts/voxcpm_samples/sweet_female.mp3",
+      "display_name": "甜美女声",
+      "transcript": "有时候我的心里会有很多话想说，可是到了嘴边就变得笨拙了，好像总也说不好。"
+    },
+    {
+      "id": "warm_young_girl",
+      "audio_path": "main/assets/tts/voxcpm_samples/warm_young_girl.mp3",
+      "display_name": "温暖少女",
+      "transcript": "或许今天的你并不完美，或许你还在寻找那个属于自己的方向，但不要急，再给自己一点时间吧。"
+    },
+    {
+      "id": "gentle_senior_girl",
+      "audio_path": "main/assets/tts/voxcpm_samples/gentle_senior_girl.mp3",
+      "display_name": "温柔学姐",
+      "transcript": "只要心中有坚定的目标，我相信前方的路总会越来越明朗的。"
+    }
+  ]
+}

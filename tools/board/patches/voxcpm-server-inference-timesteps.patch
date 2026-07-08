@@ -1,0 +1,55 @@
+diff --git a/servers/voxcpm_server.cpp b/servers/voxcpm_server.cpp
+index 613477d..3614a04 100644
+--- a/servers/voxcpm_server.cpp
++++ b/servers/voxcpm_server.cpp
+@@ -29,6 +29,7 @@ struct Options {
+     int threads = 4;
+     int max_queue = 8;
+     int max_attempts = 3;
++    int inference_timesteps = 10;
+     int output_sample_rate = 0;
+     int max_decode_steps = 0;
+     bool disable_auth = false;
+@@ -88,6 +89,8 @@ Options parse_args(int argc, char** argv) {
+             options.max_queue = std::stoi(require_value("--max-queue"));
+         } else if (arg == "--max-attempts") {
+             options.max_attempts = std::stoi(require_value("--max-attempts"));
++        } else if (arg == "--inference-timesteps") {
++            options.inference_timesteps = std::stoi(require_value("--inference-timesteps"));
+         } else if (arg == "--output-sample-rate") {
+             options.output_sample_rate = std::stoi(require_value("--output-sample-rate"));
+         } else if (arg == "--max-decode-steps") {
+@@ -102,6 +105,7 @@ Options parse_args(int argc, char** argv) {
+                 << "  --threads N           Default: 4\n"
+                 << "  --max-queue N         Default: 8\n"
+                 << "  --max-attempts N      Default: 3\n"
++                << "  --inference-timesteps N  Default: 10\n"
+                 << "  --max-decode-steps N  Override per-request decode step cap, 0 keeps backend default\n"
+                 << "  --output-sample-rate HZ  Optional output resample rate before encoding\n"
+                 << "  --api-key KEY         Required unless --disable-auth\n"
+@@ -120,6 +124,9 @@ Options parse_args(int argc, char** argv) {
+     if (options.threads < 1) fail("--threads must be >= 1");
+     if (options.max_queue < 0) fail("--max-queue must be >= 0");
+     if (options.max_attempts < 1) fail("--max-attempts must be >= 1");
++    if (options.inference_timesteps < 1 || options.inference_timesteps > 100) {
++        fail("--inference-timesteps must be between 1 and 100");
++    }
+     if (options.output_sample_rate < 0) fail("--output-sample-rate must be >= 0");
+     if (options.max_decode_steps < 0 || options.max_decode_steps > 2000) {
+         fail("--max-decode-steps must be between 0 and 2000");
+@@ -463,6 +470,7 @@ int main(int argc, char** argv) {
+                     SynthesisRequest request;
+                     request.text = ctx.input;
+                     request.prompt = std::move(prompt);
++                    request.inference_timesteps = options.inference_timesteps;
+                     request.max_decode_steps = options.max_decode_steps;
+                     request.chunk_callback = [&](const std::vector<float>& chunk_waveform) {
+                         const std::vector<float> prepared = prepare_response_waveform(chunk_waveform,
+@@ -497,6 +505,7 @@ int main(int argc, char** argv) {
+                 SynthesisRequest request;
+                 request.text = ctx.input;
+                 request.prompt = std::move(prompt);
++                request.inference_timesteps = options.inference_timesteps;
+                 request.max_decode_steps = options.max_decode_steps;
+                 request.retry_badcase = (ctx.max_attempts == 1 ? false : true);
+                 request.retry_badcase_max_times = std::min(ctx.max_attempts, options.max_attempts);

@@ -1,0 +1,18 @@
+{
+  "deviceOrientation": "portrait",
+  "showStatusBar": false,
+  "permission": {
+    "scope.camera": {
+      "desc": "用于把环境画面发送到您的 ELF2 开发板进行本地场景与情绪识别"
+    },
+    "scope.record": {
+      "desc": "用于把语音发送到您的 ELF2 开发板进行本地语音识别"
+    }
+  },
+  "networkTimeout": {
+    "request": 120000,
+    "connectSocket": 30000,
+    "uploadFile": 120000,
+    "downloadFile": 120000
+  }
+}

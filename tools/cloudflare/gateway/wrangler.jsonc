@@ -1,0 +1,49 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "visual-companion-gateway",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-03",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "assets": {
+    "directory": "../../../main/live2d_stage/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "none",
+    "html_handling": "auto-trailing-slash",
+    "run_worker_first": [
+      "/health",
+      "/voices",
+      "/tts-health",
+      "/asr-health",
+      "/emotion-health",
+      "/vision-health",
+      "/reference-audio",
+      "/realtime",
+      "/chat",
+      "/tts",
+      "/tts-runtime",
+      "/asr",
+      "/emotion",
+      "/active-speaker",
+      "/vision",
+      "/live2d/*"
+    ]
+  },
+  "routes": [
+    {
+      "pattern": "robot.veyralux.org",
+      "custom_domain": true
+    }
+  ],
+  "vpc_services": [
+    {
+      "binding": "ELF2",
+      "service_id": "019f2606-9a09-7243-a31f-40741c3f33aa",
+      "remote": true
+    }
+  ],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 0.1
+  }
+}

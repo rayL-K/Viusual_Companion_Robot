@@ -1,0 +1,161 @@
+"""语音活动检测 (VAD) + 语音打断。
+
+基于 WebRTC VAD 的 3 状态机（IDLE → ACTIVE → INACTIVE），
+检测到用户说话时广播 SPEECH_START 事件以触发 TTS 中断。
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from enum import Enum, auto
+from typing import Iterator, Optional
+
+logger = logging.getLogger(__name__)
+
+
+VAD_SPEECH_START = "vad.speech_start"
+VAD_SPEECH_END = "vad.speech_end"
+VAD_SILENCE = "vad.silence"
+
+
+class VADState(Enum):
+    IDLE = auto()
+    ACTIVE = auto()
+    INACTIVE = auto()
+
+
+@dataclass
+class VADConfig:
+    frame_ms: int = 30
+    padding_ms: int = 300
+    level: int = 3          # WebRTC 激进级别 (0-3)，优先抑制环境噪音误触发
+
+
+class VoiceActivityDetector:
+    """基于 WebRTC VAD 的语音活动检测器。
+
+    不再依赖 PyTorch / Silero VAD，改用纯 C 扩展 webrtcvad。
+    同样的 3 状态机逻辑，去掉 torch 后包体小 100x。
+
+    Args:
+        config: VAD 配置。
+    """
+
+    def __init__(self, config: Optional[VADConfig] = None) -> None:
+        self._cfg = config or VADConfig()
+        if self._cfg.frame_ms not in {10, 20, 30}:
+            raise ValueError("WebRTC VAD frame_ms 只能是 10、20 或 30")
+        if self._cfg.padding_ms <= 0:
+            raise ValueError("VAD padding_ms 必须大于 0")
+        if self._cfg.level not in {0, 1, 2, 3}:
+            raise ValueError("WebRTC VAD level 必须在 0 到 3 之间")
+        try:
+            import webrtcvad
+            self._webrtcvad = webrtcvad
+            self._vad = webrtcvad.Vad(self._cfg.level)
+        except ImportError:
+            logger.warning("webrtcvad 不可用，VAD 已禁用")
+            self._webrtcvad = None
+            self._vad = None
+        self._state = VADState.IDLE
+        self._silent_frames = 0
+        self._sample_rate = 16000
+
+    def process_chunk(self, audio_bytes: bytes) -> Iterator[str]:
+        """处理一段音频数据，产生状态转移事件。
+
+        Args:
+            audio_bytes: int16 PCM 音频字节串，16000Hz 单声道。
+
+        Yields:
+            事件类型常量字符串。
+        """
+
+        if self._vad is None:
+            return
+
+        for frame in self._split_frames(audio_bytes):
+            event = self._transition(self._vad.is_speech(frame, self._sample_rate))
+            if event:
+                yield event
+
+    def speech_ratio(self, audio_bytes: bytes) -> float:
+        """返回有效帧中被 WebRTC VAD 判定为语音的比例。"""
+
+        if self._vad is None:
+            raise RuntimeError("webrtcvad 不可用")
+        frames = self._split_frames(audio_bytes)
+        if not frames:
+            return 0.0
+        batch_vad = self._new_batch_vad()
+        speech_frames = sum(batch_vad.is_speech(frame, self._sample_rate) for frame in frames)
+        return speech_frames / len(frames)
+
+    def trim_to_speech(self, audio_bytes: bytes, padding_ms: int = 150) -> bytes:
+        """裁掉首尾非语音帧，减少 SenseVoice 的无效推理时间。"""
+
+        if self._vad is None:
+            raise RuntimeError("webrtcvad 不可用")
+        frames = self._split_frames(audio_bytes)
+        if not frames:
+            return b""
+        batch_vad = self._new_batch_vad()
+        speech_indices = [index for index, frame in enumerate(frames) if batch_vad.is_speech(frame, self._sample_rate)]
+        if not speech_indices:
+            return b""
+        padding_frames = max(0, int(round(padding_ms / self._cfg.frame_ms)))
+        start = max(0, speech_indices[0] - padding_frames)
+        end = min(len(frames), speech_indices[-1] + padding_frames + 1)
+        return b"".join(frames[start:end])
+
+    def is_available(self) -> bool:
+        return self._vad is not None
+
+    def reset(self) -> None:
+        self._state = VADState.IDLE
+        self._silent_frames = 0
+
+    def _new_batch_vad(self):
+        """为独立句段创建无历史状态的 VAD，避免上一句污染当前判定。"""
+
+        if self._webrtcvad is None:
+            raise RuntimeError("webrtcvad 不可用")
+        return self._webrtcvad.Vad(self._cfg.level)
+
+    def _split_frames(self, audio_bytes: bytes) -> list[bytes]:
+        """将音频字节串按 frame_ms 切帧。"""
+
+        frame_size = int(self._sample_rate * self._cfg.frame_ms / 1000) * 2
+        frames = []
+        for i in range(0, len(audio_bytes) - frame_size + 1, frame_size):
+            frames.append(audio_bytes[i:i + frame_size])
+        return frames
+
+    def _transition(self, has_speech: bool) -> Optional[str]:
+        if self._state == VADState.IDLE:
+            if has_speech:
+                self._state = VADState.ACTIVE
+                self._silent_frames = 0
+                logger.debug("VAD: IDLE → ACTIVE")
+                return VAD_SPEECH_START
+
+        elif self._state == VADState.ACTIVE:
+            if not has_speech:
+                self._state = VADState.INACTIVE
+                self._silent_frames = 1
+
+        elif self._state == VADState.INACTIVE:
+            if has_speech:
+                self._state = VADState.ACTIVE
+                self._silent_frames = 0
+            else:
+                self._silent_frames += 1
+                silent_ms = self._silent_frames * self._cfg.frame_ms
+                if silent_ms >= self._cfg.padding_ms:
+                    self._state = VADState.IDLE
+                    self._silent_frames = 0
+                    logger.debug("VAD: INACTIVE → IDLE")
+                    return VAD_SPEECH_END
+
+        return None

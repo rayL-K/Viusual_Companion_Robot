@@ -1,0 +1,879 @@
+{
+  "version": 1,
+  "defaultDurationMs": 180,
+  "description": "Live2D 嘴型可视化测试配置。每个 sounds 条目都可以单独调整嘴型参数和临时合成声音参数。",
+  "parameterGuide": {
+    "open": "嘴巴纵向张开程度，0 表示几乎闭合，1 表示最大开口。",
+    "width": "嘴巴横向展开程度，0 表示窄，1 表示横向很宽。",
+    "round": "圆唇程度，0 表示不圆唇，1 表示明显圆唇。",
+    "jaw": "下颌下落程度，用于表现大开口时的下巴运动。",
+    "smile": "嘴角上扬程度，用于表现 i/e/y 等横向展开音。",
+    "tension": "嘴唇紧张程度，用于表现齿音、擦音和闭唇音。"
+  },
+  "audioGuide": {
+    "mode": "silence 表示静音，tone 表示纯音，noise 表示噪声，mixed 表示纯音加噪声。",
+    "frequencyHz": "主音频率，数值越高听起来越尖。",
+    "secondFrequencyHz": "辅助音频率，0 表示不启用辅助音。",
+    "noise": "噪声比例，适合 f/s/sh/th 这类擦音。",
+    "gain": "音量，建议保持在 0.03 到 0.14 之间，避免浏览器播放过响。",
+    "syllable": "报告中显示的临时发声提示。"
+  },
+  "sequence": [
+    "REST",
+    "b",
+    "a",
+    "p",
+    "a",
+    "m",
+    "a",
+    "f",
+    "d",
+    "t",
+    "n",
+    "l",
+    "g",
+    "k",
+    "h",
+    "j",
+    "q",
+    "x",
+    "zh",
+    "ch",
+    "sh",
+    "r",
+    "z",
+    "c",
+    "s",
+    "y",
+    "w",
+    "a",
+    "o",
+    "e",
+    "i",
+    "u",
+    "ü",
+    "ai",
+    "ei",
+    "ui",
+    "ao",
+    "ou",
+    "iu",
+    "ie",
+    "üe",
+    "er",
+    "an",
+    "en",
+    "in",
+    "un",
+    "ün",
+    "ang",
+    "eng",
+    "ing",
+    "ong",
+    "AA",
+    "AE",
+    "AH",
+    "AO",
+    "EH",
+    "ER",
+    "EY",
+    "IH",
+    "IY",
+    "OW",
+    "OY",
+    "UH",
+    "UW",
+    "P",
+    "B",
+    "M",
+    "F",
+    "V",
+    "T",
+    "D",
+    "K",
+    "G",
+    "N",
+    "NG",
+    "S",
+    "Z",
+    "SH",
+    "ZH",
+    "CH",
+    "JH",
+    "L",
+    "R",
+    "W",
+    "Y",
+    "H",
+    "TH",
+    "DH",
+    "REST"
+  ],
+  "sounds": {
+    "REST": {
+      "token": "休止",
+      "group": "停顿",
+      "viseme": "rest",
+      "label": "闭合/停顿",
+      "note": "起止闭合",
+      "mouth": { "open": 0.02, "width": 0.24, "round": 0.0, "jaw": 0.02, "smile": 0.04, "tension": 0.2 },
+      "audio": { "mode": "silence", "frequencyHz": 0, "secondFrequencyHz": 0, "noise": 0.0, "gain": 0.0, "syllable": "休止" }
+    },
+    "b": {
+      "token": "b",
+      "group": "普通话声母",
+      "viseme": "closed",
+      "label": "双唇闭合",
+      "note": "双唇爆破 b",
+      "mouth": { "open": 0.04, "width": 0.22, "round": 0.0, "jaw": 0.02, "smile": 0.02, "tension": 0.72 },
+      "audio": { "mode": "mixed", "frequencyHz": 165, "secondFrequencyHz": 0, "noise": 0.18, "gain": 0.08, "syllable": "bo" }
+    },
+    "a": {
+      "token": "a",
+      "group": "普通话韵母",
+      "viseme": "open",
+      "label": "开口 a",
+      "note": "中央大开口元音",
+      "mouth": { "open": 0.76, "width": 0.52, "round": 0.08, "jaw": 0.74, "smile": 0.04, "tension": 0.34 },
+      "audio": { "mode": "tone", "frequencyHz": 255, "secondFrequencyHz": 510, "noise": 0.0, "gain": 0.1, "syllable": "a" }
+    },
+    "p": {
+      "token": "p",
+      "group": "普通话声母",
+      "viseme": "closed",
+      "label": "双唇闭合",
+      "note": "送气双唇爆破 p",
+      "mouth": { "open": 0.05, "width": 0.22, "round": 0.0, "jaw": 0.02, "smile": 0.02, "tension": 0.78 },
+      "audio": { "mode": "mixed", "frequencyHz": 190, "secondFrequencyHz": 0, "noise": 0.28, "gain": 0.08, "syllable": "po" }
+    },
+    "m": {
+      "token": "m",
+      "group": "普通话声母",
+      "viseme": "closed",
+      "label": "双唇鼻音",
+      "note": "闭唇鼻音 m",
+      "mouth": { "open": 0.03, "width": 0.24, "round": 0.02, "jaw": 0.01, "smile": 0.02, "tension": 0.62 },
+      "audio": { "mode": "tone", "frequencyHz": 175, "secondFrequencyHz": 260, "noise": 0.0, "gain": 0.08, "syllable": "m" }
+    },
+    "f": {
+      "token": "f",
+      "group": "普通话声母",
+      "viseme": "teeth",
+      "label": "唇齿音",
+      "note": "上齿贴下唇 f",
+      "mouth": { "open": 0.22, "width": 0.7, "round": 0.04, "jaw": 0.12, "smile": 0.18, "tension": 0.88 },
+      "audio": { "mode": "noise", "frequencyHz": 0, "secondFrequencyHz": 0, "noise": 0.82, "gain": 0.06, "syllable": "fu" }
+    },
+    "d": {
+      "token": "d",
+      "group": "普通话声母",
+      "viseme": "alveolar",
+      "label": "舌尖音",
+      "note": "舌尖抵住上齿龈 d",
+      "mouth": { "open": 0.3, "width": 0.58, "round": 0.04, "jaw": 0.18, "smile": 0.1, "tension": 0.64 },
+      "audio": { "mode": "mixed", "frequencyHz": 210, "secondFrequencyHz": 0, "noise": 0.16, "gain": 0.08, "syllable": "de" }
+    },
+    "t": {
+      "token": "t",
+      "group": "普通话声母",
+      "viseme": "alveolar",
+      "label": "舌尖音",
+      "note": "送气舌尖爆破 t",
+      "mouth": { "open": 0.3, "width": 0.6, "round": 0.04, "jaw": 0.18, "smile": 0.12, "tension": 0.7 },
+      "audio": { "mode": "mixed", "frequencyHz": 230, "secondFrequencyHz": 0, "noise": 0.3, "gain": 0.08, "syllable": "te" }
+    },
+    "n": {
+      "token": "n",
+      "group": "普通话声母",
+      "viseme": "nasal",
+      "label": "鼻音",
+      "note": "舌尖鼻音 n",
+      "mouth": { "open": 0.16, "width": 0.38, "round": 0.02, "jaw": 0.08, "smile": 0.04, "tension": 0.5 },
+      "audio": { "mode": "tone", "frequencyHz": 190, "secondFrequencyHz": 285, "noise": 0.0, "gain": 0.08, "syllable": "n" }
+    },
+    "l": {
+      "token": "l",
+      "group": "普通话声母",
+      "viseme": "alveolar",
+      "label": "边音",
+      "note": "舌尖边音 l",
+      "mouth": { "open": 0.28, "width": 0.6, "round": 0.03, "jaw": 0.16, "smile": 0.12, "tension": 0.5 },
+      "audio": { "mode": "tone", "frequencyHz": 215, "secondFrequencyHz": 340, "noise": 0.0, "gain": 0.08, "syllable": "le" }
+    },
+    "g": {
+      "token": "g",
+      "group": "普通话声母",
+      "viseme": "velar",
+      "label": "舌根音",
+      "note": "舌根爆破 g",
+      "mouth": { "open": 0.36, "width": 0.48, "round": 0.14, "jaw": 0.28, "smile": 0.03, "tension": 0.56 },
+      "audio": { "mode": "mixed", "frequencyHz": 205, "secondFrequencyHz": 0, "noise": 0.18, "gain": 0.08, "syllable": "ge" }
+    },
+    "k": {
+      "token": "k",
+      "group": "普通话声母",
+      "viseme": "velar",
+      "label": "舌根音",
+      "note": "送气舌根爆破 k",
+      "mouth": { "open": 0.38, "width": 0.5, "round": 0.14, "jaw": 0.3, "smile": 0.02, "tension": 0.62 },
+      "audio": { "mode": "mixed", "frequencyHz": 220, "secondFrequencyHz": 0, "noise": 0.34, "gain": 0.08, "syllable": "ke" }
+    },
+    "h": {
+      "token": "h",
+      "group": "普通话声母",
+      "viseme": "velar",
+      "label": "喉/舌根擦音",
+      "note": "气流明显 h",
+      "mouth": { "open": 0.4, "width": 0.5, "round": 0.16, "jaw": 0.3, "smile": 0.02, "tension": 0.48 },
+      "audio": { "mode": "mixed", "frequencyHz": 185, "secondFrequencyHz": 0, "noise": 0.48, "gain": 0.07, "syllable": "he" }
+    },
+    "j": {
+      "token": "j",
+      "group": "普通话声母",
+      "viseme": "teeth",
+      "label": "舌面音",
+      "note": "舌面塞擦 j",
+      "mouth": { "open": 0.24, "width": 0.7, "round": 0.03, "jaw": 0.14, "smile": 0.24, "tension": 0.82 },
+      "audio": { "mode": "mixed", "frequencyHz": 280, "secondFrequencyHz": 0, "noise": 0.35, "gain": 0.08, "syllable": "ji" }
+    },
+    "q": {
+      "token": "q",
+      "group": "普通话声母",
+      "viseme": "teeth",
+      "label": "舌面音",
+      "note": "送气舌面塞擦 q",
+      "mouth": { "open": 0.25, "width": 0.72, "round": 0.03, "jaw": 0.14, "smile": 0.26, "tension": 0.88 },
+      "audio": { "mode": "mixed", "frequencyHz": 300, "secondFrequencyHz": 0, "noise": 0.48, "gain": 0.08, "syllable": "qi" }
+    },
+    "x": {
+      "token": "x",
+      "group": "普通话声母",
+      "viseme": "teeth",
+      "label": "舌面擦音",
+      "note": "高频擦音 x",
+      "mouth": { "open": 0.22, "width": 0.74, "round": 0.03, "jaw": 0.12, "smile": 0.28, "tension": 0.86 },
+      "audio": { "mode": "noise", "frequencyHz": 0, "secondFrequencyHz": 0, "noise": 0.78, "gain": 0.06, "syllable": "xi" }
+    },
+    "zh": {
+      "token": "zh",
+      "group": "普通话声母",
+      "viseme": "rhotic",
+      "label": "卷舌音",
+      "note": "卷舌塞擦 zh",
+      "mouth": { "open": 0.32, "width": 0.44, "round": 0.42, "jaw": 0.2, "smile": 0.02, "tension": 0.64 },
+      "audio": { "mode": "mixed", "frequencyHz": 230, "secondFrequencyHz": 360, "noise": 0.3, "gain": 0.08, "syllable": "zhi" }
+    },
+    "ch": {
+      "token": "ch",
+      "group": "普通话声母",
+      "viseme": "rhotic",
+      "label": "卷舌音",
+      "note": "送气卷舌塞擦 ch",
+      "mouth": { "open": 0.34, "width": 0.44, "round": 0.44, "jaw": 0.22, "smile": 0.02, "tension": 0.68 },
+      "audio": { "mode": "mixed", "frequencyHz": 250, "secondFrequencyHz": 390, "noise": 0.45, "gain": 0.08, "syllable": "chi" }
+    },
+    "sh": {
+      "token": "sh",
+      "group": "普通话声母",
+      "viseme": "rhotic",
+      "label": "卷舌擦音",
+      "note": "卷舌擦音 sh",
+      "mouth": { "open": 0.3, "width": 0.42, "round": 0.46, "jaw": 0.18, "smile": 0.0, "tension": 0.7 },
+      "audio": { "mode": "noise", "frequencyHz": 0, "secondFrequencyHz": 0, "noise": 0.82, "gain": 0.06, "syllable": "shi" }
+    },
+    "r": {
+      "token": "r",
+      "group": "普通话声母",
+      "viseme": "rhotic",
+      "label": "卷舌音",
+      "note": "卷舌 r",
+      "mouth": { "open": 0.3, "width": 0.42, "round": 0.46, "jaw": 0.18, "smile": 0.0, "tension": 0.54 },
+      "audio": { "mode": "tone", "frequencyHz": 230, "secondFrequencyHz": 360, "noise": 0.0, "gain": 0.08, "syllable": "ri" }
+    },
+    "z": {
+      "token": "z",
+      "group": "普通话声母",
+      "viseme": "teeth",
+      "label": "平舌音",
+      "note": "平舌塞擦 z",
+      "mouth": { "open": 0.22, "width": 0.7, "round": 0.03, "jaw": 0.12, "smile": 0.2, "tension": 0.84 },
+      "audio": { "mode": "mixed", "frequencyHz": 260, "secondFrequencyHz": 0, "noise": 0.28, "gain": 0.08, "syllable": "zi" }
+    },
+    "c": {
+      "token": "c",
+      "group": "普通话声母",
+      "viseme": "teeth",
+      "label": "平舌音",
+      "note": "送气平舌塞擦 c",
+      "mouth": { "open": 0.23, "width": 0.72, "round": 0.03, "jaw": 0.12, "smile": 0.22, "tension": 0.88 },
+      "audio": { "mode": "mixed", "frequencyHz": 280, "secondFrequencyHz": 0, "noise": 0.46, "gain": 0.08, "syllable": "ci" }
+    },
+    "s": {
+      "token": "s",
+      "group": "普通话声母",
+      "viseme": "teeth",
+      "label": "平舌擦音",
+      "note": "高频擦音 s",
+      "mouth": { "open": 0.2, "width": 0.74, "round": 0.03, "jaw": 0.1, "smile": 0.24, "tension": 0.9 },
+      "audio": { "mode": "noise", "frequencyHz": 0, "secondFrequencyHz": 0, "noise": 0.9, "gain": 0.06, "syllable": "si" }
+    },
+    "y": {
+      "token": "y",
+      "group": "普通话声母",
+      "viseme": "wide",
+      "label": "半元音 y",
+      "note": "接近 i 的横向展开",
+      "mouth": { "open": 0.3, "width": 0.78, "round": 0.03, "jaw": 0.2, "smile": 0.58, "tension": 0.44 },
+      "audio": { "mode": "tone", "frequencyHz": 350, "secondFrequencyHz": 520, "noise": 0.0, "gain": 0.08, "syllable": "yi" }
+    },
+    "w": {
+      "token": "w",
+      "group": "普通话声母",
+      "viseme": "round",
+      "label": "半元音 w",
+      "note": "接近 u 的圆唇",
+      "mouth": { "open": 0.34, "width": 0.34, "round": 0.88, "jaw": 0.22, "smile": 0.0, "tension": 0.44 },
+      "audio": { "mode": "tone", "frequencyHz": 220, "secondFrequencyHz": 330, "noise": 0.0, "gain": 0.08, "syllable": "wu" }
+    },
+    "o": {
+      "token": "o",
+      "group": "普通话韵母",
+      "viseme": "round",
+      "label": "圆唇 o",
+      "note": "圆唇中开元音",
+      "mouth": { "open": 0.46, "width": 0.34, "round": 0.9, "jaw": 0.34, "smile": 0.0, "tension": 0.38 },
+      "audio": { "mode": "tone", "frequencyHz": 220, "secondFrequencyHz": 430, "noise": 0.0, "gain": 0.1, "syllable": "o" }
+    },
+    "e": {
+      "token": "e",
+      "group": "普通话韵母",
+      "viseme": "wide",
+      "label": "横向 e",
+      "note": "中元音 e",
+      "mouth": { "open": 0.38, "width": 0.66, "round": 0.08, "jaw": 0.26, "smile": 0.34, "tension": 0.42 },
+      "audio": { "mode": "tone", "frequencyHz": 290, "secondFrequencyHz": 470, "noise": 0.0, "gain": 0.1, "syllable": "e" }
+    },
+    "i": {
+      "token": "i",
+      "group": "普通话韵母",
+      "viseme": "wide",
+      "label": "高前 i",
+      "note": "横向展开明显",
+      "mouth": { "open": 0.28, "width": 0.82, "round": 0.02, "jaw": 0.18, "smile": 0.66, "tension": 0.48 },
+      "audio": { "mode": "tone", "frequencyHz": 370, "secondFrequencyHz": 740, "noise": 0.0, "gain": 0.1, "syllable": "i" }
+    },
+    "u": {
+      "token": "u",
+      "group": "普通话韵母",
+      "viseme": "round",
+      "label": "高后 u",
+      "note": "窄口圆唇",
+      "mouth": { "open": 0.3, "width": 0.28, "round": 0.94, "jaw": 0.2, "smile": 0.0, "tension": 0.5 },
+      "audio": { "mode": "tone", "frequencyHz": 225, "secondFrequencyHz": 450, "noise": 0.0, "gain": 0.1, "syllable": "u" }
+    },
+    "ü": {
+      "token": "ü",
+      "group": "普通话韵母",
+      "viseme": "round",
+      "label": "高前圆唇 ü",
+      "note": "圆唇但音色更靠前",
+      "mouth": { "open": 0.3, "width": 0.32, "round": 0.94, "jaw": 0.2, "smile": 0.12, "tension": 0.52 },
+      "audio": { "mode": "tone", "frequencyHz": 285, "secondFrequencyHz": 570, "noise": 0.0, "gain": 0.1, "syllable": "ü" }
+    },
+    "ai": {
+      "token": "ai",
+      "group": "普通话韵母",
+      "viseme": "open",
+      "label": "复韵母 ai",
+      "note": "从开口滑向 i",
+      "mouth": { "open": 0.68, "width": 0.62, "round": 0.06, "jaw": 0.6, "smile": 0.22, "tension": 0.36 },
+      "audio": { "mode": "tone", "frequencyHz": 270, "secondFrequencyHz": 540, "noise": 0.0, "gain": 0.1, "syllable": "ai" }
+    },
+    "ei": {
+      "token": "ei",
+      "group": "普通话韵母",
+      "viseme": "wide",
+      "label": "复韵母 ei",
+      "note": "横向收尾",
+      "mouth": { "open": 0.38, "width": 0.76, "round": 0.04, "jaw": 0.26, "smile": 0.5, "tension": 0.42 },
+      "audio": { "mode": "tone", "frequencyHz": 310, "secondFrequencyHz": 620, "noise": 0.0, "gain": 0.1, "syllable": "ei" }
+    },
+    "ui": {
+      "token": "ui",
+      "group": "普通话韵母",
+      "viseme": "wide",
+      "label": "复韵母 ui",
+      "note": "从圆唇滑向横向",
+      "mouth": { "open": 0.34, "width": 0.72, "round": 0.28, "jaw": 0.22, "smile": 0.42, "tension": 0.44 },
+      "audio": { "mode": "tone", "frequencyHz": 300, "secondFrequencyHz": 600, "noise": 0.0, "gain": 0.1, "syllable": "ui" }
+    },
+    "ao": {
+      "token": "ao",
+      "group": "普通话韵母",
+      "viseme": "open",
+      "label": "复韵母 ao",
+      "note": "从开口滑向圆唇",
+      "mouth": { "open": 0.7, "width": 0.5, "round": 0.34, "jaw": 0.62, "smile": 0.04, "tension": 0.36 },
+      "audio": { "mode": "tone", "frequencyHz": 250, "secondFrequencyHz": 420, "noise": 0.0, "gain": 0.1, "syllable": "ao" }
+    },
+    "ou": {
+      "token": "ou",
+      "group": "普通话韵母",
+      "viseme": "round",
+      "label": "复韵母 ou",
+      "note": "圆唇收尾",
+      "mouth": { "open": 0.42, "width": 0.32, "round": 0.9, "jaw": 0.3, "smile": 0.0, "tension": 0.42 },
+      "audio": { "mode": "tone", "frequencyHz": 220, "secondFrequencyHz": 440, "noise": 0.0, "gain": 0.1, "syllable": "ou" }
+    },
+    "iu": {
+      "token": "iu",
+      "group": "普通话韵母",
+      "viseme": "round",
+      "label": "复韵母 iu",
+      "note": "从 i 滑向 u",
+      "mouth": { "open": 0.34, "width": 0.38, "round": 0.82, "jaw": 0.22, "smile": 0.18, "tension": 0.46 },
+      "audio": { "mode": "tone", "frequencyHz": 255, "secondFrequencyHz": 510, "noise": 0.0, "gain": 0.1, "syllable": "iu" }
+    },
+    "ie": {
+      "token": "ie",
+      "group": "普通话韵母",
+      "viseme": "wide",
+      "label": "复韵母 ie",
+      "note": "横向到中开",
+      "mouth": { "open": 0.4, "width": 0.72, "round": 0.04, "jaw": 0.28, "smile": 0.5, "tension": 0.42 },
+      "audio": { "mode": "tone", "frequencyHz": 330, "secondFrequencyHz": 660, "noise": 0.0, "gain": 0.1, "syllable": "ie" }
+    },
+    "üe": {
+      "token": "üe",
+      "group": "普通话韵母",
+      "viseme": "round",
+      "label": "复韵母 üe",
+      "note": "圆唇到中开",
+      "mouth": { "open": 0.38, "width": 0.38, "round": 0.82, "jaw": 0.26, "smile": 0.12, "tension": 0.46 },
+      "audio": { "mode": "tone", "frequencyHz": 285, "secondFrequencyHz": 570, "noise": 0.0, "gain": 0.1, "syllable": "üe" }
+    },
+    "er": {
+      "token": "er",
+      "group": "普通话韵母",
+      "viseme": "rhotic",
+      "label": "儿化 er",
+      "note": "卷舌韵母",
+      "mouth": { "open": 0.36, "width": 0.44, "round": 0.48, "jaw": 0.24, "smile": 0.02, "tension": 0.56 },
+      "audio": { "mode": "tone", "frequencyHz": 245, "secondFrequencyHz": 390, "noise": 0.0, "gain": 0.1, "syllable": "er" }
+    },
+    "an": {
+      "token": "an",
+      "group": "普通话韵母",
+      "viseme": "open",
+      "label": "前鼻韵母 an",
+      "note": "开口后接鼻音",
+      "mouth": { "open": 0.62, "width": 0.52, "round": 0.06, "jaw": 0.54, "smile": 0.06, "tension": 0.38 },
+      "audio": { "mode": "tone", "frequencyHz": 245, "secondFrequencyHz": 370, "noise": 0.0, "gain": 0.1, "syllable": "an" }
+    },
+    "en": {
+      "token": "en",
+      "group": "普通话韵母",
+      "viseme": "nasal",
+      "label": "前鼻韵母 en",
+      "note": "中元音接鼻音",
+      "mouth": { "open": 0.28, "width": 0.48, "round": 0.04, "jaw": 0.16, "smile": 0.12, "tension": 0.48 },
+      "audio": { "mode": "tone", "frequencyHz": 230, "secondFrequencyHz": 345, "noise": 0.0, "gain": 0.1, "syllable": "en" }
+    },
+    "in": {
+      "token": "in",
+      "group": "普通话韵母",
+      "viseme": "wide",
+      "label": "前鼻韵母 in",
+      "note": "高前音接鼻音",
+      "mouth": { "open": 0.3, "width": 0.76, "round": 0.03, "jaw": 0.18, "smile": 0.56, "tension": 0.46 },
+      "audio": { "mode": "tone", "frequencyHz": 350, "secondFrequencyHz": 520, "noise": 0.0, "gain": 0.1, "syllable": "in" }
+    },
+    "un": {
+      "token": "un",
+      "group": "普通话韵母",
+      "viseme": "round",
+      "label": "前鼻韵母 un",
+      "note": "圆唇接鼻音",
+      "mouth": { "open": 0.32, "width": 0.34, "round": 0.86, "jaw": 0.2, "smile": 0.02, "tension": 0.48 },
+      "audio": { "mode": "tone", "frequencyHz": 220, "secondFrequencyHz": 330, "noise": 0.0, "gain": 0.1, "syllable": "un" }
+    },
+    "ün": {
+      "token": "ün",
+      "group": "普通话韵母",
+      "viseme": "round",
+      "label": "前鼻韵母 ün",
+      "note": "前圆唇接鼻音",
+      "mouth": { "open": 0.32, "width": 0.34, "round": 0.9, "jaw": 0.2, "smile": 0.12, "tension": 0.5 },
+      "audio": { "mode": "tone", "frequencyHz": 275, "secondFrequencyHz": 410, "noise": 0.0, "gain": 0.1, "syllable": "ün" }
+    },
+    "ang": {
+      "token": "ang",
+      "group": "普通话韵母",
+      "viseme": "open",
+      "label": "后鼻韵母 ang",
+      "note": "开口后接后鼻音",
+      "mouth": { "open": 0.66, "width": 0.5, "round": 0.08, "jaw": 0.58, "smile": 0.04, "tension": 0.38 },
+      "audio": { "mode": "tone", "frequencyHz": 235, "secondFrequencyHz": 350, "noise": 0.0, "gain": 0.1, "syllable": "ang" }
+    },
+    "eng": {
+      "token": "eng",
+      "group": "普通话韵母",
+      "viseme": "nasal",
+      "label": "后鼻韵母 eng",
+      "note": "中元音接后鼻音",
+      "mouth": { "open": 0.3, "width": 0.46, "round": 0.04, "jaw": 0.18, "smile": 0.08, "tension": 0.5 },
+      "audio": { "mode": "tone", "frequencyHz": 220, "secondFrequencyHz": 330, "noise": 0.0, "gain": 0.1, "syllable": "eng" }
+    },
+    "ing": {
+      "token": "ing",
+      "group": "普通话韵母",
+      "viseme": "wide",
+      "label": "后鼻韵母 ing",
+      "note": "高前音接后鼻音",
+      "mouth": { "open": 0.3, "width": 0.76, "round": 0.03, "jaw": 0.18, "smile": 0.56, "tension": 0.48 },
+      "audio": { "mode": "tone", "frequencyHz": 340, "secondFrequencyHz": 510, "noise": 0.0, "gain": 0.1, "syllable": "ing" }
+    },
+    "ong": {
+      "token": "ong",
+      "group": "普通话韵母",
+      "viseme": "round",
+      "label": "后鼻韵母 ong",
+      "note": "圆唇接后鼻音",
+      "mouth": { "open": 0.38, "width": 0.32, "round": 0.88, "jaw": 0.26, "smile": 0.0, "tension": 0.46 },
+      "audio": { "mode": "tone", "frequencyHz": 210, "secondFrequencyHz": 315, "noise": 0.0, "gain": 0.1, "syllable": "ong" }
+    },
+    "AA": {
+      "token": "AA",
+      "group": "英语元音",
+      "viseme": "open",
+      "label": "英语大开口 AA",
+      "note": "father",
+      "mouth": { "open": 0.74, "width": 0.5, "round": 0.08, "jaw": 0.7, "smile": 0.02, "tension": 0.34 },
+      "audio": { "mode": "tone", "frequencyHz": 230, "secondFrequencyHz": 460, "noise": 0.0, "gain": 0.1, "syllable": "AA" }
+    },
+    "AE": {
+      "token": "AE",
+      "group": "英语元音",
+      "viseme": "open",
+      "label": "英语前开 AE",
+      "note": "cat",
+      "mouth": { "open": 0.68, "width": 0.64, "round": 0.04, "jaw": 0.58, "smile": 0.22, "tension": 0.36 },
+      "audio": { "mode": "tone", "frequencyHz": 300, "secondFrequencyHz": 600, "noise": 0.0, "gain": 0.1, "syllable": "AE" }
+    },
+    "AH": {
+      "token": "AH",
+      "group": "英语元音",
+      "viseme": "open",
+      "label": "英语中开 AH",
+      "note": "cup",
+      "mouth": { "open": 0.62, "width": 0.52, "round": 0.08, "jaw": 0.54, "smile": 0.04, "tension": 0.34 },
+      "audio": { "mode": "tone", "frequencyHz": 260, "secondFrequencyHz": 520, "noise": 0.0, "gain": 0.1, "syllable": "AH" }
+    },
+    "AO": {
+      "token": "AO",
+      "group": "英语元音",
+      "viseme": "round",
+      "label": "英语圆唇 AO",
+      "note": "thought",
+      "mouth": { "open": 0.54, "width": 0.36, "round": 0.84, "jaw": 0.42, "smile": 0.0, "tension": 0.4 },
+      "audio": { "mode": "tone", "frequencyHz": 215, "secondFrequencyHz": 430, "noise": 0.0, "gain": 0.1, "syllable": "AO" }
+    },
+    "EH": {
+      "token": "EH",
+      "group": "英语元音",
+      "viseme": "wide",
+      "label": "英语 EH",
+      "note": "bed",
+      "mouth": { "open": 0.42, "width": 0.68, "round": 0.04, "jaw": 0.3, "smile": 0.38, "tension": 0.42 },
+      "audio": { "mode": "tone", "frequencyHz": 320, "secondFrequencyHz": 640, "noise": 0.0, "gain": 0.1, "syllable": "EH" }
+    },
+    "ER": {
+      "token": "ER",
+      "group": "英语元音",
+      "viseme": "rhotic",
+      "label": "英语卷舌 ER",
+      "note": "bird",
+      "mouth": { "open": 0.36, "width": 0.44, "round": 0.48, "jaw": 0.24, "smile": 0.02, "tension": 0.58 },
+      "audio": { "mode": "tone", "frequencyHz": 240, "secondFrequencyHz": 380, "noise": 0.0, "gain": 0.1, "syllable": "ER" }
+    },
+    "EY": {
+      "token": "EY",
+      "group": "英语元音",
+      "viseme": "wide",
+      "label": "英语 EY",
+      "note": "day",
+      "mouth": { "open": 0.38, "width": 0.76, "round": 0.04, "jaw": 0.26, "smile": 0.5, "tension": 0.42 },
+      "audio": { "mode": "tone", "frequencyHz": 330, "secondFrequencyHz": 660, "noise": 0.0, "gain": 0.1, "syllable": "EY" }
+    },
+    "IH": {
+      "token": "IH",
+      "group": "英语元音",
+      "viseme": "wide",
+      "label": "英语短 i",
+      "note": "sit",
+      "mouth": { "open": 0.3, "width": 0.78, "round": 0.03, "jaw": 0.18, "smile": 0.56, "tension": 0.46 },
+      "audio": { "mode": "tone", "frequencyHz": 350, "secondFrequencyHz": 700, "noise": 0.0, "gain": 0.1, "syllable": "IH" }
+    },
+    "IY": {
+      "token": "IY",
+      "group": "英语元音",
+      "viseme": "wide",
+      "label": "英语长 i",
+      "note": "see",
+      "mouth": { "open": 0.28, "width": 0.84, "round": 0.02, "jaw": 0.18, "smile": 0.68, "tension": 0.48 },
+      "audio": { "mode": "tone", "frequencyHz": 380, "secondFrequencyHz": 760, "noise": 0.0, "gain": 0.1, "syllable": "IY" }
+    },
+    "OW": {
+      "token": "OW",
+      "group": "英语元音",
+      "viseme": "round",
+      "label": "英语 OW",
+      "note": "go",
+      "mouth": { "open": 0.4, "width": 0.32, "round": 0.9, "jaw": 0.28, "smile": 0.0, "tension": 0.42 },
+      "audio": { "mode": "tone", "frequencyHz": 220, "secondFrequencyHz": 440, "noise": 0.0, "gain": 0.1, "syllable": "OW" }
+    },
+    "OY": {
+      "token": "OY",
+      "group": "英语元音",
+      "viseme": "round",
+      "label": "英语 OY",
+      "note": "boy",
+      "mouth": { "open": 0.4, "width": 0.38, "round": 0.78, "jaw": 0.28, "smile": 0.12, "tension": 0.42 },
+      "audio": { "mode": "tone", "frequencyHz": 250, "secondFrequencyHz": 500, "noise": 0.0, "gain": 0.1, "syllable": "OY" }
+    },
+    "UH": {
+      "token": "UH",
+      "group": "英语元音",
+      "viseme": "round",
+      "label": "英语 UH",
+      "note": "book",
+      "mouth": { "open": 0.34, "width": 0.32, "round": 0.82, "jaw": 0.22, "smile": 0.0, "tension": 0.44 },
+      "audio": { "mode": "tone", "frequencyHz": 225, "secondFrequencyHz": 450, "noise": 0.0, "gain": 0.1, "syllable": "UH" }
+    },
+    "UW": {
+      "token": "UW",
+      "group": "英语元音",
+      "viseme": "round",
+      "label": "英语 UW",
+      "note": "blue",
+      "mouth": { "open": 0.3, "width": 0.28, "round": 0.94, "jaw": 0.2, "smile": 0.0, "tension": 0.5 },
+      "audio": { "mode": "tone", "frequencyHz": 220, "secondFrequencyHz": 440, "noise": 0.0, "gain": 0.1, "syllable": "UW" }
+    },
+    "P": {
+      "token": "P",
+      "group": "英语辅音",
+      "viseme": "closed",
+      "label": "双唇爆破",
+      "note": "English P",
+      "mouth": { "open": 0.05, "width": 0.22, "round": 0.0, "jaw": 0.02, "smile": 0.02, "tension": 0.78 },
+      "audio": { "mode": "mixed", "frequencyHz": 190, "secondFrequencyHz": 0, "noise": 0.34, "gain": 0.08, "syllable": "P" }
+    },
+    "B": {
+      "token": "B",
+      "group": "英语辅音",
+      "viseme": "closed",
+      "label": "双唇爆破",
+      "note": "English B",
+      "mouth": { "open": 0.04, "width": 0.22, "round": 0.0, "jaw": 0.02, "smile": 0.02, "tension": 0.72 },
+      "audio": { "mode": "mixed", "frequencyHz": 165, "secondFrequencyHz": 0, "noise": 0.18, "gain": 0.08, "syllable": "B" }
+    },
+    "M": {
+      "token": "M",
+      "group": "英语辅音",
+      "viseme": "closed",
+      "label": "双唇鼻音",
+      "note": "English M",
+      "mouth": { "open": 0.03, "width": 0.24, "round": 0.02, "jaw": 0.01, "smile": 0.02, "tension": 0.62 },
+      "audio": { "mode": "tone", "frequencyHz": 175, "secondFrequencyHz": 260, "noise": 0.0, "gain": 0.08, "syllable": "M" }
+    },
+    "F": {
+      "token": "F",
+      "group": "英语辅音",
+      "viseme": "teeth",
+      "label": "唇齿音",
+      "note": "English F",
+      "mouth": { "open": 0.22, "width": 0.7, "round": 0.04, "jaw": 0.12, "smile": 0.18, "tension": 0.88 },
+      "audio": { "mode": "noise", "frequencyHz": 0, "secondFrequencyHz": 0, "noise": 0.82, "gain": 0.06, "syllable": "F" }
+    },
+    "V": {
+      "token": "V",
+      "group": "英语辅音",
+      "viseme": "teeth",
+      "label": "唇齿音",
+      "note": "English V",
+      "mouth": { "open": 0.22, "width": 0.7, "round": 0.04, "jaw": 0.12, "smile": 0.18, "tension": 0.82 },
+      "audio": { "mode": "mixed", "frequencyHz": 210, "secondFrequencyHz": 0, "noise": 0.55, "gain": 0.07, "syllable": "V" }
+    },
+    "T": {
+      "token": "T",
+      "group": "英语辅音",
+      "viseme": "alveolar",
+      "label": "舌尖音",
+      "note": "English T",
+      "mouth": { "open": 0.3, "width": 0.6, "round": 0.04, "jaw": 0.18, "smile": 0.12, "tension": 0.7 },
+      "audio": { "mode": "mixed", "frequencyHz": 230, "secondFrequencyHz": 0, "noise": 0.3, "gain": 0.08, "syllable": "T" }
+    },
+    "D": {
+      "token": "D",
+      "group": "英语辅音",
+      "viseme": "alveolar",
+      "label": "舌尖音",
+      "note": "English D",
+      "mouth": { "open": 0.3, "width": 0.58, "round": 0.04, "jaw": 0.18, "smile": 0.1, "tension": 0.64 },
+      "audio": { "mode": "mixed", "frequencyHz": 210, "secondFrequencyHz": 0, "noise": 0.16, "gain": 0.08, "syllable": "D" }
+    },
+    "K": {
+      "token": "K",
+      "group": "英语辅音",
+      "viseme": "velar",
+      "label": "舌根音",
+      "note": "English K",
+      "mouth": { "open": 0.38, "width": 0.5, "round": 0.14, "jaw": 0.3, "smile": 0.02, "tension": 0.62 },
+      "audio": { "mode": "mixed", "frequencyHz": 220, "secondFrequencyHz": 0, "noise": 0.34, "gain": 0.08, "syllable": "K" }
+    },
+    "G": {
+      "token": "G",
+      "group": "英语辅音",
+      "viseme": "velar",
+      "label": "舌根音",
+      "note": "English G",
+      "mouth": { "open": 0.36, "width": 0.48, "round": 0.14, "jaw": 0.28, "smile": 0.03, "tension": 0.56 },
+      "audio": { "mode": "mixed", "frequencyHz": 205, "secondFrequencyHz": 0, "noise": 0.18, "gain": 0.08, "syllable": "G" }
+    },
+    "N": {
+      "token": "N",
+      "group": "英语辅音",
+      "viseme": "nasal",
+      "label": "鼻音",
+      "note": "English N",
+      "mouth": { "open": 0.16, "width": 0.38, "round": 0.02, "jaw": 0.08, "smile": 0.04, "tension": 0.5 },
+      "audio": { "mode": "tone", "frequencyHz": 190, "secondFrequencyHz": 285, "noise": 0.0, "gain": 0.08, "syllable": "N" }
+    },
+    "NG": {
+      "token": "NG",
+      "group": "英语辅音",
+      "viseme": "nasal",
+      "label": "后鼻音",
+      "note": "English NG",
+      "mouth": { "open": 0.18, "width": 0.36, "round": 0.08, "jaw": 0.1, "smile": 0.02, "tension": 0.5 },
+      "audio": { "mode": "tone", "frequencyHz": 180, "secondFrequencyHz": 270, "noise": 0.0, "gain": 0.08, "syllable": "NG" }
+    },
+    "S": {
+      "token": "S",
+      "group": "英语辅音",
+      "viseme": "teeth",
+      "label": "擦音",
+      "note": "English S",
+      "mouth": { "open": 0.2, "width": 0.74, "round": 0.03, "jaw": 0.1, "smile": 0.24, "tension": 0.9 },
+      "audio": { "mode": "noise", "frequencyHz": 0, "secondFrequencyHz": 0, "noise": 0.9, "gain": 0.06, "syllable": "S" }
+    },
+    "Z": {
+      "token": "Z",
+      "group": "英语辅音",
+      "viseme": "teeth",
+      "label": "擦音",
+      "note": "English Z",
+      "mouth": { "open": 0.22, "width": 0.7, "round": 0.03, "jaw": 0.12, "smile": 0.2, "tension": 0.84 },
+      "audio": { "mode": "mixed", "frequencyHz": 260, "secondFrequencyHz": 0, "noise": 0.45, "gain": 0.07, "syllable": "Z" }
+    },
+    "SH": {
+      "token": "SH",
+      "group": "英语辅音",
+      "viseme": "rhotic",
+      "label": "卷舌擦音",
+      "note": "English SH",
+      "mouth": { "open": 0.3, "width": 0.42, "round": 0.46, "jaw": 0.18, "smile": 0.0, "tension": 0.7 },
+      "audio": { "mode": "noise", "frequencyHz": 0, "secondFrequencyHz": 0, "noise": 0.82, "gain": 0.06, "syllable": "SH" }
+    },
+    "ZH": {
+      "token": "ZH",
+      "group": "英语辅音",
+      "viseme": "rhotic",
+      "label": "卷舌擦音",
+      "note": "English ZH",
+      "mouth": { "open": 0.32, "width": 0.44, "round": 0.42, "jaw": 0.2, "smile": 0.02, "tension": 0.64 },
+      "audio": { "mode": "mixed", "frequencyHz": 230, "secondFrequencyHz": 360, "noise": 0.42, "gain": 0.07, "syllable": "ZH" }
+    },
+    "CH": {
+      "token": "CH",
+      "group": "英语辅音",
+      "viseme": "rhotic",
+      "label": "塞擦音",
+      "note": "English CH",
+      "mouth": { "open": 0.34, "width": 0.44, "round": 0.44, "jaw": 0.22, "smile": 0.02, "tension": 0.68 },
+      "audio": { "mode": "mixed", "frequencyHz": 250, "secondFrequencyHz": 390, "noise": 0.48, "gain": 0.08, "syllable": "CH" }
+    },
+    "JH": {
+      "token": "JH",
+      "group": "英语辅音",
+      "viseme": "rhotic",
+      "label": "塞擦音",
+      "note": "English JH",
+      "mouth": { "open": 0.32, "width": 0.46, "round": 0.4, "jaw": 0.2, "smile": 0.03, "tension": 0.62 },
+      "audio": { "mode": "mixed", "frequencyHz": 240, "secondFrequencyHz": 380, "noise": 0.34, "gain": 0.08, "syllable": "JH" }
+    },
+    "L": {
+      "token": "L",
+      "group": "英语辅音",
+      "viseme": "alveolar",
+      "label": "边音",
+      "note": "English L",
+      "mouth": { "open": 0.28, "width": 0.6, "round": 0.03, "jaw": 0.16, "smile": 0.12, "tension": 0.5 },
+      "audio": { "mode": "tone", "frequencyHz": 215, "secondFrequencyHz": 340, "noise": 0.0, "gain": 0.08, "syllable": "L" }
+    },
+    "R": {
+      "token": "R",
+      "group": "英语辅音",
+      "viseme": "rhotic",
+      "label": "卷舌音",
+      "note": "English R",
+      "mouth": { "open": 0.34, "width": 0.42, "round": 0.48, "jaw": 0.22, "smile": 0.0, "tension": 0.56 },
+      "audio": { "mode": "tone", "frequencyHz": 235, "secondFrequencyHz": 370, "noise": 0.0, "gain": 0.08, "syllable": "R" }
+    },
+    "W": {
+      "token": "W",
+      "group": "英语辅音",
+      "viseme": "round",
+      "label": "半元音",
+      "note": "English W",
+      "mouth": { "open": 0.34, "width": 0.34, "round": 0.88, "jaw": 0.22, "smile": 0.0, "tension": 0.44 },
+      "audio": { "mode": "tone", "frequencyHz": 220, "secondFrequencyHz": 330, "noise": 0.0, "gain": 0.08, "syllable": "W" }
+    },
+    "Y": {
+      "token": "Y",
+      "group": "英语辅音",
+      "viseme": "wide",
+      "label": "半元音",
+      "note": "English Y",
+      "mouth": { "open": 0.3, "width": 0.78, "round": 0.03, "jaw": 0.2, "smile": 0.58, "tension": 0.44 },
+      "audio": { "mode": "tone", "frequencyHz": 350, "secondFrequencyHz": 520, "noise": 0.0, "gain": 0.08, "syllable": "Y" }
+    },
+    "H": {
+      "token": "H",
+      "group": "英语辅音",
+      "viseme": "velar",
+      "label": "喉音",
+      "note": "English H",
+      "mouth": { "open": 0.4, "width": 0.5, "round": 0.16, "jaw": 0.3, "smile": 0.02, "tension": 0.48 },
+      "audio": { "mode": "mixed", "frequencyHz": 185, "secondFrequencyHz": 0, "noise": 0.48, "gain": 0.07, "syllable": "H" }
+    },
+    "TH": {
+      "token": "TH",
+      "group": "英语辅音",
+      "viseme": "teeth",
+      "label": "齿音",
+      "note": "English unvoiced TH",
+      "mouth": { "open": 0.22, "width": 0.68, "round": 0.04, "jaw": 0.12, "smile": 0.18, "tension": 0.9 },
+      "audio": { "mode": "noise", "frequencyHz": 0, "secondFrequencyHz": 0, "noise": 0.78, "gain": 0.06, "syllable": "TH" }
+    },
+    "DH": {
+      "token": "DH",
+      "group": "英语辅音",
+      "viseme": "teeth",
+      "label": "齿音",
+      "note": "English voiced TH",
+      "mouth": { "open": 0.22, "width": 0.68, "round": 0.04, "jaw": 0.12, "smile": 0.18, "tension": 0.84 },
+      "audio": { "mode": "mixed", "frequencyHz": 230, "secondFrequencyHz": 0, "noise": 0.55, "gain": 0.07, "syllable": "DH" }
+    }
+  }
+}

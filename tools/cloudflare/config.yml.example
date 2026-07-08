@@ -1,0 +1,14 @@
+# 复制到 ELF2 的 /etc/cloudflared/config.yml，并替换两处占位符。
+tunnel: <TUNNEL_UUID>
+credentials-file: /etc/cloudflared/<TUNNEL_UUID>.json
+
+protocol: quic
+no-autoupdate: true
+
+ingress:
+  - hostname: robot.veyralux.org
+    service: http://127.0.0.1:8765
+    originRequest:
+      connectTimeout: 10s
+      noHappyEyeballs: false
+  - service: http_status:404

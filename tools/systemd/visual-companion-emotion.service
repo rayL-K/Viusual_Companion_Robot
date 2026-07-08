@@ -1,0 +1,22 @@
+[Unit]
+Description=Visual Companion Robot FER+ emotion service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=wenkang
+Group=wenkang
+WorkingDirectory=/home/wenkang/embedded_competition
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/home/wenkang/embedded_competition/main/src
+EnvironmentFile=-/home/wenkang/embedded_competition/main/config/board.env
+ExecStart=/home/wenkang/embedded_competition/.venv/bin/python -m visual_companion_robot.perception.emotion_server
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

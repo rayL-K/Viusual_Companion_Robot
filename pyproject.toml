@@ -1,0 +1,16 @@
+[project]
+name = "visual-companion-robot"
+version = "0.1.0"
+description = "基于 ELF2/RK3588 的说话人中心多模态 AI 陪伴机器人"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "PyYAML>=5.3",
+]
+
+[tool.visual-companion-robot.python]
+target-version = "3.11"
+reason = "Windows 开发环境使用 Python 3.11；ELF2 出厂环境使用 Python 3.10，共享源码必须同时兼容。"
+
+[tool.pytest.ini_options]
+testpaths = ["main/tests"]
+norecursedirs = ["output", ".git", "node_modules"]

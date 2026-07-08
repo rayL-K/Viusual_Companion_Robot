@@ -1,0 +1,71 @@
+{
+	"Version": 3,
+	"Meta": {
+		"Duration": 2.583,
+		"Fps": 60.0,
+		"Loop": true,
+		"AreBeziersRestricted": true,
+		"CurveCount": 2,
+		"TotalSegmentCount": 9,
+		"TotalPointCount": 17,
+		"UserDataCount": 0,
+		"TotalUserDataSize": 0
+	},
+	"Curves": [
+		{
+			"Target": "Parameter",
+			"Id": "jzdh",
+			"Segments": [
+				0,
+				-360,
+				0,
+				1.65,
+				1017,
+				0,
+				1.75,
+				1106,
+				0,
+				1.85,
+				1049,
+				0,
+				1.917,
+				1080,
+				0,
+				2,
+				1080,
+				0,
+				2.583,
+				1080
+			]
+		},
+		{
+			"Target": "Parameter",
+			"Id": "Param19",
+			"Segments": [
+				0,
+				0,
+				1,
+				0.056,
+				0,
+				0.111,
+				1,
+				0.167,
+				1,
+				1,
+				0.917,
+				1,
+				1.667,
+				1,
+				2.417,
+				1,
+				1,
+				2.472,
+				1,
+				2.528,
+				0,
+				2.583,
+				0
+			]
+		}
+	]
+}

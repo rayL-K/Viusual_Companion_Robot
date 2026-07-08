@@ -1,0 +1,67 @@
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+win/generated/
+main/reports/
+main/data/
+main/config/local.env
+main/config/board.env
+main/miniprogram/project.private.config.json
+main/miniprogram/.miniprogram-cache/
+node_modules/
+dist/
+.playwright-mcp/
+.playwright-cli/
+.wrangler/
+live2d-stage*.png
+/output/
+
+# Generated mediapipe model files (auto-downloaded)
+main/visual-perception/models/weights/*.onnx
+main/visual-perception/models/weights/*.tflite
+
+# Large model weight files (not tracked in git)
+*.safetensors
+*.bin
+*.onnx
+main/models/moondream2/tokenizer.json
+
+# Temp playwright test scripts
+main/live2d_stage/tmp/
+main/live2d_stage/_*.cjs
+main/models/
+
+# CodeGraph index
+.codegraph/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Environment
+.env
+
+# Logs
+*.log
+
+# Python packaging
+*.egg-info/
+
+# Coverage
+.coverage
+coverage/
+htmlcov/
+
+# Editor swap files
+*.swp
+*.swo
+
+# Generated tool directories
+.reasonix/

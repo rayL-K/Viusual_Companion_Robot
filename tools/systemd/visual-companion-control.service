@@ -1,0 +1,26 @@
+[Unit]
+Description=Visual Companion Robot control gateway
+After=network-online.target visual-companion-emotion.service visual-companion-vlm.service
+Wants=network-online.target
+Requires=visual-companion-emotion.service visual-companion-vlm.service
+
+[Service]
+Type=simple
+User=wenkang
+Group=wenkang
+WorkingDirectory=/home/wenkang/embedded_competition
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/home/wenkang/embedded_competition/main/src
+EnvironmentFile=-/home/wenkang/embedded_competition/main/config/board.env
+ExecStartPre=/bin/bash -c 'for attempt in {1..60}; do /usr/bin/curl -fsS --max-time 2 http://127.0.0.1:8767/health >/dev/null && exit 0; sleep 1; done; exit 1'
+ExecStart=/home/wenkang/embedded_competition/.venv/bin/python main/scripts/live2d_control_server.py
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+MemoryHigh=2500M
+MemoryMax=3500M
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

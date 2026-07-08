@@ -1,0 +1,26 @@
+[Unit]
+Description=Visual Companion Robot RK3588 semantic VLM service
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/opt/visual-companion-vlm/vlm_worker
+
+[Service]
+Type=simple
+User=wenkang
+Group=wenkang
+WorkingDirectory=/home/wenkang/embedded_competition
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/home/wenkang/embedded_competition/main/src
+EnvironmentFile=-/home/wenkang/embedded_competition/main/config/board.env
+ExecStart=/home/wenkang/embedded_competition/.venv/bin/python -m visual_companion_robot.perception.semantic_vlm_server
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=60
+TimeoutStopSec=15
+MemoryHigh=3600M
+MemoryMax=4200M
+NoNewPrivileges=true
+PrivateTmp=false
+
+[Install]
+WantedBy=multi-user.target

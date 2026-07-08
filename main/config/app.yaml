@@ -1,0 +1,56 @@
+app:
+  name: visual_companion_robot
+  mode: development
+
+runtime:
+  display: ":0"
+  log_level: INFO
+
+# ── 后端选择 ──────────────────────────────────────────────────────
+# 仅对话规划使用 DeepSeek；视觉、语音与 VAD 固定在 ELF2 本地运行。
+backend:
+  llm: cloud
+  vision: local
+  asr: local
+  tts: local
+  vad: local
+
+# ── 本地模型路径 ──────────────────────────────────────────────────
+model_paths:
+  # YOLO 检测模型（RKNN 格式）
+  yolo: models/yolo/yolov5s-640-640.rknn
+  pose: models/pose/yolov8n-pose.rknn
+  # 说话人中心人脸链路（OpenCV DNN / ELF2 CPU）
+  yunet: models/face/yunet.onnx
+  sface: models/face/sface.onnx
+  emotion: models/emotion/emotion-ferplus-8.onnx
+  # 同步音画主动说话人（ONNX Runtime / ELF2 CPU）
+  active_speaker: models/active_speaker/light-asd-ava.onnx
+  # 本地 LLM（GGUF 格式）
+  llm: models/qwen/Qwen2.5-1.5B-Q4_K_M.gguf
+  # ONNX 模型目录（sherpa-onnx ASR/TTS/VAD）
+  onnx: models/onnx/
+
+# ── RK3588 NPU 配置 ──────────────────────────────────────────────
+npu:
+  target: rk3588
+  core_mask: 0
+
+# ── 模块配置 ──────────────────────────────────────────────────────
+modules:
+  vision:
+    enabled: true
+  audio_input:
+    enabled: false
+  speech_recognition:
+    enabled: false
+  brain:
+    enabled: false
+  speech_synthesis:
+    enabled: false
+  live2d_display:
+    enabled: true
+    model_name: Strawberry_Rabbit
+    model_path: assets/live2d/Strawberry_Rabbit/Strawberry_Rabbit.model3.json
+    manifest_path: assets/live2d/Strawberry_Rabbit/manifest.json
+

@@ -1,0 +1,10 @@
+PyYAML>=6.0,<7.0
+opencv-python>=4.9,<5.0
+onnxruntime>=1.18
+sherpa-onnx>=1.10
+numpy>=1.24
+Pillow>=10.0
+requests>=2.31
+webrtcvad-wheels>=2.0.14; platform_system == "Windows"
+webrtcvad>=2.0; platform_system != "Windows"
+

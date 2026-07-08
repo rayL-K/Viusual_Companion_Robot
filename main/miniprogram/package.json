@@ -1,0 +1,9 @@
+{
+  "name": "visual-companion-wechat-game",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "check": "node scripts/check-miniprogram.mjs",
+    "test": "node --test tests/*.test.js"
+  }
+}

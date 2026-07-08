@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="theme-color" content="#fff1d9">
+  <meta name="description" content="草莓兔兔 Visual Companion Robot：Live2D、板端语音识别与合成、动作和视觉交互。">
+  <title>草莓兔兔 · Visual Companion Robot</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/src/styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#mainStage">跳到主要内容</a>
+  <main id="mainStage" class="app-shell">
+    <section class="stage-card">
+      <div id="live2dCanvas" class="live2d-canvas" aria-label="Live2D 真实模型展示区">
+        <div id="stageFallback" class="stage-fallback" hidden>
+          <strong>角色显示正在恢复</strong>
+          <span id="stageFallbackDetail">你仍然可以继续文字或语音对话。</span>
+          <button id="stageRetryButton" type="button">重新加载角色</button>
+        </div>
+      </div>
+      <button id="mobileControlButton" class="mobile-control-button" type="button">控制台</button>
+      <div id="dropOverlay" class="drop-overlay" hidden>
+        <div class="drop-overlay-content">
+          <span class="drop-overlay-icon">+</span>
+          <span class="drop-overlay-text">松开以投喂文件</span>
+        </div>
+      </div>
+      <div id="modelScalePanel" class="model-scale-panel" hidden>
+        <div class="model-scale-header">
+          <span class="model-scale-title">人物大小</span>
+          <button id="modelScaleCloseButton" class="model-scale-close" type="button" aria-label="关闭人物大小面板">×</button>
+        </div>
+        <label class="model-scale-label" for="modelScaleInput">
+          <span>缩放</span>
+          <strong id="modelScaleValue">100%</strong>
+        </label>
+        <input id="modelScaleInput" type="range" min="0.4" max="2.6" step="0.01" value="1">
+        <button id="modelTransformResetButton" class="model-scale-reset" type="button">重置位置</button>
+      </div>
+      <div id="replyBubble" class="reply-bubble" aria-live="polite">
+        <div class="reply-bubble-header">
+          <span>草莓兔兔</span>
+          <div class="reply-bubble-controls">
+            <button id="bubbleFontDown" class="bubble-font-btn" type="button" aria-label="减小字体" title="减小字体">A–</button>
+            <button id="bubbleFontUp" class="bubble-font-btn" type="button" aria-label="增大字体" title="增大字体">A+</button>
+          </div>
+        </div>
+        <p id="replyText">等待控制数据...</p>
+        <div id="bubbleResizeHandle" class="bubble-resize-handle" aria-hidden="true"></div>
+      </div>
+
+      <form id="chatForm" class="stage-chat-form">
+        <label for="chatInput">实时对话</label>
+        <textarea
+          id="chatInput"
+          name="message"
+          autocomplete="off"
+          enterkeyhint="send"
+          rows="2"
+          placeholder="输入要问她的话…"
+        ></textarea>
+        <div class="chat-actions">
+          <button id="historyButton" class="history-button" type="button" aria-label="查看历史记录">◷</button>
+          <button id="chatSubmitButton" type="submit">发送</button>
+        </div>
+      </form>
+
+      <div class="status-panel">
+        <strong id="stageStatus" data-mobile-label="正在加载角色">正在加载 Live2D 模型...</strong>
+        <span id="stageHint">模型来自本地 Strawberry_Rabbit 资源，控制数据来自 LLM JSON。</span>
+      </div>
+    </section>
+
+    <aside class="control-card">
+      <header class="control-header">
+        <button id="mobileStageButton" class="mobile-stage-button" type="button">返回角色</button>
+        <p class="eyebrow">Visual Companion Robot</p>
+        <div class="title-row">
+          <h1>Live2D 控制台</h1>
+          <button class="help-button" type="button" aria-label="查看控制台说明">?</button>
+          <div class="tooltip" role="tooltip">
+            浏览器端支持 LLM 交互：页面请求本地控制服务，本地服务调用 LLM、TTS 与模型资源，前端负责渲染和安全映射。
+          </div>
+        </div>
+      </header>
+
+      <label class="rate-control" for="speechRateInput">
+        <span>语速</span>
+        <input id="speechRateInput" type="range" min="0.85" max="1.35" step="0.01" value="1.12">
+        <strong id="speechRateValue">1.12x</strong>
+      </label>
+
+      <div class="grid">
+        <button id="actionDiskButton" type="button">动作盘</button>
+        <button id="backendPanelButton" type="button">运行后端</button>
+        <button id="voiceModelButton" type="button">语音模型</button>
+        <button id="skinModelButton" type="button">皮肤模型</button>
+        <button id="cameraPanelButton" type="button">摄像头</button>
+        <button id="audioPanelButton" type="button">麦克风</button>
+        <button id="controlLogButton" type="button">运行日志</button>
+      </div>
+
+      <section id="backendPanel" class="side-panel" hidden>
+        <header>
+          <h2>当前运行后端</h2>
+          <button id="closeBackendPanelButton" type="button" aria-label="收起后端面板">收起</button>
+        </header>
+        <div id="backendList" class="backend-list">
+          <p>正在读取后端配置...</p>
+        </div>
+      </section>
+
+      <section id="actionPanel" class="side-panel" hidden>
+        <header>
+          <h2>动作盘</h2>
+          <button id="closeActionPanelButton" type="button" aria-label="收起动作盘">收起</button>
+        </header>
+        <div id="actionList" class="action-list"></div>
+      </section>
+
+      <section id="voicePanel" class="side-panel" hidden>
+        <header>
+          <h2>语音生成设置</h2>
+          <button id="closeVoicePanelButton" type="button" aria-label="收起语音模型面板">收起</button>
+        </header>
+        <div class="voice-config">
+          <section>
+            <h3>生成方式</h3>
+            <div id="voiceList" class="voice-list">正在读取语音服务...</div>
+            <button id="voicePreviewButton" type="button">试听当前模型</button>
+          </section>
+
+          <div id="referenceConfigFields" class="reference-config-fields">
+            <label class="reference-picker" for="referenceSelect">
+              <span>参考音频</span>
+              <select id="referenceSelect"></select>
+            </label>
+            <audio id="referenceAudioPreview" controls preload="none"></audio>
+
+            <label class="reference-text" for="referenceTextInput">
+              <span>参考文本</span>
+              <textarea id="referenceTextInput" rows="4" placeholder="这里填写参考音频对应的原文。"></textarea>
+            </label>
+            <p id="referenceHint">参考音频会传给 VoxCPM，用来约束音色；文本必须尽量与音频内容一致。</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="skinPanel" class="side-panel" hidden>
+        <header>
+          <h2>更换皮肤模型</h2>
+          <button id="closeSkinPanelButton" type="button" aria-label="收起皮肤模型面板">收起</button>
+        </header>
+        <p>当前皮肤：Strawberry_Rabbit。</p>
+        <p>后续新模型放入 <code>main/assets/live2d/</code> 后，会在这里做模型列表和热切换。</p>
+      </section>
+
+      <section id="cameraPanel" class="side-panel" hidden>
+        <header>
+          <h2>视觉摄像头</h2>
+          <button id="closeCameraPanelButton" type="button" aria-label="收起摄像头面板">收起</button>
+        </header>
+        <div class="camera-config">
+          <p>Windows 开发环境下可在这里选择测试摄像头；浏览器首次授权后才会显示真实设备名称。</p>
+          <label for="cameraSelect">
+            <span>摄像头设备</span>
+            <select id="cameraSelect"></select>
+          </label>
+          <div class="camera-actions">
+            <button id="cameraDetectButton" type="button">检测设备</button>
+            <button id="cameraStartButton" type="button">打开预览</button>
+            <button id="cameraStopButton" type="button">关闭预览</button>
+            <button id="cameraDefaultButton" type="button">设为默认</button>
+          </div>
+          <p id="cameraStatus">尚未检测摄像头。</p>
+        </div>
+      </section>
+
+      <section id="audioPanel" class="side-panel" hidden>
+        <header>
+          <h2>听觉麦克风</h2>
+          <button id="closeAudioPanelButton" type="button" aria-label="收起听觉面板">收起</button>
+        </header>
+        <div class="audio-config">
+          <p>可在这里选择麦克风；PCM 只发送给 ELF2，并由板端 SenseVoice 离线识别。</p>
+          <label for="audioSelect">
+            <span>麦克风设备</span>
+            <select id="audioSelect"></select>
+          </label>
+          <div class="audio-actions">
+            <button id="audioDetectButton" type="button">检测设备</button>
+            <button id="audioStartButton" type="button">开始监听</button>
+            <button id="audioStopButton" type="button">停止监听</button>
+            <button id="audioDefaultButton" type="button">设为默认</button>
+          </div>
+          <div class="audio-transcript">
+            <span>语音识别</span>
+            <strong id="audioTranscript">开启监听后会由 ELF2 把你的语音转成文字。</strong>
+          </div>
+          <p id="audioStatus">尚未检测麦克风。</p>
+        </div>
+      </section>
+
+      <section id="logPanel" class="side-panel log-panel" hidden>
+        <header>
+          <h2>运行日志</h2>
+          <button id="closeLogPanelButton" type="button" aria-label="收起运行日志">收起</button>
+        </header>
+        <pre id="controlLog">暂无运行日志。</pre>
+      </section>
+
+      <section id="historyPanel" class="side-panel history-panel" hidden>
+        <header>
+          <h2>对话历史</h2>
+        </header>
+        <div id="historyList" class="history-list">暂无历史记录。</div>
+      </section>
+
+      <section id="perceptionPanel" class="side-panel perception-panel">
+        <header>
+          <h2>视觉感知</h2>
+        </header>
+        <div class="perception-content">
+          <p id="perceptionScene" class="perception-scene">等待摄像头画面...</p>
+          <dl class="perception-detail">
+            <div><dt>活动</dt><dd id="perceptionActivity">-</dd></div>
+            <div><dt>情绪</dt><dd id="perceptionEmotion">-</dd></div>
+            <div><dt>人数</dt><dd id="perceptionCount">-</dd></div>
+            <div><dt>关注对象</dt><dd id="perceptionIdentity">未登记</dd></div>
+            <div><dt>说话人</dt><dd id="perceptionSpeaker">待音画时序判断</dd></div>
+          </dl>
+        </div>
+      </section>
+
+      <section class="info">
+        <h2>控制状态</h2>
+        <dl>
+          <div><dt>表情</dt><dd id="expressionValue">-</dd></div>
+          <div><dt>动作</dt><dd id="motionValue">-</dd></div>
+          <div><dt>情绪</dt><dd id="emotionValue">-</dd></div>
+          <div><dt>语音</dt><dd id="voiceValue">等待 TTS 服务</dd></div>
+        </dl>
+      </section>
+    </aside>
+  </main>
+
+  <section id="cameraWindow" class="camera-window" aria-label="摄像头预览窗口" hidden>
+    <video id="cameraPreview" autoplay playsinline muted></video>
+    <div id="cameraResizeHandle" class="camera-resize-handle" aria-hidden="true"></div>
+    <p id="cameraWindowStatus" class="sr-only">等待摄像头画面。</p>
+  </section>
+
+  <section id="audioWindow" class="audio-window" aria-label="麦克风监听窗口" hidden>
+    <div class="audio-meter" aria-hidden="true">
+      <span id="audioLevelBar"></span>
+    </div>
+    <p id="audioWindowStatus" class="sr-only">等待麦克风输入。</p>
+  </section>
+
+  <script src="/vendor/live2dcubismcore.min.js"></script>
+  <script src="/vendor/pixi-6.5.10.min.js"></script>
+  <script src="/vendor/pixi-live2d-display-0.4.0-cubism4.min.js"></script>
+  <script type="module" src="/src/stage.js"></script>
+</body>
+</html>
