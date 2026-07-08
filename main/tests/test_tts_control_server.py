@@ -4,6 +4,7 @@ import io
 import base64
 import json
 import os
+import tempfile
 import unittest
 import wave
 from concurrent.futures import ThreadPoolExecutor
@@ -18,6 +19,7 @@ import numpy as np
 from main.scripts import live2d_control_server as control_server
 from main.scripts.live2d_control_server import (
     activate_tts_runtime,
+    build_direct_conversation_control_plan,
     build_direct_vision_control_plan,
     build_runtime_voice_config,
     dispatch_realtime_message,
@@ -29,6 +31,7 @@ from main.scripts.live2d_control_server import (
     synthesize_sherpa_onnx,
     ControlHandler,
 )
+from visual_companion_robot.brain.memory import ConversationTurn
 from visual_companion_robot.perception.offline_asr_service import OfflineAsrResult
 
 
@@ -198,6 +201,24 @@ class VoxcpmControlServerTests(unittest.TestCase):
         self.assertIn("青年男性", payload["text"])
         self.assertIn("toothbrush", payload["text"])
         self.assertNotIn("蓝天", payload["text"])
+
+    def test_chat_short_followup_bypasses_deepseek_and_uses_recent_turn(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as temporary_directory,
+            patch.object(control_server, "MEMORY_DB_PATH", Path(temporary_directory) / "memory.sqlite3"),
+            patch("main.scripts.live2d_control_server.get_llm_client") as get_llm_client,
+        ):
+            get_llm_client.side_effect = AssertionError("高频短问和承接追问不应调用 DeepSeek")
+
+            status, happy_payload = self.request_json("POST", "/chat", '{"text":"你开心吗？"}')
+            status_followup, followup_payload = self.request_json("POST", "/chat", '{"text":"为什么？"}')
+
+        self.assertEqual(status, 200)
+        self.assertIn("开心", happy_payload["text"])
+        self.assertEqual(status_followup, 200)
+        self.assertIn("因为", followup_payload["text"])
+        self.assertIn("开心", followup_payload["text"])
+        self.assertNotIn("为什么这么问", followup_payload["text"])
 
     def test_cors_only_allows_local_browser_origins(self) -> None:
         status, payload, allowed_origin = self.request_with_origin("https://malicious.example")
@@ -508,6 +529,26 @@ class VoxcpmControlServerTests(unittest.TestCase):
         assert plan is not None
         self.assertIn("还没有拿到稳定的摄像头画面", plan.text)
         self.assertNotIn("风景", plan.text)
+
+    def test_short_followup_uses_previous_turn_without_llm(self) -> None:
+        plan = build_direct_conversation_control_plan(
+            "为什么？",
+            [
+                ConversationTurn(
+                    user_text="你开心吗？",
+                    assistant_text="开心呀，能和你一起聊天、一起测试，我就会很开心。",
+                    created_at="2026-07-08T23:33:50+08:00",
+                )
+            ],
+            expressions=["heart", "question"],
+            motions=["scene1", "captain"],
+        )
+
+        self.assertIsNotNone(plan)
+        assert plan is not None
+        self.assertIn("因为", plan.text)
+        self.assertIn("开心", plan.text)
+        self.assertEqual(plan.emotion, "thinking")
 
 
 if __name__ == "__main__":

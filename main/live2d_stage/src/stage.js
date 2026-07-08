@@ -1696,10 +1696,17 @@ async function speakPlan(plan) {
   if (!modelState.generatingSpeech) {
     startThinkingAnimation();
   }
-  setSpeechStatus(requestId, `正在生成 ${currentBackendLabel()} 音频`, "生成完成后会自动播放。");
+  setReplyText(plan.text);
+  setSpeechStatus(requestId, `正在生成 ${currentBackendLabel()} 音频`, "文字已先显示，音频生成完成后会自动播放。");
 
   try {
+    const ttsStartedAt = performance.now();
     const audioBlob = await requestExternalTts(plan, rate);
+    addControlLog("TTS 音频生成完成", {
+      elapsedMs: Math.round(performance.now() - ttsStartedAt),
+      bytes: audioBlob.size,
+      voice: modelState.selectedVoice,
+    });
     if (requestId !== modelState.speechRequestId) {
       return;
     }
@@ -2967,21 +2974,25 @@ async function processOfflineAsrQueue() {
       const { samples, speakerFrames, realtimePromise, generation } = queued;
       setAudioTranscript("正在 ELF2 上使用本地 SenseVoice 识别……");
       try {
-        const speakerPromise = detectActiveSpeaker(samples, speakerFrames).catch((error) => {
-          addControlLog("主动说话人判断失败", { error: error.message });
-          return null;
-        });
+        const speakerPromise = samples.length >= ASR_SAMPLE_RATE * 0.8
+          ? detectActiveSpeaker(samples, speakerFrames)
+            .then((speakerResult) => {
+              perceptionClient.applyActiveSpeaker(speakerResult);
+              return speakerResult;
+            })
+            .catch((error) => {
+              addControlLog("主动说话人判断失败", { error: error.message });
+              return null;
+            })
+          : Promise.resolve(null);
         const asrPromise = realtimePromise
           ? realtimePromise.catch((error) => {
             addControlLog("实时 ASR 失败，已切换 HTTP 识别", { error: error.message });
             return offlineAsrClient.transcribe(samples);
           })
           : offlineAsrClient.transcribe(samples);
-        const [result, speakerResult] = await Promise.all([
-          asrPromise,
-          speakerPromise,
-        ]);
-        perceptionClient.applyActiveSpeaker(speakerResult);
+        const result = await asrPromise;
+        void speakerPromise;
         if (generation !== modelState.audioCaptureGeneration || !modelState.audioStream) {
           addControlLog("已丢弃过期语音识别结果", { generation });
           continue;
@@ -3661,9 +3672,14 @@ function submitChatText(rawText, options = {}) {
   setReplyThinking();
   setStatus("正在请求控制服务", "控制服务会优先使用当前视觉事实，必要时再调用 DeepSeek。");
   addControlLog(options.source === "speech" ? "语音转文字输入" : "用户输入", { text: userText });
+  const controlStartedAt = performance.now();
 
   return requestChatPlan(userText)
     .then((plan) => {
+      addControlLog("控制服务返回", {
+        elapsedMs: Math.round(performance.now() - controlStartedAt),
+        source: options.source || "text",
+      });
       addChatHistory(userText, plan.text, plan);
       return applyPlan(plan, { speak: true });
     })

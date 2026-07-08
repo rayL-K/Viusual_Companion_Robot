@@ -16,6 +16,7 @@ if str(SRC_ROOT) not in sys.path:
 from visual_companion_robot.integrations.llm_client import (
     DeepSeekLlmClient,
     LlmContext,
+    normalize_thinking_type,
     normalize_action_plan_for_user_text,
     parse_live2d_control_plan,
 )
@@ -210,11 +211,14 @@ class LlmControlPlanTest(unittest.TestCase):
             )
         )
         user_content = json.loads(request["messages"][1]["content"])
+        user_message = request["messages"][1]["content"]
 
         self.assertEqual(user_content["当前运行上下文"]["current_time"], "2026-05-17T17:40:00+08:00")
         self.assertEqual(user_content["近期记忆"][0]["relative_time"], "12 分钟前")
         self.assertEqual(user_content["联网事实"]["facts"][0]["summary"], "南京市江宁区当前多云，22°C")
+        self.assertLess(user_message.find("允许表情"), user_message.find("用户输入"))
         self.assertIn("联网事实", request["messages"][0]["content"])
+        self.assertIn("省略追问", request["messages"][0]["content"])
 
     def test_chat_request_prioritizes_vision_and_keeps_response_budget_small(self) -> None:
         client = FakeDeepSeekClient("{}")
@@ -236,8 +240,18 @@ class LlmControlPlanTest(unittest.TestCase):
 
         system_prompt = request["messages"][0]["content"]
         self.assertIn("必须优先引用 vision 字段", system_prompt)
-        self.assertLessEqual(request["max_tokens"], 360)
+        self.assertLessEqual(request["max_tokens"], 260)
         self.assertLess(request["temperature"], 0.6)
+        self.assertEqual(request["thinking"], {"type": "disabled"})
+
+    def test_deepseek_thinking_defaults_to_disabled_for_latency(self) -> None:
+        client = FakeDeepSeekClient("{}")
+
+        request = client._build_request(self._context(expressions=["heart"]))
+
+        self.assertEqual(request["thinking"], {"type": "disabled"})
+        self.assertEqual(normalize_thinking_type("enabled"), "enabled")
+        self.assertEqual(normalize_thinking_type("unexpected"), "disabled")
 
     @staticmethod
     def _context(expressions: list[str]) -> LlmContext:

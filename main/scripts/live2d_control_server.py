@@ -40,6 +40,7 @@ if str(SRC_ROOT) not in sys.path:
 
 from visual_companion_robot.integrations.llm_client import (
     DeepSeekLlmClient,
+    Live2DActionControl,
     Live2DControlPlan,
     LlmClientError,
     LlmContext,
@@ -388,6 +389,10 @@ VISION_QUESTION_KEYWORDS = (
 )
 
 
+WHY_FOLLOWUP_TEXTS = {"为什么", "为啥", "怎么说", "为什么呢", "为什么呀"}
+GREETING_TEXTS = {"你好", "您好", "在吗", "喂", "哈喽", "hello", "hi"}
+
+
 def is_visual_description_request(user_text: str) -> bool:
     """判断用户是否在询问当前摄像头画面，命中后必须优先使用板端事实。"""
 
@@ -397,6 +402,91 @@ def is_visual_description_request(user_text: str) -> bool:
     if any(keyword in text for keyword in VISION_QUESTION_KEYWORDS):
         return True
     return ("你" in text and ("看到" in text or "看见" in text) and ("画面" in text or "什么" in text))
+
+
+def _normalized_intent_text(user_text: str) -> str:
+    return "".join(ch for ch in str(user_text or "").strip().lower() if ch not in " \t\r\n，。！？,.!?~～")
+
+
+def _short_quote(text: str, limit: int = 28) -> str:
+    normalized = " ".join(str(text or "").strip().split()).strip("，。！？,.!?；; ")
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[:limit].rstrip("，。！？,.!?；; ") + "…"
+
+
+def is_why_followup_request(user_text: str) -> bool:
+    normalized = _normalized_intent_text(user_text)
+    return normalized in WHY_FOLLOWUP_TEXTS or (len(normalized) <= 8 and normalized.startswith("为什么"))
+
+
+def build_why_followup_reply(memory_turns: List[Any]) -> str:
+    if not memory_turns:
+        return "因为我想顺着你刚才的问题认真回答；你再补一句上下文，我就能接得更准。"
+    latest = memory_turns[-1]
+    user_text = str(getattr(latest, "user_text", "") or "")
+    assistant_text = str(getattr(latest, "assistant_text", "") or "")
+    combined = f"{user_text} {assistant_text}"
+    if any(keyword in combined for keyword in ("开心", "高兴", "快乐")):
+        return "因为我正在和你聊天，也能看到你认真陪我测试，所以会觉得很开心呀。"
+    if any(keyword in combined for keyword in ("自然", "生硬", "机械", "像真人")):
+        return "因为自然的陪伴不该像念台词，我会尽量说短一点、接得更顺一点。"
+    quote = _short_quote(assistant_text or user_text)
+    if quote:
+        return f"因为刚才我们聊到“{quote}”，我是在接着这个意思往下说。"
+    return "因为我在接着上一句话回答你，不想把话题突然断开。"
+
+
+def build_direct_conversation_control_plan(
+    user_text: str,
+    memory_turns: List[Any],
+    expressions: List[str],
+    motions: List[str],
+) -> Optional[Live2DControlPlan]:
+    """高频短问与承接追问走本地直答，减少云端 LLM 等待感。"""
+
+    text = str(user_text or "").strip()
+    normalized = _normalized_intent_text(text)
+    if not normalized:
+        return None
+
+    expression = _pick_allowed(["heart", "question", "blush"], expressions)
+    motion = _pick_allowed(["scene1", "captain", "idle"], motions)
+    emotion = "happy"
+    actions: List[Live2DActionControl] = []
+    parameters: Dict[str, float] = {"ParamMouthForm": 0.2}
+
+    if is_why_followup_request(text):
+        reply = build_why_followup_reply(memory_turns)
+        expression = _pick_allowed(["question", "heart", "blush"], expressions)
+        motion = _pick_allowed(["captain", "scene1", "idle"], motions)
+        emotion = "thinking"
+    elif ("自然" in text and any(keyword in text for keyword in ("说话", "回答", "声音"))) or any(
+        keyword in text for keyword in ("别这么机械", "不要这么机械", "像真人一点")
+    ):
+        reply = "可以呀，我会少一点套话，回答更短、更顺，也尽量先把重点告诉你。"
+        expression = _pick_allowed(["heart", "blush", "question"], expressions)
+        parameters = {"ParamMouthForm": 0.25, "ParamAngleY": 2}
+    elif ("开心" in text or "高兴" in text) and any(keyword in text for keyword in ("你", "兔兔", "草莓")):
+        reply = "开心呀，能和你一起聊天、一起测试，我就会很开心。"
+        expression = _pick_allowed(["heart", "blush", "question"], expressions)
+        actions = [Live2DActionControl(name="finger_heart", mode="pulse", duration_ms=2200, delay_ms=0)]
+        parameters = {"ParamMouthForm": 0.3, "ParamAngleX": 4, "ParamAngleY": 2}
+    elif normalized in GREETING_TEXTS:
+        reply = "主人，我在呢。你直接说，我会尽量快一点回应你。"
+        expression = _pick_allowed(["heart", "question", "blush"], expressions)
+    else:
+        return None
+
+    return Live2DControlPlan(
+        text=reply,
+        emotion=emotion,
+        expression=expression,
+        motion=motion,
+        actions=actions,
+        speech=SpeechControl(rate=1.08, pitch=1.15),
+        parameters=parameters,
+    )
 
 
 def _pick_allowed(preferences: List[str], allowed: List[str]) -> str:
@@ -897,6 +987,18 @@ class ControlHandler(BaseHTTPRequestHandler):
             direct_plan = build_direct_vision_control_plan(
                 text[:MAX_TEXT_LENGTH],
                 vision_context,
+                expressions,
+                motions,
+            )
+            if direct_plan is not None:
+                if parsed_rate is not None:
+                    direct_plan.speech.rate = clamp(parsed_rate, 0.85, 1.35)
+                memory_store.append_turn(text[:MAX_TEXT_LENGTH], direct_plan.text)
+                self.send_json(direct_plan.to_dict())
+                return
+            direct_plan = build_direct_conversation_control_plan(
+                text[:MAX_TEXT_LENGTH],
+                memory_context,
                 expressions,
                 motions,
             )

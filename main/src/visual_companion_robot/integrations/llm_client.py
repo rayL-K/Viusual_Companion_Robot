@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 import urllib.error
 import urllib.request
 from abc import ABC, abstractmethod
@@ -18,13 +19,14 @@ from typing import Any, Dict, List, Optional
 
 DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash"
-DEFAULT_CONTROL_MAX_TOKENS = 360
+DEFAULT_CONTROL_MAX_TOKENS = 260
+DEFAULT_DEEPSEEK_THINKING_TYPE = "disabled"
 
 _LIVE2D_SYSTEM_PROMPT = (
     "你是虚拟陪伴机器人草莓兔兔的导演。"
     "请只输出一个 JSON 对象，不要 Markdown。"
     "JSON 字段必须包含：text, emotion, expression, motion, actions, speech, parameters。"
-    "text 是适合用温柔中文女声朗读的一句话或两句话，默认不超过 70 个汉字。"
+    "text 是适合用温柔中文女声朗读的一句话或两句话，默认不超过 50 个汉字，优先短句。"
     "emotion 从 happy, neutral, shy, surprised, sad, angry, thinking 中选择。"
     "expression 必须从允许表情中选择。motion 必须从允许动作中选择。"
     "actions 是数组，用来控制会持续显示的道具或姿态。"
@@ -38,6 +40,7 @@ _LIVE2D_SYSTEM_PROMPT = (
     "当前运行上下文.vision 是板端摄像头事实；当用户问画面、人物、环境、物体或表情时，必须优先引用 vision 字段，不要编造风景或不存在的内容。"
     "若 vision.enabled 为 false 或 status 为 stale，应说明当前没有稳定画面，不要猜测。"
     "近期记忆包含 time 和 relative_time，回答记忆或时间问题时必须使用这些具体时间，不要凭聊天顺序猜昨天、前天。"
+    "当用户输入“为什么”“然后呢”“你呢”等省略追问时，必须先根据近期记忆补全上一轮主题再回答，不要泛泛反问。"
     "如果用户要求说明你记得什么，要给出具体日期时间或相对时间。"
     "duration_ms 只对 pulse 有效，保持在 300 到 10000。"
     "speech.voice 固定为 female_zh，rate 在 0.85 到 1.15，pitch 在 1.0 到 1.35。"
@@ -133,6 +136,7 @@ class DeepSeekLlmClient(LlmClient):
         self.api_key = api_key or os.environ.get("DEEPSEEK_API_KEY", "")
         self.base_url = (base_url or os.environ.get("DEEPSEEK_BASE_URL") or DEFAULT_DEEPSEEK_BASE_URL).rstrip("/")
         self.model = model or os.environ.get("DEEPSEEK_MODEL") or DEFAULT_DEEPSEEK_MODEL
+        self.thinking_type = normalize_thinking_type(os.environ.get("DEEPSEEK_THINKING_TYPE"))
         self.timeout_sec = timeout_sec
         if not self.api_key:
             raise LlmClientError("缺少 DEEPSEEK_API_KEY 环境变量。")
@@ -161,11 +165,6 @@ class DeepSeekLlmClient(LlmClient):
     @staticmethod
     def _build_user_content(ctx: LlmContext) -> dict:
         return {
-            "用户输入": ctx.user_prompt,
-            "当前运行上下文": ctx.runtime_context,
-            "联网事实": ctx.web_context,
-            "近期记忆": ctx.memory_context[-6:],
-            "长期记忆": ctx.long_term_memory[-12:],
             "允许表情": ctx.expressions,
             "允许动作": ctx.motions,
             "输出示例": {
@@ -177,6 +176,11 @@ class DeepSeekLlmClient(LlmClient):
                 "speech": {"voice": "female_zh", "rate": 1.0, "pitch": 1.18},
                 "parameters": {"ParamAngleX": 4, "ParamAngleY": 2, "ParamMouthForm": 0.3},
             },
+            "近期记忆": ctx.memory_context[-6:],
+            "长期记忆": ctx.long_term_memory[-12:],
+            "当前运行上下文": ctx.runtime_context,
+            "联网事实": ctx.web_context,
+            "用户输入": ctx.user_prompt,
         }
 
     def _build_request(self, ctx: LlmContext) -> Dict[str, Any]:
@@ -188,6 +192,7 @@ class DeepSeekLlmClient(LlmClient):
             ],
             "temperature": 0.45,
             "max_tokens": DEFAULT_CONTROL_MAX_TOKENS,
+            "thinking": {"type": self.thinking_type},
             "response_format": {"type": "json_object"},
         }
 
@@ -218,6 +223,7 @@ class DeepSeekLlmClient(LlmClient):
             ],
             "temperature": 0.1,
             "max_tokens": 500,
+            "thinking": {"type": self.thinking_type},
             "response_format": {"type": "json_object"},
         }
         response = self._post_chat_completion(repair_request)
@@ -231,9 +237,18 @@ class DeepSeekLlmClient(LlmClient):
             method="POST",
             headers={"Authorization": "Bearer {0}".format(self.api_key), "Content-Type": "application/json"},
         )
+        started_at = time.perf_counter()
         try:
             with urllib.request.urlopen(request, timeout=self.timeout_sec) as response:
-                return json.loads(response.read().decode("utf-8"))
+                data = json.loads(response.read().decode("utf-8"))
+                elapsed_ms = round((time.perf_counter() - started_at) * 1000)
+                usage = data.get("usage") if isinstance(data, dict) else {}
+                print(
+                    "[LLM] DeepSeek completed "
+                    f"model={payload.get('model')} thinking={payload.get('thinking', {}).get('type')} "
+                    f"elapsed_ms={elapsed_ms} usage={usage}"
+                )
+                return data
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             raise LlmClientError("DeepSeek API 返回 HTTP {0}：{1}".format(exc.code, detail)) from exc
@@ -286,6 +301,11 @@ def create_llm_client(backend: str, api_key: str = "", model_path: str = "", bas
     if not api_key:
         api_key = os.environ.get("DEEPSEEK_API_KEY", "")
     return DeepSeekLlmClient(api_key=api_key, base_url=base_url, model=model)
+
+
+def normalize_thinking_type(raw_value: Optional[str]) -> str:
+    value = str(raw_value or DEFAULT_DEEPSEEK_THINKING_TYPE).strip().lower()
+    return "enabled" if value == "enabled" else "disabled"
 
 
 # ── 共享解析工具 ──────────────────────────────────────────────────
