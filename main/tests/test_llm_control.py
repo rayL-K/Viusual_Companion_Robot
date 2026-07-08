@@ -216,6 +216,29 @@ class LlmControlPlanTest(unittest.TestCase):
         self.assertEqual(user_content["联网事实"]["facts"][0]["summary"], "南京市江宁区当前多云，22°C")
         self.assertIn("联网事实", request["messages"][0]["content"])
 
+    def test_chat_request_prioritizes_vision_and_keeps_response_budget_small(self) -> None:
+        client = FakeDeepSeekClient("{}")
+
+        request = client._build_request(
+            LlmContext(
+                user_prompt="你看到的画面是什么样子？",
+                expressions=["heart"],
+                motions=["scene1"],
+                runtime_context={
+                    "vision": {
+                        "enabled": True,
+                        "semantic_caption": "人物：青年男性；环境：室内",
+                        "scene_caption": "画面中有1人",
+                    }
+                },
+            )
+        )
+
+        system_prompt = request["messages"][0]["content"]
+        self.assertIn("必须优先引用 vision 字段", system_prompt)
+        self.assertLessEqual(request["max_tokens"], 360)
+        self.assertLess(request["temperature"], 0.6)
+
     @staticmethod
     def _context(expressions: list[str]) -> LlmContext:
         return LlmContext(user_prompt="你好", expressions=expressions, motions=["scene1"])

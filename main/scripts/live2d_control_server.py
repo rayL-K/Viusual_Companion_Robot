@@ -25,7 +25,7 @@ import urllib.request
 import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, unquote, urlparse
 
 
@@ -38,7 +38,14 @@ LIVE2D_ASSET_ROOT = (PROJECT_ROOT / "main" / "assets" / "live2d").resolve()
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from visual_companion_robot.integrations.llm_client import DeepSeekLlmClient, LlmClientError, LlmContext, LocalLlmClient
+from visual_companion_robot.integrations.llm_client import (
+    DeepSeekLlmClient,
+    Live2DControlPlan,
+    LlmClientError,
+    LlmContext,
+    LocalLlmClient,
+    SpeechControl,
+)
 from visual_companion_robot.integrations.web_context import build_web_context
 from visual_companion_robot.brain.memory import SqliteMemoryStore, current_local_time, extract_explicit_memory_items
 from visual_companion_robot.perception.offline_asr_service import OfflineAsrService
@@ -363,6 +370,100 @@ def sanitize_vision_context(value: Any) -> Dict[str, Any]:
         "person_actions": person_actions,
         "body_state": str(value.get("bodyState", value.get("body_state")) or "unknown")[:24],
     }
+
+
+VISION_QUESTION_KEYWORDS = (
+    "看到什么",
+    "看到了什么",
+    "看见什么",
+    "看见了什么",
+    "看到的画面",
+    "画面是什么",
+    "画面里",
+    "画面中",
+    "摄像头里",
+    "镜头里",
+    "周围环境",
+    "现在环境",
+)
+
+
+def is_visual_description_request(user_text: str) -> bool:
+    """判断用户是否在询问当前摄像头画面，命中后必须优先使用板端事实。"""
+
+    text = str(user_text or "").strip()
+    if not text:
+        return False
+    if any(keyword in text for keyword in VISION_QUESTION_KEYWORDS):
+        return True
+    return ("你" in text and ("看到" in text or "看见" in text) and ("画面" in text or "什么" in text))
+
+
+def _pick_allowed(preferences: List[str], allowed: List[str]) -> str:
+    for item in preferences:
+        if item in allowed:
+            return item
+    return allowed[0] if allowed else ""
+
+
+def build_direct_vision_control_plan(
+    user_text: str,
+    vision_context: Dict[str, Any],
+    expressions: List[str],
+    motions: List[str],
+) -> Optional[Live2DControlPlan]:
+    """视觉询问走板端事实直答，避免 LLM 在摄像头问题上编造画面。"""
+
+    if not is_visual_description_request(user_text):
+        return None
+
+    expression = _pick_allowed(["question", "heart", "blush"], expressions)
+    motion = _pick_allowed(["captain", "scene1", "idle"], motions)
+    speech = SpeechControl(rate=1.0, pitch=1.12)
+    parameters = {"ParamMouthForm": 0.2}
+
+    if not vision_context.get("enabled") or vision_context.get("status") == "stale":
+        return Live2DControlPlan(
+            text="主人，我现在还没有拿到稳定的摄像头画面；请先确认摄像头已经打开并等我完成一次视觉更新。",
+            emotion="thinking",
+            expression=expression,
+            motion=motion,
+            speech=speech,
+            parameters=parameters,
+        )
+
+    semantic = str(vision_context.get("semantic_caption") or "").strip()
+    scene = str(vision_context.get("scene_caption") or "").strip()
+    activity = str(vision_context.get("person_activity") or "").strip()
+    objects = [str(item).strip() for item in vision_context.get("objects_detected") or [] if str(item).strip()]
+    person_count = int(vision_context.get("person_count") or 0)
+
+    details: List[str] = []
+    if semantic:
+        details.append(semantic.rstrip("。；;"))
+    if scene and scene not in semantic:
+        details.append(scene.rstrip("。；;"))
+    if activity and activity not in semantic:
+        details.append(f"动作状态是{activity.rstrip('。；;')}")
+    if person_count > 0 and "人" not in "".join(details):
+        details.append(f"画面中有{person_count}人")
+    if objects:
+        joined_objects = "、".join(objects[:6])
+        if joined_objects and joined_objects not in "".join(details):
+            details.append(f"检测到的物体包括{joined_objects}")
+
+    if not details:
+        text = "主人，我拿到了摄像头画面，但当前结构化视觉结果还不够明确；请稍等下一帧更新。"
+    else:
+        text = "主人，我看到" + "；".join(details) + "。"
+    return Live2DControlPlan(
+        text=text[:220],
+        emotion="thinking",
+        expression=expression,
+        motion=motion,
+        speech=speech,
+        parameters=parameters,
+    )
 
 
 def load_manifest() -> Tuple[list[str], list[str]]:
@@ -792,6 +893,19 @@ class ControlHandler(BaseHTTPRequestHandler):
             now = current_local_time()
             memory_context = memory_store.recent_turns(limit=6)
             long_term_memory = memory_store.recent_items(limit=12)
+            vision_context = sanitize_vision_context(payload.get("vision"))
+            direct_plan = build_direct_vision_control_plan(
+                text[:MAX_TEXT_LENGTH],
+                vision_context,
+                expressions,
+                motions,
+            )
+            if direct_plan is not None:
+                if parsed_rate is not None:
+                    direct_plan.speech.rate = clamp(parsed_rate, 0.85, 1.35)
+                memory_store.append_turn(text[:MAX_TEXT_LENGTH], direct_plan.text)
+                self.send_json(direct_plan.to_dict())
+                return
             web_context = build_web_context(text[:MAX_TEXT_LENGTH], now=now)
             context = LlmContext(
                 user_prompt=text[:MAX_TEXT_LENGTH],
@@ -803,7 +917,7 @@ class ControlHandler(BaseHTTPRequestHandler):
                     "current_time": now.isoformat(timespec="seconds"),
                     "timezone": now.tzname() or "",
                     "internet_enabled": True,
-                    "vision": sanitize_vision_context(payload.get("vision")),
+                    "vision": vision_context,
                 },
                 web_context=web_context,
             )

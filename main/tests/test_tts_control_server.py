@@ -18,6 +18,7 @@ import numpy as np
 from main.scripts import live2d_control_server as control_server
 from main.scripts.live2d_control_server import (
     activate_tts_runtime,
+    build_direct_vision_control_plan,
     build_runtime_voice_config,
     dispatch_realtime_message,
     probe_voxcpm_backend,
@@ -172,6 +173,31 @@ class VoxcpmControlServerTests(unittest.TestCase):
             status, error = self.request_json("POST", "/tts", f'{{"text":"测试","rate":{invalid_rate}}}')
             self.assertEqual(status, 400)
             self.assertIn("有限", error["error"])
+
+    def test_chat_visual_question_bypasses_deepseek_and_uses_current_vision(self) -> None:
+        body = json.dumps(
+            {
+                "text": "你看到的画面是什么样子？",
+                "vision": {
+                    "enabled": True,
+                    "status": "running",
+                    "sceneCaption": "画面中有1人、1个toothbrush",
+                    "semanticCaption": "人物：青年男性；外观和表情：戴眼镜，神情专注；环境：室内，背景模糊",
+                    "personCount": 1,
+                    "objectsDetected": ["person", "toothbrush"],
+                },
+            },
+            ensure_ascii=False,
+        )
+
+        with patch("main.scripts.live2d_control_server.get_llm_client") as get_llm_client:
+            get_llm_client.side_effect = AssertionError("视觉直答不应调用 DeepSeek")
+            status, payload = self.request_json("POST", "/chat", body)
+
+        self.assertEqual(status, 200)
+        self.assertIn("青年男性", payload["text"])
+        self.assertIn("toothbrush", payload["text"])
+        self.assertNotIn("蓝天", payload["text"])
 
     def test_cors_only_allows_local_browser_origins(self) -> None:
         status, payload, allowed_origin = self.request_with_origin("https://malicious.example")
@@ -436,6 +462,52 @@ class VoxcpmControlServerTests(unittest.TestCase):
     def test_sanitize_vision_context_marks_missing_payload_disabled(self) -> None:
         self.assertEqual(sanitize_vision_context(None), {"enabled": False})
         self.assertEqual(sanitize_vision_context({"enabled": False}), {"enabled": False})
+
+    def test_visual_question_uses_board_context_without_llm(self) -> None:
+        context = sanitize_vision_context(
+            {
+                "enabled": True,
+                "status": "running",
+                "sceneCaption": "画面中有1人、1个toothbrush",
+                "semanticCaption": (
+                    "人物：青年男性；外观和表情：戴眼镜，神情专注；"
+                    "动作：侧头凝视；环境：室内，背景模糊；物体：耳机"
+                ),
+                "personActivity": "侧头凝视",
+                "personCount": 1,
+                "objectsDetected": ["person", "toothbrush", "headphones"],
+            }
+        )
+
+        plan = build_direct_vision_control_plan(
+            "你看到的画面是什么样子？",
+            context,
+            expressions=["heart", "question"],
+            motions=["scene1", "captain"],
+        )
+
+        self.assertIsNotNone(plan)
+        assert plan is not None
+        self.assertIn("青年男性", plan.text)
+        self.assertIn("戴眼镜", plan.text)
+        self.assertIn("室内", plan.text)
+        self.assertIn("toothbrush", plan.text)
+        self.assertNotIn("蓝天", plan.text)
+        self.assertEqual(plan.expression, "question")
+        self.assertEqual(plan.motion, "captain")
+
+    def test_visual_question_reports_missing_context_instead_of_guessing(self) -> None:
+        plan = build_direct_vision_control_plan(
+            "你现在看到了什么？",
+            {"enabled": False},
+            expressions=["heart"],
+            motions=["scene1"],
+        )
+
+        self.assertIsNotNone(plan)
+        assert plan is not None
+        self.assertIn("还没有拿到稳定的摄像头画面", plan.text)
+        self.assertNotIn("风景", plan.text)
 
 
 if __name__ == "__main__":

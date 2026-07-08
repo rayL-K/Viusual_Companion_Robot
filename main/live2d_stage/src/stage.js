@@ -3659,7 +3659,7 @@ function submitChatText(rawText, options = {}) {
   startThinkingAnimation();
   chatInput.value = "";
   setReplyThinking();
-  setStatus("正在请求 LLM", "本地控制服务会调用 DeepSeek，并返回结构化 Live2D 控制计划。");
+  setStatus("正在请求控制服务", "控制服务会优先使用当前视觉事实，必要时再调用 DeepSeek。");
   addControlLog(options.source === "speech" ? "语音转文字输入" : "用户输入", { text: userText });
 
   return requestChatPlan(userText)
