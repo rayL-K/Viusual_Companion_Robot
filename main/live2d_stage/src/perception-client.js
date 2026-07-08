@@ -1,7 +1,7 @@
 import { apiUrl } from "./runtime-config.js";
 
 const VISION_API_URL = apiUrl("/vision");
-export const VISION_FRAME_GAP_MS = 40;
+export const VISION_FRAME_GAP_MS = 120;
 const START_DELAY_MS = 700;
 const CONTEXT_MAX_AGE_MS = 15000;
 const SEMANTIC_CONTEXT_MAX_AGE_MS = 30000;

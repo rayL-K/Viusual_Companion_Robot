@@ -139,7 +139,7 @@ assert(!stageScript.includes("INFERENCE_BACKENDS"), "stage.js 不应展示未接
 assert(!stageScript.includes("applyBackendChange"), "stage.js 不应把非 TTS 后端错误发送到语音切换接口。");
 
 assert(perceptionScript.includes('apiUrl("/vision")'), "perception-client.js 未调用统一板端视觉接口。");
-assert(perceptionScript.includes("VISION_FRAME_GAP_MS = 40"), "浏览器连续视觉缺少明确帧间隔。");
+assert(perceptionScript.includes("VISION_FRAME_GAP_MS = 120"), "浏览器连续视觉应限制在约 8fps，避免拖慢摄像头预览。");
 assert(perceptionScript.includes("this._scheduleNext(generation, retryDelay)"), "浏览器连续视觉必须在上一请求结束后背压调度。");
 assert(!perceptionScript.includes("setInterval"), "浏览器视觉不能用定时并发堆积请求。");
 assert(perceptionScript.includes('method: "POST"'), "perception-client.js 未上传摄像头帧。");
