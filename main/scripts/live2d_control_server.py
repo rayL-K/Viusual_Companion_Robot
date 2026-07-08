@@ -527,8 +527,6 @@ def _polish_visual_description(
         if action and action not in GENERIC_ACTIVITY_TEXTS and action not in person_phrase:
             person_phrase += f"，正在{action}" if len(action) <= 8 and not action.startswith(("正在", "人物")) else f"，{action}"
         _append_unique(clauses, person_phrase)
-    elif person_count > 0:
-        _append_unique(clauses, f"画面中有{person_count}人")
 
     if environment:
         _append_unique(clauses, f"环境是{environment}")
