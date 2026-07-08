@@ -215,6 +215,7 @@ class LlmControlPlanTest(unittest.TestCase):
 
         self.assertEqual(user_content["当前运行上下文"]["current_time"], "2026-05-17T17:40:00+08:00")
         self.assertEqual(user_content["近期记忆"][0]["relative_time"], "12 分钟前")
+        self.assertEqual(user_content["对话接续提示"]["上一轮"]["relative_time"], "12 分钟前")
         self.assertEqual(user_content["联网事实"]["facts"][0]["summary"], "南京市江宁区当前多云，22°C")
         self.assertLess(user_message.find("允许表情"), user_message.find("用户输入"))
         self.assertIn("联网事实", request["messages"][0]["content"])
@@ -240,7 +241,7 @@ class LlmControlPlanTest(unittest.TestCase):
 
         system_prompt = request["messages"][0]["content"]
         self.assertIn("必须优先引用 vision 字段", system_prompt)
-        self.assertLessEqual(request["max_tokens"], 260)
+        self.assertLessEqual(request["max_tokens"], 220)
         self.assertLess(request["temperature"], 0.6)
         self.assertEqual(request["thinking"], {"type": "disabled"})
 

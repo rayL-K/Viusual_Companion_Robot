@@ -97,6 +97,8 @@ class Live2DStageFrontendTest(unittest.TestCase):
         self.assertIn("THINKING_MOTION_SEQUENCE", self.stage_source)
         self.assertIn("startThinkingAnimation();", self.stage_source)
         self.assertIn("stopThinkingAnimation({ restoreMotion: false, clearRoulette: false })", self.stage_source)
+        self.assertIn("setReplyText(plan.text)", self.stage_source)
+        self.assertIn("文字已先显示", self.stage_source)
         self.assertIn("startReplyStream(plan.text, speechRate)", self.stage_source)
         self.assertIn("finishReplyStream()", self.stage_source)
 

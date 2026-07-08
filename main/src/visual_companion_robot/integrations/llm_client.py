@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional
 
 DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash"
-DEFAULT_CONTROL_MAX_TOKENS = 260
+DEFAULT_CONTROL_MAX_TOKENS = 220
 DEFAULT_DEEPSEEK_THINKING_TYPE = "disabled"
 
 _LIVE2D_SYSTEM_PROMPT = (
@@ -164,6 +164,8 @@ class DeepSeekLlmClient(LlmClient):
 
     @staticmethod
     def _build_user_content(ctx: LlmContext) -> dict:
+        recent_memory = ctx.memory_context[-6:]
+        latest_turn = recent_memory[-1] if recent_memory else {}
         return {
             "允许表情": ctx.expressions,
             "允许动作": ctx.motions,
@@ -176,7 +178,11 @@ class DeepSeekLlmClient(LlmClient):
                 "speech": {"voice": "female_zh", "rate": 1.0, "pitch": 1.18},
                 "parameters": {"ParamAngleX": 4, "ParamAngleY": 2, "ParamMouthForm": 0.3},
             },
-            "近期记忆": ctx.memory_context[-6:],
+            "对话接续提示": {
+                "规则": "用户短句或省略追问必须承接上一轮，不要把它当成全新话题。",
+                "上一轮": latest_turn,
+            },
+            "近期记忆": recent_memory,
             "长期记忆": ctx.long_term_memory[-12:],
             "当前运行上下文": ctx.runtime_context,
             "联网事实": ctx.web_context,
