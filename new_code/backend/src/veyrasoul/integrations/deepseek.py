@@ -16,6 +16,7 @@ class DeepSeekConfig:
     base_url: str = "https://api.deepseek.com"
     connect_timeout_seconds: float = 5.0
     read_timeout_seconds: float = 30.0
+    max_tokens: int = 256
 
     def __post_init__(self) -> None:
         if not self.api_key.strip():
@@ -23,40 +24,56 @@ class DeepSeekConfig:
 
 
 class DeepSeekStreamClient:
-    def __init__(self, config: DeepSeekConfig) -> None:
-        self.config = config
+    """复用 HTTP/2 连接池，避免每轮对话重复进行 DNS、TCP 与 TLS 握手。"""
 
-    async def stream_reply(self, messages: list[dict[str, str]]) -> AsyncIterator[str]:
+    def __init__(
+        self,
+        config: DeepSeekConfig,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        self.config = config
         timeout = httpx.Timeout(
-            connect=self.config.connect_timeout_seconds,
-            read=self.config.read_timeout_seconds,
+            connect=config.connect_timeout_seconds,
+            read=config.read_timeout_seconds,
             write=10.0,
             pool=5.0,
         )
+        self._client = httpx.AsyncClient(
+            base_url=config.base_url.rstrip("/"),
+            timeout=timeout,
+            http2=transport is None,
+            transport=transport,
+        )
+
+    async def stream_reply(self, messages: list[dict[str, str]]) -> AsyncIterator[str]:
         payload = {
             "model": self.config.model,
             "messages": messages,
             "stream": True,
             "thinking": {"type": "disabled"},
+            "max_tokens": max(32, min(int(self.config.max_tokens), 2048)),
         }
-        async with httpx.AsyncClient(timeout=timeout, http2=True) as client:
-            async with client.stream(
-                "POST",
-                f"{self.config.base_url.rstrip('/')}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.config.api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-            ) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    event = parse_sse_line(line)
-                    if event is None:
-                        continue
-                    content = extract_content_delta(event)
-                    if content:
-                        yield content
+        async with self._client.stream(
+            "POST",
+            "/chat/completions",
+            headers={
+                "Authorization": f"Bearer {self.config.api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+        ) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                event = parse_sse_line(line)
+                if event is None:
+                    continue
+                content = extract_content_delta(event)
+                if content:
+                    yield content
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
 
 
 def build_messages(

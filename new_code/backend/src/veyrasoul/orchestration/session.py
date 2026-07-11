@@ -25,6 +25,7 @@ class SessionKernel:
         self._generation = 0
         self._lock = asyncio.Lock()
         self._recent_turns: deque[dict[str, object]] = deque(maxlen=8)
+        self._recent_turns.extend(memory.recent_turns(session_id, limit=8))
 
     @property
     def generation(self) -> int:

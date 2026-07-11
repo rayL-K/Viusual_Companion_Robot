@@ -1,34 +1,37 @@
-# VeyraSoul V2 生产架构
+# VeyraSoul V2 架构
 
-## 1. 为什么不是修补 V1
+> 本文同时描述“目标生产架构”和“当前已经落地的纵向链路”。标为目标的模块不能当作已经部署或达到性能指标。
 
-V1 已证明 RK3588 本地视觉、ASR、TTS、Cloudflare 公网入口和 Live2D 可以连通，但存在四个系统级瓶颈：
+## 1. 为什么不继续修补 V1
 
-- Web 主控制文件约 3800 行，DOM、媒体采集、网络、Live2D、日志和设备设置共享状态，任何优化都容易产生交叉回归。
-- 控制网关约 1200 行并基于同步 `ThreadingHTTPServer`；请求能并行进入，却没有“同一会话只有一个有效回答”的任务所有权和取消语义。
-- 记忆只保存最近对话和少量正则偏好，没有情节记忆、冲突消解、语义检索、来源与置信度。
-- 视觉“检测快路径”和 VLM“语义慢路径”虽已分开，但对话没有统一的时间一致快照，容易引用过期或不相关语义。
+V1 已证明 RK3588 本地视觉、ASR、TTS、Cloudflare 公网入口和 Live2D 可以连通，但存在系统级瓶颈：
 
-因此 V2 采用独立目录和新协议，只迁移经过验证的模型资源与板端推理适配器。
+- 前端媒体、网络、Live2D、日志和设备设置共享大块状态，优化容易产生交叉回归；
+- 同一会话缺少严格的任务所有权、代际和取消语义；
+- 记忆偏向最近若干轮，没有可检索的情节/事实层、冲突修订和来源置信度；
+- 视觉快慢路径与对话上下文没有统一的新鲜度约束，容易引用旧语义；
+- 文本、语音、动作采用整轮串行等待，用户会感到明显“停顿后突然回复”。
 
-## 2. 总体结构
+因此 V2 使用独立目录、显式端口和新协议，只迁移经过验证的模型资源。
+
+## 2. 目标生产架构
 
 ```mermaid
 flowchart LR
-  UI["Web / 小程序\n60 FPS Live2D + 媒体采集"]
-  EDGE["Cloudflare Worker\n静态资源 + 鉴权 + VPC 转发"]
-  GW["Realtime Gateway\nFastAPI/ASGI + Binary WebSocket"]
-  ACTOR["Session Actor\n所有权、取消、截止时间"]
-  PH["Perception Hub\n最新值槽 + 时间线"]
-  FAST["视觉快路径\nYOLO/Pose/Face/Emotion"]
-  SEM["视觉语义路径\nQwen3-VL 场景变化触发"]
-  ASR["双阶段 ASR\nStreaming Zipformer + SenseVoice final"]
-  MEM["Memory Kernel\nSQLite WAL + FTS5 + 向量"]
-  LLM["DeepSeek V4 Flash\nthinking disabled + stream"]
-  TTS["TTS Pipeline\n中英双语 + 分句预取"]
-  AV["Avatar Director\n情感连续状态 + 动作混合"]
+  UI["Web / 小程序\n本地预览 + Live2D + 媒体采集"]
+  EDGE["Cloudflare 入口\nHTTPS/WSS + 鉴权 + 转发"]
+  GW["Realtime Gateway\nASGI + JSON/Binary WebSocket"]
+  ACTOR["Session Actor\n代际、取消、截止时间"]
+  PH["Perception Hub\nlatest-value + 时间线"]
+  FAST["视觉快路径\nRKNN 检测/姿态/人脸"]
+  SEM["语义慢路径\nQwen VLM，最短 5 秒"]
+  ASR["Streaming ASR\npartial + endpoint/final"]
+  MEM["Memory/RAG\nSQLite WAL + FTS5 + 向量"]
+  LLM["DeepSeek Flash\nthinking disabled + SSE"]
+  TTS["本地双语 TTS\n分句并发预取"]
+  AV["Avatar Director\n连续情感 + 参数混合"]
 
-  UI <-->|"控制 JSON + 二进制音视频"| EDGE
+  UI <-->|"JSON 控制 + 二进制 PCM/JPEG/音频"| EDGE
   EDGE <--> GW
   GW <--> ACTOR
   ACTOR --> PH
@@ -42,135 +45,155 @@ flowchart LR
   AV --> GW
 ```
 
-## 3. 会话编排
+完整 Perception Hub、生产环境切换和长时间服务验收仍属于后续阶段；Cubism 真实模型驱动与 V2 systemd/Cloudflare 部署骨架已经进入代码。
 
-每个登录设备映射到一个 `SessionActor`。Actor 只消费有界控制队列；高频视觉帧进入 latest-value slot，不进入普通 FIFO。
+## 3. 当前可运行纵向链路
 
-一次语音交互：
+```mermaid
+sequenceDiagram
+  participant B as Browser
+  participant G as ASGI Gateway
+  participant A as Streaming ASR
+  participant K as SessionKernel
+  participant M as Memory/RAG
+  participant L as DeepSeek SSE
+  participant T as sherpa-onnx TTS
 
-1. 浏览器 AudioWorklet 发送 20 ms PCM16 二进制帧，同时本地只做能量/回声保护。
-2. Streaming Zipformer 连续返回 partial；板端 endpoint 确认话音结束后，SenseVoice 对最终句段做一次校正。
-3. Actor 立即取得 `VisualSnapshot`、`AffectState` 和 RAG 结果的时间一致快照。
-4. DeepSeek V4 Flash 使用稳定 system/profile 前缀，显式 `thinking: disabled`、`stream: true`；稳定前缀有利于官方自动上下文缓存命中。
-5. 流式文本按自然短句送入 TTS。首个音频块准备好后，前端才同步显示对应文字并播放；后续句子边播边合成。
-6. Avatar Director 与首句 TTS 并行生成表情、视线和动作曲线；音频能量/音素驱动口型。
-7. 用户再次开口时，Actor 增加 generation，取消旧 LLM/TTS/动作事件，保留已经确认的用户句段。
+  B->>G: 20 ms PCM16 binary frame
+  G->>A: bounded queue
+  A-->>B: asr.partial
+  A-->>G: asr.final
+  G->>K: begin_turn / generation++
+  K->>M: recent turns + bounded retrieval
+  K->>L: stable prefix + dynamic context
+  L-->>G: streamed text delta
+  G->>T: one completed sentence
+  T-->>G: complete WAV for sentence
+  G-->>B: audio binary frame
+  G-->>B: reply.segment.ready(audioSeq, text)
+  B->>B: enqueue audio; on playback start expose text
+```
 
-DeepSeek 官方说明 thinking 当前默认启用，因此 V2 必须显式关闭：
-https://api-docs.deepseek.com/guides/thinking_mode/
+当前限制：
 
-官方上下文缓存采用完全相同前缀匹配，因此稳定角色设定放前、动态感知和检索结果放后：
-https://api-docs.deepseek.com/guides/kv_cache/
+- ASR/TTS 适配器需要 ELF2 真实模型验证；
+- 当前 TTS 是**逐句串行、整段 WAV 完成后发送**，还不是声学模型流式分块，也没有下一句并发预取；
+- DeepSeek 和 Local VLM 已使用进程级可复用 `httpx.AsyncClient`，ASGI lifespan 会关闭连接池；仍需实测连接复用、上游断流和取消延迟；
+- 自动打断目前在新 final/新文本轮或显式取消时生效，尚未用 VAD `speech_started` 提前停止旧音频；
+- 视频 JPEG 已进入 5 秒 latest-value 语义调度器，并调用板内 VLM HTTP 接口；仓库尚不包含实际 RK3588 VLM worker，也没有 RKNN 快路径和场景变化触发。
 
-## 4. 感知架构
+## 4. 会话所有权与可取消代际
 
-### 4.1 快路径
+每个会话由 `SessionKernel` 保存递增的 `generation`。开始新轮、显式取消或断开连接都会推进 generation；只有仍匹配当前 generation 的任务可以：
 
-目标 2–5 Hz，始终只处理最新帧：
+- 向客户端发送有效回复片段；
+- 提交完整对话到记忆；
+- 触发后续动作或情绪变化。
 
-- YOLO RKNN：人物和关键物体；
-- YOLO Pose RKNN：骨架和短窗口动作；
-- YuNet/SFace：人脸、身份；
-- FER+：面部表情，但只作为情绪证据之一；
-- Light-ASD：只在多人+有效语音时启用。
+浏览器也保存当前 generation。旧 generation 的音频和 `reply.segment.ready` 被丢弃；开始新轮时清空本地播放队列。该机制解决的是“旧回答复活”，不是简单依赖 HTTP 请求先后顺序。
 
-快路径输出结构化事实和置信度，不直接生成陪伴话术。
+当前 `TurnController` 使用 `asyncio.Task.cancel()` 取消编排任务；适配器仍需继续补齐主动关闭上游 HTTP 流、模型推理和 TTS 工作线程的资源回收验证。
 
-### 4.2 语义路径
+## 5. 感知架构与频率分层
 
-Qwen3-VL 不固定盲跑：在以下事件触发，且最短间隔默认为 5 秒：
+### 5.1 本地预览（用户视觉反馈）
 
-- 场景签名显著变化；
-- 新人物进入；
-- 用户明确询问视觉细节；
-- 快路径发现未知高显著物体；
-- 缓存语义超过最大年龄。
+- 浏览器 `getUserMedia` 请求 1280×720、最高 60 FPS；
+- 原生 `<video>` 直接播放 `MediaStream`，不经过网络、JPEG 编码或 Preact 逐帧重渲染；
+- 60 FPS 是请求目标，实际值由摄像头、浏览器和设备协商，必须读取 track settings 并实测帧率才能判定达标。
 
-新触发覆盖等待中的旧触发，不积压。语义结果保存 `frame_id / observed_at / completed_at`，对话只能引用满足年龄和帧关联条件的结果。
+### 5.2 关键帧上传（机器视觉输入）
 
-## 5. 记忆与 RAG
+- 当前前端每 500 ms 采样一次，即目标 2 Hz；
+- 最大宽度 384，JPEG quality 0.56；优先 `OffscreenCanvas`，否则复用单个 canvas；
+- 采样在 idle 时段进行且有 busy 门，禁止并发编码；
+- latest-value 语义要求是新帧覆盖旧帧，不积压摄像头历史。
 
-### 5.1 五层记忆
+### 5.3 语义慢路径（调度/适配已实现，真实模型待验证）
 
-| 层 | 内容 | 生命周期 |
-| --- | --- | --- |
-| 感知工作集 | 最新人物、环境、声音、角色状态 | 秒至分钟 |
-| 会话工作记忆 | 当前主题、未完成指代、最近轮次 | 当前会话 |
-| 情节记忆 | “何时、与谁、发生什么、情绪如何” | 长期、可衰减 |
-| 语义/人物档案 | 名称、偏好、关系、稳定事实 | 长期、带置信度与修订历史 |
-| 文档知识 RAG | 项目知识、角色设定、用户导入资料 | 版本化长期存储 |
+- 当前 `VisualSemanticScheduler` 使用容量为 1 的帧槽；等待 5 秒预算时持续替换为最新帧；
+- 当前 `LocalVlmClient` 复用 HTTP client，向板内 `VEYRASOUL_VLM_URL/analyze` 发送 Base64 JPEG，并把 `semantic_caption` 转为 `VisualSnapshot`；
+- 当前每个 WebSocket session 有独立 scheduler，但所有 session 共享 VLM client 的单实例推理锁，避免板内 worker 隐式形成并发长队；
+- 目标快路径 2–5 Hz：RKNN 人物/物体、姿态、人脸与表情证据，尚未实现；
+- 目标场景签名变化触发尚未实现；目前只有固定最短间隔；
+- “5 秒”指**语义更新节流**，不是摄像头预览帧率，也不是让前端每 5 秒才看到一帧；
+- 新语义结果携带 `frame_id / observed_at / completed_at`，只有满足新鲜度和帧关联条件的快照进入每轮上下文；
+- 无论用户是否直接询问画面，只要快照新鲜，视觉摘要都位于动态上下文中。
 
-### 5.2 存储与检索
+Gateway 已把语义结果发布到 `LatestValue[VisualSnapshot]` 和前端 `perception.snapshot`。`ContextAssembler` 最多接受 8 秒前观察到的快照，因此默认 5 秒刷新仍有约 3 秒容错。实际 VLM worker、模型加载、输出准确度和多会话排队仍需板端闭环验证。
 
-- SQLite WAL 是唯一事实源，避免在单板上引入独立向量数据库进程。
-- FTS5 负责中文/英文词法候选；本地 ONNX embedding 负责语义候选。
-- 个人规模小于约 5 万条时，FTS 预筛 + 精确余弦足够，避免 ARM64 原生扩展部署风险。
-- 词法、向量、重要度、时间衰减使用 RRF 融合；每条结果保留来源、时间、置信度。
-- 同一 `subject + predicate` 出现不同值时创建新 revision 并停用旧事实，不覆盖历史。
-- LLM 不能直接写长期记忆；Memory Curator 先提取候选，再根据稳定性、显式程度和冲突规则提交。
-
-## 6. ASR 与 TTS 选型
+## 6. ASR、LLM、TTS 与同步策略
 
 ### ASR
 
-- 第一阶段：`sherpa-onnx streaming Zipformer zh-en int8`，提供实时 partial 和端点检测。
-- 第二阶段：现有 SenseVoice 仅对最终片段校正，提高口音、混合语言和标点准确度。
-- 用户感知不等待第二阶段才能看到监听反馈，但只有 final 文本进入 LLM。
+- 浏览器 AudioWorklet 输出 16 kHz、mono、PCM16，每帧 320 samples（20 ms）；
+- `SherpaStreamingAsr` 使用有界队列和后台线程解码，避免阻塞 WebSocket event loop；
+- partial 仅用于监听反馈，endpoint final 才开始 LLM 轮次；
+- 当前尚未接入 SenseVoice final 二次校正，也尚未完成噪声、口音和中英混合真机评测。
 
-sherpa-onnx 官方支持在线 Zipformer/Paraformer、partial result 和 WebSocket：
-https://k2-fsa.github.io/sherpa/onnx/websocket/index.html
+### LLM
 
-### TTS
+- DeepSeek 使用 SSE、`stream: true`、`thinking: {type: disabled}`；
+- 稳定角色 prompt 在前，动态视觉/记忆/情绪在最后一个 user message 中，有利于完全相同前缀缓存；
+- 最近 8 轮、最多 8 条检索记忆和当前感知共同形成有界上下文；
+- RAG 超过 80 ms 会放弃本轮检索而不是拖慢整轮回复。
 
-部署时在 ELF2 实测后固定默认引擎，不进行请求级偷偷降级：
+### TTS 与呈现
 
-1. 首选候选：`kokoro-multi-lang-v1_1`，中英双语、声音选择多，重点测自然度和首包时延；
-2. 低内存候选：`vits-melo-tts-zh_en`，163 MB、单声音、中英混合；
-3. Matcha/Vocos 保留为性能对照；
-4. VoxCPM 仅在用户主动选择后按需加载，绝不自动切换。
+- LLM delta 先按中文/英文标点或长度切成自然短句；
+- 当前每句等待本地 TTS 生成完整 WAV；
+- Gateway 按 WebSocket 顺序先发 `kind=3` 音频，再发引用其 `audioSeq` 的 `reply.segment.ready`；
+- 浏览器拿到二者后排入播放队列，并在该音频真正 `play()` 时才发布配对文本；
+- 新代际或取消会停止旧播放队列并清除未配对音频。
 
-官方中英模型清单：
-https://k2-fsa.github.io/sherpa/onnx/tts/all/
+这保证“文字不领先声音”，但首句时延仍受 LLM 首句和完整句 TTS 支配。下一阶段需要首句长度自适应、TTS 分块/预取以及真实板端基准。
 
-## 7. Live2D“生命感”系统
+## 7. 记忆与 RAG
 
-Live2D 不再接受离散的“happy + heart + motion”硬切换，而是接收连续 `AvatarIntent`：
+目标记忆层：感知工作集、会话工作记忆、情节记忆、人物/事实档案、文档知识 RAG。
 
-- 基础生命层：呼吸、眨眼、微眼跳、重心漂移、头发惯性；
-- 注意层：看向说话人、用户指针/触点、显著物体；
-- 情感层：VAD 情感状态平滑映射到眉、眼、嘴形、身体张力；
-- 话语层：音频 RMS + 可用音素/viseme 驱动口型；
-- 手势层：句义动作在语音重音时间点触发；
-- 打断层：用户开口时立即停止说话动作并转入倾听姿态。
+当前已实现：
 
-参数每帧按优先级混合，动作只拥有声明过的参数组，避免不同 motion 相互覆盖。Live2D 官方建议从 model setting 读取 lip-sync/eye-blink 参数并注册为 motion effect，而不是硬编码一个嘴参数：
-https://docs.live2d.com/en/cubism-sdk-manual/lipsync/
+- SQLite WAL 作为单一事实源；
+- FTS5 trigram 词法候选；
+- 可选向量候选及 RRF/重要度/时间融合；
+- 同一 `subject + predicate` 的 revision 历史和单一 active 值；
+- 最近 8 轮恢复、取消代际禁止错误写入；
+- 个人规模基准脚本和 JSON 结果。
 
-## 8. 前端信息架构
+尚未实现：本地 embedding 模型适配器、文档切分/导入管线、Memory Curator、自动情节提取、置信度冲突策略的完整产品闭环。
 
-PC 是宣传主视图，移动端仍完整可用：
+## 8. Live2D“生命感”系统
 
-- 舞台占主视觉，角色保持第一优先；
-- 顶部只显示连接、感知和隐私状态；
-- 对话气泡靠近角色但不遮脸；
-- 输入区固定在安全区内，录音是按住/点按可切换；
-- 摄像头是可折叠画中画，默认不遮角色；
-- 设置、模型、日志进入右侧 drawer（移动端 bottom sheet）；
-- 调试 JSON 永不出现在普通用户界面。
+`Live2DStageController` 已使用本地 Cubism/Pixi runtime 加载真实 Strawberry_Rabbit 模型；桌面使用 4096 纹理，粗指针、窄屏、低内存或受限纹理设备使用 1024 纹理。`SignalMixer` 在 60 FPS ticker 中合成呼吸、眨眼、微头动、平滑注视、情感到眼睛/微笑的连续映射。播放器从实际 WAV PCM 生成 20 ms RMS 包络，并按 `audio.currentTime` 驱动嘴形；加载失败保留轻量回退角色。
 
-React/Preact 只管理低频 DOM 状态；Live2D、音频、摄像头和 WebSocket 分别是独立生命周期模块，60 FPS 状态不进入组件重渲染。
+目标实现包括：
 
-## 9. 资源边界
+- 从 model setting 读取 lip-sync/eye-blink 参数，而非硬编码单一嘴参数；
+- `requestAnimationFrame` 中合并生命、注意、情绪、话语、手势和打断层；
+- 各动作声明参数所有权，防止 motion 互相覆盖；
+- 后端 `avatar.intent`、viseme、说话人视线和语义重音与动作时间轴对齐；
+- 用户开口立即转入倾听姿态，而非等待 ASR final。
 
-RK3588 8 GiB 是共享内存，目标常驻预算：
+真实 Cubism 加载已在桌面、移动竖屏和移动横屏 Chromium 自动化环境通过；目标手机和 ELF2 公网链路上的稳定 60 FPS、GPU 占用与热降频仍必须实测，不能用桌面自动化结果代替。
 
-| 进程 | 目标常驻/上限 |
+## 9. 前端信息架构
+
+PC 用于主要宣传与演示：角色舞台占主视觉，连接/通话时间置顶，摄像头以画中画呈现，对话和通话控制位于安全区。移动端保留完整功能，将尺寸、间距、底部安全区和画中画位置重新编排，不简单缩放桌面界面。
+
+Preact 只管理低频 DOM 状态；媒体流、音频队列和 WebSocket 各自拥有生命周期。相机原始帧不写入 signals，避免 60 FPS 导致组件树重渲染。
+
+详见 [`video-call-ux.md`](video-call-ux.md)。
+
+## 10. RK3588 资源边界（目标预算，未验证）
+
+| 进程 | 目标常驻 / 上限 |
 | --- | ---: |
 | Gateway + Session + Memory | 300 / 600 MiB |
 | 快视觉与人脸 | 900 / 1600 MiB |
-| Qwen3-VL | 2800 / 4200 MiB |
+| Qwen VLM | 2800 / 4200 MiB |
 | Streaming ASR + final ASR | 500 / 900 MiB |
 | 默认 TTS | 500 / 900 MiB |
 | 系统与缓存安全余量 | 至少 1000 MiB |
 
-模型并存必须用板端峰值验证；超预算时改变驻留策略或模型，不以 swap 掩盖问题。
+RK3588 使用共享内存；以上只是设计预算。必须在 ELF2 上对模型并存、峰值、温度、降频和长时间运行做验证，不能用 swap 掩盖超预算。

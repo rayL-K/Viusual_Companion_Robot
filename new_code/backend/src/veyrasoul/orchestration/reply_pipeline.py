@@ -18,7 +18,7 @@ Synthesize = Callable[[str], Awaitable[tuple[bytes, str]]]
 
 
 class SentenceSegmenter:
-    def __init__(self, *, minimum_chars: int = 4, maximum_chars: int = 64) -> None:
+    def __init__(self, *, minimum_chars: int = 2, maximum_chars: int = 64) -> None:
         self.minimum_chars = max(1, int(minimum_chars))
         self.maximum_chars = max(self.minimum_chars, int(maximum_chars))
         self._buffer = ""

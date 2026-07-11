@@ -8,6 +8,7 @@ export const replyPhase = signal<ReplyPhase>("idle");
 export const assistantText = signal("我在这里。想聊什么，或者让我看看你身边的世界？");
 export const transcript = signal("");
 export const visualSummary = signal("等待视觉感知");
+export const speechAudioRms = signal(0);
 export const drawerOpen = signal(false);
 
 export function phaseLabel(phase: ReplyPhase): string {

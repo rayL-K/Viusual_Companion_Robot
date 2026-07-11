@@ -1,0 +1,164 @@
+{
+  "Version": 3,
+  "FileReferences": {
+    "Moc": "Strawberry_Rabbit.moc3",
+    "Textures": [
+      "textures_1024_r2/texture_00.png",
+      "textures_1024_r2/texture_01.png",
+      "textures_1024_r2/texture_02.png",
+      "textures_1024_r2/texture_03.png",
+      "textures_1024_r2/texture_04.png"
+    ],
+    "Physics": "Strawberry_Rabbit.physics3.json",
+    "DisplayInfo": "Strawberry_Rabbit.cdi3.json",
+    "Expressions": [
+      {
+        "Name": "heart",
+        "File": "expressions/heart.exp3.json"
+      },
+      {
+        "Name": "finger_heart",
+        "File": "expressions/finger_heart.exp3.json"
+      },
+      {
+        "Name": "gaming",
+        "File": "expressions/gaming.exp3.json"
+      },
+      {
+        "Name": "dark_mode",
+        "File": "expressions/dark_mode.exp3.json"
+      },
+      {
+        "Name": "shadow_face",
+        "File": "expressions/shadow_face.exp3.json"
+      },
+      {
+        "Name": "blush",
+        "File": "expressions/blush.exp3.json"
+      },
+      {
+        "Name": "flowers",
+        "File": "expressions/flowers.exp3.json"
+      },
+      {
+        "Name": "microphone",
+        "File": "expressions/microphone.exp3.json"
+      },
+      {
+        "Name": "plus",
+        "File": "expressions/plus.exp3.json"
+      },
+      {
+        "Name": "cry",
+        "File": "expressions/cry.exp3.json"
+      },
+      {
+        "Name": "sweat",
+        "File": "expressions/sweat.exp3.json"
+      },
+      {
+        "Name": "up",
+        "File": "expressions/up.exp3.json"
+      },
+      {
+        "Name": "angry",
+        "File": "expressions/angry.exp3.json"
+      },
+      {
+        "Name": "twin_tail",
+        "File": "expressions/twin_tail.exp3.json"
+      },
+      {
+        "Name": "watermark",
+        "File": "expressions/watermark.exp3.json"
+      },
+      {
+        "Name": "tongue",
+        "File": "expressions/tongue.exp3.json"
+      },
+      {
+        "Name": "question",
+        "File": "expressions/question.exp3.json"
+      },
+      {
+        "Name": "down",
+        "File": "expressions/down.exp3.json"
+      },
+      {
+        "Name": "star_eyes",
+        "File": "expressions/star_eyes.exp3.json"
+      },
+      {
+        "Name": "right",
+        "File": "expressions/right.exp3.json"
+      },
+      {
+        "Name": "right_hand_up",
+        "File": "expressions/right_hand_up.exp3.json"
+      },
+      {
+        "Name": "dizzy",
+        "File": "expressions/dizzy.exp3.json"
+      },
+      {
+        "Name": "anxious",
+        "File": "expressions/anxious.exp3.json"
+      },
+      {
+        "Name": "left",
+        "File": "expressions/left.exp3.json"
+      },
+      {
+        "Name": "left_hand_up",
+        "File": "expressions/left_hand_up.exp3.json"
+      }
+    ],
+    "Motions": {
+      "captain": [
+        {
+          "File": "motion/captain.motion3.json",
+          "FadeInTime": 0.3,
+          "FadeOutTime": 0.3
+        }
+      ],
+      "admiral": [
+        {
+          "File": "motion/admiral.motion3.json",
+          "FadeInTime": 0.3,
+          "FadeOutTime": 0.3
+        }
+      ],
+      "governor": [
+        {
+          "File": "motion/governor.motion3.json",
+          "FadeInTime": 0.3,
+          "FadeOutTime": 0.3
+        }
+      ],
+      "scene1": [
+        {
+          "File": "motion/Scene1.motion3.json",
+          "FadeInTime": 0.3,
+          "FadeOutTime": 0.3
+        }
+      ]
+    }
+  },
+  "Groups": [
+    {
+      "Target": "Parameter",
+      "Name": "LipSync",
+      "Ids": [
+        "ParamMouthOpenY"
+      ]
+    },
+    {
+      "Target": "Parameter",
+      "Name": "EyeBlink",
+      "Ids": [
+        "ParamEyeLOpen",
+        "ParamEyeROpen"
+      ]
+    }
+  ]
+}

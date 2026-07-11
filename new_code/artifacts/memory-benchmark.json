@@ -1,9 +1,9 @@
 {
   "entries": 2000,
   "iterations": 100,
-  "batch_ingest_ms": 110.454,
-  "retrieval_mean_ms": 6.976,
-  "retrieval_p50_ms": 6.701,
-  "retrieval_p95_ms": 8.823,
+  "batch_ingest_ms": 102.077,
+  "retrieval_mean_ms": 6.065,
+  "retrieval_p50_ms": 5.905,
+  "retrieval_p95_ms": 7.022,
   "hits": 8
 }

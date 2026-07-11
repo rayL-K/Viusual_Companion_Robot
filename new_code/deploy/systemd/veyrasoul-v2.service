@@ -1,0 +1,27 @@
+[Unit]
+Description=VeyraSoul V2 realtime multimodal gateway
+After=network-online.target visual-companion-vlm.service
+Wants=network-online.target visual-companion-vlm.service
+
+[Service]
+Type=simple
+User=wenkang
+Group=wenkang
+WorkingDirectory=/home/wenkang/embedded_competition/new_code/backend
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/etc/veyrasoul/veyrasoul.env
+ExecStart=/home/wenkang/embedded_competition/new_code/backend/.venv/bin/python -m veyrasoul.gateway
+Restart=on-failure
+RestartSec=2
+TimeoutStartSec=90
+TimeoutStopSec=20
+KillSignal=SIGINT
+MemoryHigh=3G
+MemoryMax=4G
+LimitNOFILE=65536
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
