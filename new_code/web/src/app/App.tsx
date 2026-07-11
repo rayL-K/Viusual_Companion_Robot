@@ -2,8 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 
 import { MediaSession } from "../core/media/MediaSession";
 import { RealtimeClient, realtimeUrl } from "../core/realtime/RealtimeClient";
+import { parseAvatarIntentPayload } from "../core/realtime/protocol";
 import {
+  applyAvatarIntent,
   assistantText,
+  avatarIntent,
   connectionPhase,
   drawerOpen,
   replyPhase,
@@ -36,6 +39,14 @@ export function App() {
         replyPhase.value = "speaking";
       }
       if (event.type === "reply.completed") replyPhase.value = "idle";
+      if (event.type === "avatar.intent") {
+        applyAvatarIntent({
+          sessionId: event.sessionId,
+          generation: event.generation,
+          seq: event.seq,
+          payload: parseAvatarIntentPayload(event.payload),
+        });
+      }
       if (event.type === "asr.partial") transcript.value = String(event.payload.text ?? "");
       if (event.type === "asr.final") transcript.value = String(event.payload.text ?? "");
       if (event.type === "perception.snapshot") visualSummary.value = String(event.payload.summary ?? "");
@@ -120,7 +131,7 @@ export function App() {
         </div>
       </header>
 
-      <AvatarStage phase={replyPhase} />
+      <AvatarStage phase={replyPhase} intent={avatarIntent} />
       <CameraPreview videoRef={videoRef} visible={callActive} cameraEnabled={cameraEnabled} />
 
       <section class="dialogue" aria-live="polite">

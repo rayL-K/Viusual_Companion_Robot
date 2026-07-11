@@ -83,7 +83,11 @@ class MemoryStore:
                 body=_required_text(body, "body", 12_000),
                 source=_required_text(source, "source", 120),
                 importance=_clamp(float(importance), 0.0, 1.0),
-                observed_at_ms=observed_at_ms or int(time.time() * 1000),
+                observed_at_ms=(
+                    int(time.time() * 1000)
+                    if observed_at_ms is None
+                    else int(observed_at_ms)
+                ),
                 embedding=embedding,
                 metadata=metadata,
             )
@@ -150,29 +154,69 @@ class MemoryStore:
         confidence: float,
         source: str,
         observed_at_ms: int | None = None,
+        importance: float | None = None,
+        evidence_kind: str = "direct",
+        raw_confidence: float | None = None,
     ) -> int:
         subject = _required_text(subject, "subject", 120)
         predicate = _required_text(predicate, "predicate", 120)
         value = _required_text(value, "value", 2_000)
-        observed = observed_at_ms or int(time.time() * 1000)
+        source = _required_text(source, "source", 120)
+        evidence_kind = _required_text(evidence_kind, "evidence_kind", 40)
+        observed = int(time.time() * 1000) if observed_at_ms is None else int(observed_at_ms)
         confidence = _clamp(float(confidence), 0.0, 1.0)
+        raw_confidence = _clamp(
+            confidence if raw_confidence is None else float(raw_confidence), 0.0, 1.0
+        )
+        memory_importance = _clamp(
+            confidence if importance is None else float(importance), 0.0, 1.0
+        )
         with self.connection(immediate=True) as connection:
             current = connection.execute(
                 """
-                SELECT id, value, entry_id FROM facts
-                WHERE subject=? AND predicate=? AND active=1
-                ORDER BY id DESC LIMIT 1
+                SELECT f.id, f.value, f.confidence, f.source, f.observed_at_ms, f.entry_id,
+                       e.importance, e.metadata_json
+                FROM facts f JOIN memory_entries e ON e.id=f.entry_id
+                WHERE f.subject=? AND f.predicate=? AND f.active=1
+                ORDER BY f.id DESC LIMIT 1
                 """,
                 (subject, predicate),
             ).fetchone()
             if current and current["value"] == value:
+                merged_confidence = max(float(current["confidence"]), confidence)
+                merged_importance = max(float(current["importance"]), memory_importance)
+                merged_observed = max(int(current["observed_at_ms"]), observed)
+                dominant_source = (
+                    source if confidence >= float(current["confidence"]) else str(current["source"])
+                )
+                metadata = _metadata_with_source(current["metadata_json"], source)
                 connection.execute(
                     "UPDATE facts SET confidence=?, source=?, observed_at_ms=? WHERE id=?",
-                    (confidence, source, observed, current["id"]),
+                    (merged_confidence, dominant_source, merged_observed, current["id"]),
                 )
                 connection.execute(
-                    "UPDATE memory_entries SET importance=?, observed_at_ms=? WHERE id=?",
-                    (confidence, observed, current["entry_id"]),
+                    """
+                    UPDATE memory_entries
+                    SET source=?, importance=?, observed_at_ms=?, metadata_json=? WHERE id=?
+                    """,
+                    (
+                        dominant_source,
+                        merged_importance,
+                        merged_observed,
+                        json.dumps(metadata, ensure_ascii=False, separators=(",", ":")),
+                        current["entry_id"],
+                    ),
+                )
+                self._insert_fact_evidence(
+                    connection,
+                    fact_id=int(current["id"]),
+                    claimed_value=value,
+                    source=source,
+                    evidence_kind=evidence_kind,
+                    raw_confidence=raw_confidence,
+                    effective_confidence=confidence,
+                    observed_at_ms=observed,
+                    decision="reinforced",
                 )
                 return int(current["id"])
 
@@ -187,10 +231,15 @@ class MemoryStore:
                 title=f"{subject} · {predicate}",
                 body=f"{subject}{predicate}：{value}",
                 source=source,
-                importance=confidence,
+                importance=memory_importance,
                 observed_at_ms=observed,
                 embedding=None,
-                metadata={"subject": subject, "predicate": predicate, "value": value},
+                metadata={
+                    "subject": subject,
+                    "predicate": predicate,
+                    "value": value,
+                    "sources": [source],
+                },
             )
             cursor = connection.execute(
                 """
@@ -200,7 +249,19 @@ class MemoryStore:
                 """,
                 (subject, predicate, value, confidence, source, observed, entry_id, previous_id),
             )
-            return int(cursor.lastrowid)
+            fact_id = int(cursor.lastrowid)
+            self._insert_fact_evidence(
+                connection,
+                fact_id=fact_id,
+                claimed_value=value,
+                source=source,
+                evidence_kind=evidence_kind,
+                raw_confidence=raw_confidence,
+                effective_confidence=confidence,
+                observed_at_ms=observed,
+                decision="revised" if previous_id is not None else "created",
+            )
+            return fact_id
 
     def active_fact(self, subject: str, predicate: str) -> dict[str, object] | None:
         with self.connection() as connection:
@@ -213,6 +274,59 @@ class MemoryStore:
                 (subject, predicate),
             ).fetchone()
         return dict(row) if row else None
+
+    def fact_history(self, subject: str, predicate: str) -> list[dict[str, object]]:
+        """Return all revisions for a fact key, oldest first."""
+
+        with self.connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, subject, predicate, value, confidence, source, observed_at_ms,
+                       active, entry_id, supersedes_fact_id
+                FROM facts WHERE subject=? AND predicate=? ORDER BY id
+                """,
+                (subject, predicate),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def record_fact_evidence(
+        self,
+        *,
+        fact_id: int,
+        claimed_value: str,
+        source: str,
+        evidence_kind: str,
+        raw_confidence: float,
+        effective_confidence: float,
+        observed_at_ms: int | None = None,
+        decision: str,
+    ) -> int:
+        """Attach provenance or a rejected contradiction without creating a false memory."""
+
+        with self.connection(immediate=True) as connection:
+            return self._insert_fact_evidence(
+                connection,
+                fact_id=int(fact_id),
+                claimed_value=_required_text(claimed_value, "claimed_value", 2_000),
+                source=_required_text(source, "source", 120),
+                evidence_kind=_required_text(evidence_kind, "evidence_kind", 40),
+                raw_confidence=_clamp(float(raw_confidence), 0.0, 1.0),
+                effective_confidence=_clamp(float(effective_confidence), 0.0, 1.0),
+                observed_at_ms=observed_at_ms or int(time.time() * 1000),
+                decision=_required_text(decision, "decision", 40),
+            )
+
+    def fact_evidence(self, fact_id: int) -> list[dict[str, object]]:
+        with self.connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, fact_id, claimed_value, source, evidence_kind, raw_confidence,
+                       effective_confidence, observed_at_ms, decision
+                FROM fact_evidence WHERE fact_id=? ORDER BY id
+                """,
+                (int(fact_id),),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def search_lexical(self, query: str, limit: int = 20) -> list[tuple[MemoryEntry, float]]:
         safe_limit = max(1, min(int(limit), 100))
@@ -286,6 +400,39 @@ class MemoryStore:
         )
         return int(cursor.lastrowid)
 
+    def _insert_fact_evidence(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        fact_id: int,
+        claimed_value: str,
+        source: str,
+        evidence_kind: str,
+        raw_confidence: float,
+        effective_confidence: float,
+        observed_at_ms: int,
+        decision: str,
+    ) -> int:
+        cursor = connection.execute(
+            """
+            INSERT INTO fact_evidence(
+                fact_id, claimed_value, source, evidence_kind, raw_confidence,
+                effective_confidence, observed_at_ms, decision
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                fact_id,
+                claimed_value,
+                source,
+                evidence_kind,
+                raw_confidence,
+                effective_confidence,
+                int(observed_at_ms),
+                decision,
+            ),
+        )
+        return int(cursor.lastrowid)
+
     def _initialize(self) -> None:
         with self.connection() as connection:
             connection.execute("PRAGMA journal_mode=WAL")
@@ -323,6 +470,20 @@ CREATE TABLE IF NOT EXISTS facts (
     supersedes_fact_id INTEGER REFERENCES facts(id)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_fact ON facts(subject, predicate) WHERE active=1;
+
+CREATE TABLE IF NOT EXISTS fact_evidence (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    fact_id INTEGER NOT NULL REFERENCES facts(id),
+    claimed_value TEXT NOT NULL,
+    source TEXT NOT NULL,
+    evidence_kind TEXT NOT NULL,
+    raw_confidence REAL NOT NULL,
+    effective_confidence REAL NOT NULL,
+    observed_at_ms INTEGER NOT NULL,
+    decision TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_fact_evidence_fact_time
+ON fact_evidence(fact_id, observed_at_ms DESC);
 
 CREATE TABLE IF NOT EXISTS turns (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -372,6 +533,21 @@ def _row_to_entry(row: sqlite3.Row) -> MemoryEntry:
         embedding=tuple(float(value) for value in embedding),
         metadata=metadata,
     )
+
+
+def _metadata_with_source(raw_metadata: str, source: str) -> dict[str, object]:
+    try:
+        parsed = json.loads(raw_metadata or "{}")
+    except (json.JSONDecodeError, TypeError):
+        parsed = {}
+    metadata = parsed if isinstance(parsed, dict) else {}
+    existing = metadata.get("sources", [])
+    sources = [str(item) for item in existing] if isinstance(existing, list) else []
+    if source not in sources:
+        sources.append(source)
+    # Full provenance remains in fact_evidence; keep prompt-facing metadata bounded.
+    metadata["sources"] = sources[-16:]
+    return metadata
 
 
 def _build_fts_query(value: str) -> str:

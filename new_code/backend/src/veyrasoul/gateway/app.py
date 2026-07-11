@@ -16,6 +16,8 @@ from typing import Any
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 
+from veyrasoul.affect import AffectState
+from veyrasoul.avatar import AvatarDirector, AvatarIntent, AvatarPhase
 from veyrasoul.domain.perception import VisualSnapshot
 from veyrasoul.memory import HybridRetriever, MemoryStore
 from veyrasoul.orchestration.context import ContextAssembler
@@ -52,6 +54,19 @@ class AppServices:
 class RuntimeSession:
     kernel: SessionKernel
     turn_service: TurnService
+    avatar_director: AvatarDirector
+
+
+@dataclass(frozen=True, slots=True)
+class CancelledTurn:
+    generation: int
+    turn_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class ListeningTurn:
+    generation: int
+    turn_id: str
 
 
 class SessionRegistry:
@@ -77,6 +92,7 @@ class SessionRegistry:
                     self.services.tts,
                     self.services.stable_system_prompt,
                 ),
+                avatar_director=AvatarDirector(),
             )
             self._sessions[session_id] = runtime
             while len(self._sessions) > max(1, self.services.max_sessions):
@@ -163,23 +179,62 @@ class TurnController:
         self.runtime = runtime
         self.writer = writer
         self.current: asyncio.Task[None] | None = None
+        self.current_turn_id = ""
+        self.pending_listening: ListeningTurn | None = None
         self._lock = asyncio.Lock()
 
     async def start(self, user_text: str, turn_id: str | None = None) -> None:
         async with self._lock:
-            await _cancel_task(self.current)
-            await self.runtime.kernel.cancel_current_turn()
             current_turn_id = turn_id or uuid.uuid4().hex
-            self.current = asyncio.create_task(
-                _run_turn(self.runtime, self.writer, current_turn_id, user_text),
-                name=f"reply:{self.writer.session_id}:{current_turn_id}",
-            )
+            await self._start_locked(user_text, current_turn_id)
 
-    async def cancel(self) -> int:
+    async def listen(self) -> ListeningTurn:
+        async with self._lock:
+            return await self._listen_locked()
+
+    async def start_from_asr(self, user_text: str) -> None:
+        async with self._lock:
+            listening = await self._listen_locked()
+            await self._start_locked(user_text, listening.turn_id)
+
+    async def cancel(self) -> CancelledTurn:
         async with self._lock:
             await _cancel_task(self.current)
             self.current = None
-            return await self.runtime.kernel.cancel_current_turn()
+            generation = await self.runtime.kernel.cancel_current_turn()
+            cancelled = CancelledTurn(generation, self.current_turn_id)
+            self.current_turn_id = ""
+            self.pending_listening = None
+            return cancelled
+
+    async def _listen_locked(self) -> ListeningTurn:
+        if self.pending_listening is not None:
+            return self.pending_listening
+        await _cancel_task(self.current)
+        self.current = None
+        generation = await self.runtime.kernel.cancel_current_turn()
+        turn_id = uuid.uuid4().hex
+        listening = ListeningTurn(generation, turn_id)
+        self.current_turn_id = turn_id
+        self.pending_listening = listening
+        await _emit_avatar_intent(
+            self.runtime,
+            self.writer,
+            turn_id,
+            generation,
+            "listening",
+        )
+        return listening
+
+    async def _start_locked(self, user_text: str, turn_id: str) -> None:
+        await _cancel_task(self.current)
+        await self.runtime.kernel.cancel_current_turn()
+        self.current_turn_id = turn_id
+        self.pending_listening = None
+        self.current = asyncio.create_task(
+            _run_turn(self.runtime, self.writer, turn_id, user_text),
+            name=f"reply:{self.writer.session_id}:{turn_id}",
+        )
 
 
 def create_app(services: AppServices) -> FastAPI:
@@ -255,8 +310,20 @@ def create_app(services: AppServices) -> FastAPI:
                     await writer.event("session.hello.ack", payload={"protocol": 2})
                     continue
                 if event_type == "turn.cancel":
-                    generation = await turns.cancel()
-                    await writer.event("turn.cancelled", generation=generation)
+                    cancelled = await turns.cancel()
+                    await writer.event(
+                        "turn.cancelled",
+                        turn_id=cancelled.turn_id,
+                        generation=cancelled.generation,
+                    )
+                    if cancelled.turn_id:
+                        await _emit_avatar_intent(
+                            runtime,
+                            writer,
+                            cancelled.turn_id,
+                            cancelled.generation,
+                            "idle",
+                        )
                     continue
                 if event_type == "turn.user_text":
                     text = str(payload.get("text") or "").strip()
@@ -307,8 +374,26 @@ async def _run_turn(
             generation=generation,
             payload={"phase": "thinking", "retrievalTimedOut": context.retrieval_timed_out},
         )
+        await _emit_avatar_intent(
+            runtime,
+            writer,
+            turn_id,
+            generation,
+            "thinking",
+            affect=context.affect,
+        )
         texts: list[str] = []
         async for segment in runtime.turn_service.generate(user_text, context):
+            if generation != runtime.kernel.generation:
+                return
+            await _emit_avatar_intent(
+                runtime,
+                writer,
+                turn_id,
+                generation,
+                "speaking",
+                segment_index=segment.index,
+            )
             if generation != runtime.kernel.generation:
                 return
             await writer.reply_segment(
@@ -336,6 +421,13 @@ async def _run_turn(
                 generation=generation,
                 payload={"text": reply, "segments": len(texts)},
             )
+            await _emit_avatar_intent(
+                runtime,
+                writer,
+                turn_id,
+                generation,
+                "idle",
+            )
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -346,6 +438,67 @@ async def _run_turn(
                 generation=generation,
                 payload={"code": "reply_failed", "message": "本轮回复生成失败"},
             )
+            await _emit_avatar_intent(
+                runtime,
+                writer,
+                turn_id,
+                generation,
+                "idle",
+            )
+
+
+async def _emit_avatar_intent(
+    runtime: RuntimeSession,
+    writer: ConnectionWriter,
+    turn_id: str,
+    generation: int,
+    phase: AvatarPhase,
+    *,
+    segment_index: int | None = None,
+    affect: AffectState | None = None,
+) -> bool:
+    if generation != runtime.kernel.generation:
+        return False
+    state = affect or await runtime.kernel.current_affect(generation)
+    if state is None or generation != runtime.kernel.generation:
+        return False
+    intent = runtime.avatar_director.intent_for(state, phase=phase)
+    payload = _avatar_payload(intent, state, segment_index)
+    await writer.event(
+        "avatar.intent",
+        turn_id=turn_id,
+        generation=generation,
+        payload=payload,
+    )
+    return True
+
+
+def _avatar_payload(
+    intent: AvatarIntent,
+    affect: AffectState,
+    segment_index: int | None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "phase": intent.phase,
+        "expression": intent.expression,
+        "motion": intent.motion,
+        "gazeStrength": round(intent.gaze_strength, 4),
+        "bodyTension": round(intent.body_tension, 4),
+        "smile": round(intent.smile, 4),
+        "eyeOpen": round(intent.eye_open, 4),
+        "speechRate": round(intent.speech_rate, 4),
+        "speechPitch": round(intent.speech_pitch, 4),
+        "affect": {
+            "valence": round(affect.valence, 4),
+            "arousal": round(affect.arousal, 4),
+            "dominance": round(affect.dominance, 4),
+            "affinity": round(affect.affinity, 4),
+            "trust": round(affect.trust, 4),
+        },
+    }
+    if segment_index is not None:
+        payload["segmentIndex"] = segment_index
+    return payload
 
 
 async def _handle_binary(
@@ -387,7 +540,9 @@ async def _handle_asr_update(
     event_type = "asr.final" if update.final else "asr.partial"
     await writer.event(event_type, payload={"text": update.text})
     if update.final and update.text:
-        await turns.start(update.text)
+        await turns.start_from_asr(update.text)
+    elif update.text:
+        await turns.listen()
 
 
 async def _handle_visual_snapshot(

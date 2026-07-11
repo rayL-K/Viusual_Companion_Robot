@@ -78,7 +78,7 @@ WebSocket 路径：`/v2/realtime?session=<stable-session-id>`
 | `session.ready` | 是 | WebSocket 已就绪 |
 | `session.hello.ack` | 是 | 协议版本确认 |
 | `media.accepted` | 是（flags bit0） | 调试用媒体帧 ACK |
-| `asr.partial` | 有 ASR 时 | 监听反馈，不开始 LLM |
+| `asr.partial` | 有 ASR 时 | 监听反馈；首次有效 partial 立即取消旧代并进入 listening/barge-in，不开始 LLM |
 | `asr.final` | 有 ASR 时 | 最终文本；自动开始新轮 |
 | `reply.phase` | 是 | 当前发送 `thinking` 和 RAG 是否超时 |
 | `reply.segment.ready` | 是 | 配对文字和 `audioSeq` 已可用 |
@@ -87,7 +87,45 @@ WebSocket 路径：`/v2/realtime?session=<stable-session-id>`
 | `error` | 是 | 稳定错误码，不暴露 Python 异常 |
 | `perception.snapshot` | 是（有 vision 时） | 5 秒调度后的语义摘要、帧序号、观察时间和置信度 |
 | `perception.error` | 是（有 vision 时） | VLM 分析失败；当前返回截断后的内部错误文本，生产前需改稳定错误码 |
-| `avatar.intent` | 目标 | 尚未接入生产 Gateway |
+| `avatar.intent` | 是 | generation-safe 的连续情感与渲染意图；可绑定回复分段 |
+
+### `avatar.intent`
+
+```json
+{
+  "v": 2,
+  "type": "avatar.intent",
+  "sessionId": "session-1",
+  "turnId": "turn-9",
+  "generation": 12,
+  "seq": 82,
+  "payload": {
+    "phase": "speaking",
+    "expression": "warm",
+    "motion": "talk",
+    "gazeStrength": 0.78,
+    "bodyTension": 0.52,
+    "smile": 0.66,
+    "eyeOpen": 0.86,
+    "speechRate": 1.04,
+    "speechPitch": 1.03,
+    "segmentIndex": 0,
+    "affect": {
+      "valence": 0.32,
+      "arousal": 0.48,
+      "dominance": 0.05,
+      "affinity": 0.41,
+      "trust": 0.36
+    }
+  }
+}
+```
+
+- `phase` 仅允许 `listening/thinking/speaking/idle`；
+- `segmentIndex` 仅在对应回复分段时出现；它与 `reply.segment.ready.payload.index` 指向同一分段；
+- speaking intent 在对应二进制音频之前发送，文字仍保持“音频先到、实际播放时显示”；
+- 浏览器按 `sessionId + generation + seq` 过滤，不能让断线前或旧轮意图覆盖当前角色；
+- expression/motion 是渲染中立语义，连续参数才是主要驱动力，不要求模型随机硬切动作。
 
 ## 6. 音频与文字同步
 
@@ -104,6 +142,7 @@ WebSocket 保序是该策略的当前传输前提。若未来切换 WebRTC data 
 ## 7. 可取消代际
 
 - `reply.phase` 建立浏览器的 active generation；
+- 有效 ASR partial 可先用 listening intent 建立更高 generation，从而立刻停止旧音频；
 - 只有匹配 active generation 的音频/文本/完成事件可以生效；
 - 服务端每次新轮先取消旧 `asyncio.Task`，再推进内核 generation；
 - 只有当前 generation 能提交记忆；

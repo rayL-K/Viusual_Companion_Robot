@@ -5,6 +5,30 @@ export const BINARY_KIND_PCM16 = 1;
 export const BINARY_KIND_JPEG = 2;
 export const BINARY_KIND_AUDIO = 3;
 
+export type AvatarPhase = "idle" | "listening" | "thinking" | "speaking";
+
+export type AvatarAffect = {
+  valence: number;
+  arousal: number;
+  dominance: number;
+  affinity: number;
+  trust: number;
+};
+
+export type AvatarIntentPayload = {
+  phase: AvatarPhase;
+  expression: string;
+  motion: string;
+  gazeStrength: number;
+  bodyTension: number;
+  smile: number;
+  eyeOpen: number;
+  speechRate: number;
+  speechPitch: number;
+  affect: AvatarAffect;
+  segmentIndex?: number;
+};
+
 export type ServerEvent = {
   v: 2;
   type: string;
@@ -43,6 +67,40 @@ export function parseServerEvent(raw: string): ServerEvent {
     throw new Error("实时事件协议版本或类型无效");
   }
   return event as ServerEvent;
+}
+
+export function parseAvatarIntentPayload(payload: Record<string, unknown>): AvatarIntentPayload {
+  const affect = requireRecord(payload.affect, "avatar.intent affect");
+  const phase = payload.phase;
+  if (phase !== "idle" && phase !== "listening" && phase !== "thinking" && phase !== "speaking") {
+    throw new Error("avatar.intent phase 无效");
+  }
+
+  const intent: AvatarIntentPayload = {
+    phase,
+    expression: requireName(payload.expression, "expression"),
+    motion: requireName(payload.motion, "motion"),
+    gazeStrength: requireRange(payload.gazeStrength, "gazeStrength", 0, 1),
+    bodyTension: requireRange(payload.bodyTension, "bodyTension", 0, 1),
+    smile: requireRange(payload.smile, "smile", 0, 1),
+    eyeOpen: requireRange(payload.eyeOpen, "eyeOpen", 0, 1),
+    speechRate: requireRange(payload.speechRate, "speechRate", 0.5, 2),
+    speechPitch: requireRange(payload.speechPitch, "speechPitch", 0.5, 2),
+    affect: {
+      valence: requireRange(affect.valence, "affect.valence", -1, 1),
+      arousal: requireRange(affect.arousal, "affect.arousal", 0, 1),
+      dominance: requireRange(affect.dominance, "affect.dominance", -1, 1),
+      affinity: requireRange(affect.affinity, "affect.affinity", -1, 1),
+      trust: requireRange(affect.trust, "affect.trust", -1, 1),
+    },
+  };
+  if (payload.segmentIndex !== undefined) {
+    if (!Number.isSafeInteger(payload.segmentIndex) || Number(payload.segmentIndex) < 0) {
+      throw new Error("avatar.intent segmentIndex 无效");
+    }
+    intent.segmentIndex = Number(payload.segmentIndex);
+  }
+  return intent;
 }
 
 export function createBinaryHeader(kind: number, sequence: bigint, timestampMs: bigint): ArrayBuffer {
@@ -91,4 +149,25 @@ export function parseBinaryFrame(buffer: ArrayBuffer): BinaryFrame {
     timestampMs: view.getBigUint64(16, false),
     payload: buffer.slice(headerBytes),
   };
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} 必须是对象`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireName(value: unknown, label: string): string {
+  if (typeof value !== "string" || !value.trim() || value.length > 64) {
+    throw new Error(`avatar.intent ${label} 无效`);
+  }
+  return value;
+}
+
+function requireRange(value: unknown, label: string, minimum: number, maximum: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < minimum || value > maximum) {
+    throw new Error(`avatar.intent ${label} 超出范围`);
+  }
+  return value;
 }

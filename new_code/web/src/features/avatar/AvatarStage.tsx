@@ -1,14 +1,20 @@
 import { effect, type Signal } from "@preact/signals";
 import { useEffect, useRef, useState } from "preact/hooks";
 
-import { phaseLabel, speechAudioRms, type ReplyPhase } from "../../core/state/session";
+import {
+  phaseLabel,
+  speechAudioRms,
+  type AvatarIntentState,
+  type ReplyPhase,
+} from "../../core/state/session";
 import { Live2DStageController } from "./Live2DStageController";
 
 type AvatarStageProps = {
   phase: Signal<ReplyPhase>;
+  intent: Signal<AvatarIntentState>;
 };
 
-export function AvatarStage({ phase }: AvatarStageProps) {
+export function AvatarStage({ phase, intent }: AvatarStageProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const hostRef = useRef<HTMLDivElement>(null);
   const controllerRef = useRef<Live2DStageController | null>(null);
@@ -19,7 +25,7 @@ export function AvatarStage({ phase }: AvatarStageProps) {
     let mounted = true;
     const controller = new Live2DStageController(canvasRef.current, hostRef.current);
     controllerRef.current = controller;
-    controller.setPhase(phase.value);
+    controller.setIntent(intent.value);
     void controller.start().then(
       () => { if (mounted) setStageState("ready"); },
       (error: unknown) => {
@@ -35,7 +41,7 @@ export function AvatarStage({ phase }: AvatarStageProps) {
     };
   }, []);
 
-  useEffect(() => controllerRef.current?.setPhase(phase.value), [phase.value]);
+  useEffect(() => effect(() => controllerRef.current?.setIntent(intent.value)), [intent]);
 
   useEffect(() => effect(() => controllerRef.current?.setAudioRms(speechAudioRms.value)), []);
 

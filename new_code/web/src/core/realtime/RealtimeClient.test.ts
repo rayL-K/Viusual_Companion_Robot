@@ -97,6 +97,26 @@ describe("RealtimeClient reply generations", () => {
     expect(received.some((event) => event.type === "reply.completed" && event.generation === 1)).toBe(false);
     client.disconnect();
   });
+
+  it("never emits stale avatar intent after a new local or server generation", async () => {
+    const { client, socket } = connectedClient(new AudioSegmentQueue(() => playable(Promise.resolve())));
+    const received: ServerEvent[] = [];
+    client.onEvent((event) => received.push(event));
+
+    socket.message(serverEvent("reply.phase", 2, { phase: "thinking" }));
+    socket.message(serverEvent("avatar.intent", 2, avatarIntentPayload({ expression: "attentive" })));
+    client.send("turn.user_text", { text: "打断旧回复" });
+    socket.message(serverEvent("avatar.intent", 2, avatarIntentPayload({ expression: "concerned" })));
+    socket.message(serverEvent("avatar.intent", 3, avatarIntentPayload({ expression: "warm" })));
+    socket.message(serverEvent("avatar.intent", 2, avatarIntentPayload({ expression: "delighted" })));
+    await flushTasks();
+
+    const expressions = received
+      .filter((event) => event.type === "avatar.intent")
+      .map((event) => event.payload.expression);
+    expect(expressions).toEqual(["attentive", "warm"]);
+    client.disconnect();
+  });
 });
 
 function connectedClient(queue: AudioSegmentQueue): { client: RealtimeClient; socket: FakeWebSocket } {
@@ -137,4 +157,20 @@ function playable(
 
 async function flushTasks(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function avatarIntentPayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    phase: "speaking",
+    expression: "warm",
+    motion: "talk",
+    gazeStrength: 0.8,
+    bodyTension: 0.5,
+    smile: 0.7,
+    eyeOpen: 0.85,
+    speechRate: 1.1,
+    speechPitch: 1.05,
+    affect: { valence: 0.5, arousal: 0.6, dominance: 0.1, affinity: 0.8, trust: 0.8 },
+    ...overrides,
+  };
 }

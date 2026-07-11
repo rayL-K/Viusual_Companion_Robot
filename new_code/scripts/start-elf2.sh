@@ -10,8 +10,16 @@ readonly SERVICES=(veyrasoul-v2.service veyrasoul-v2-cloudflared.service)
 log() { printf '[VeyraSoul V2] %s\n' "$*"; }
 fail() { log "失败：$*" >&2; exit 1; }
 
+require_explicit_activation() {
+  [[ ${VEYRASOUL_ALLOW_V2_BOARD_ACTIVATION:-} == I_UNDERSTAND_V1_WILL_BE_REPLACED ]] || fail \
+    "V2 仍处于本机开发阶段；为保护评委访问的 V1，当前禁止部署。未来获准切换时需显式设置 VEYRASOUL_ALLOW_V2_BOARD_ACTIVATION=I_UNDERSTAND_V1_WILL_BE_REPLACED"
+}
+
 if [[ ${EUID} -ne 0 && ${ACTION} != status ]]; then
-  exec sudo -- "$0" "$@"
+  if [[ ${ACTION} == start || ${ACTION} == restart ]]; then
+    require_explicit_activation
+  fi
+  exec sudo --preserve-env=VEYRASOUL_ALLOW_V2_BOARD_ACTIVATION -- "$0" "$@"
 fi
 
 install_units() {
@@ -38,6 +46,7 @@ wait_for_health() {
 
 case "${ACTION}" in
   start|restart)
+    require_explicit_activation
     require_runtime
     install_units
     systemctl enable "${SERVICES[@]}"

@@ -4,6 +4,7 @@ import asyncio
 import time
 
 from veyrasoul.affect.engine import AffectCue, AffectEngine
+from veyrasoul.affect.evidence import infer_affect_cue
 from veyrasoul.avatar.director import AvatarDirector
 from veyrasoul.domain.perception import VisualSnapshot
 from veyrasoul.runtime.latest_value import LatestValue
@@ -40,8 +41,13 @@ def test_visual_snapshot_freshness_and_summary() -> None:
 def test_affect_drives_continuous_avatar_intent() -> None:
     engine = AffectEngine()
     state = engine.advance(0.0, AffectCue(valence=0.7, arousal=0.65, affinity=0.2))
-    intent = AvatarDirector().intent_for(state, speaking=True, listening=False)
+    intent = AvatarDirector().intent_for(state, phase="speaking")
     assert intent.smile > 0.7
     assert intent.speech_rate > 1.0
-    listening = AvatarDirector().intent_for(state, speaking=False, listening=True)
+    listening = AvatarDirector().intent_for(state, phase="listening")
     assert listening.motion == "listen"
+
+
+def test_emotion_question_is_not_misread_as_user_emotion() -> None:
+    assert infer_affect_cue("你开心吗？") is None
+    assert infer_affect_cue("你伤心吗？") is None

@@ -1,6 +1,6 @@
 # ELF2（RK3588）部署说明
 
-> 本文记录当前 V2 Gateway、systemd 单元和一键启动脚本。配置已经进入仓库，但尚未在 ELF2 上完成真实模型与公网切换验收。
+> **当前禁止部署 V2 到 ELF2。** 评委可能随时访问 `robot.veyralux.org`，开发板和正式 Tunnel 必须持续运行 V1。本文只保存未来切换所需的设计与命令，不是当前操作手册；`start-elf2.sh` 默认拒绝激活。
 
 ## 1. 运行环境
 
@@ -164,7 +164,7 @@ npm run build
 - `deploy/veyrasoul.env.example`：不含真实密钥的环境模板；
 - `scripts/start-elf2.sh`：安装单元、启动、健康检查、状态、停止和回滚。
 
-首次准备环境文件：
+未来确认评审结束并批准切换后，才准备环境文件：
 
 ```bash
 sudo install -d -m 700 /etc/veyrasoul
@@ -173,13 +173,13 @@ sudoedit /etc/veyrasoul/veyrasoul.env
 chmod +x scripts/start-elf2.sh
 ```
 
-此后在 `new_code/` 下的一键启动命令是：
+获准切换时必须显式确认会替换 V1：
 
 ```bash
-./scripts/start-elf2.sh
+VEYRASOUL_ALLOW_V2_BOARD_ACTIVATION=I_UNDERSTAND_V1_WILL_BE_REPLACED ./scripts/start-elf2.sh
 ```
 
-脚本会在 V2 Gateway 健康后才启动正式 Tunnel，并停止使用同一 token 的 V1 Tunnel。需要回滚时执行：
+脚本会在 V2 Gateway 健康后才启动正式 Tunnel，并停止使用同一 token 的 V1 Tunnel，因此比赛评审期间严禁运行。未来需要回滚时执行：
 
 ```bash
 ./scripts/start-elf2.sh rollback
@@ -193,7 +193,7 @@ chmod +x scripts/start-elf2.sh
 
 1. ASR 模型加载、partial、endpoint final 和连续语音；
 2. DeepSeek 首 token/首句，thinking 确认关闭；
-3. Kokoro/VITS 中英混合、冷/热 TTS 时延和自然度；
+3. Kokoro/Matcha/VITS 中英混合、冷/热 TTS 时延和自然度；
 4. 浏览器首音频播放且文字同步；
 5. 新发言打断旧 generation，旧回复不写入记忆；
 6. 摄像头本地预览实际 FPS，2 Hz JPEG 不拖慢预览；

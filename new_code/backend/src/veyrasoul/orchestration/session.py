@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections import deque
+from collections.abc import Callable
 
-from veyrasoul.affect.engine import AffectCue, AffectEngine
+from veyrasoul.affect import AffectCue, AffectEngine, AffectState, infer_affect_cue
 from veyrasoul.domain.perception import VisualSnapshot
 from veyrasoul.memory.store import MemoryStore
 from veyrasoul.runtime.latest_value import LatestValue
@@ -14,7 +16,14 @@ from .context import ContextAssembler, ContextBundle
 
 
 class SessionKernel:
-    def __init__(self, session_id: str, memory: MemoryStore, context: ContextAssembler) -> None:
+    def __init__(
+        self,
+        session_id: str,
+        memory: MemoryStore,
+        context: ContextAssembler,
+        *,
+        monotonic_clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         if not session_id.strip():
             raise ValueError("session_id must not be empty")
         self.session_id = session_id
@@ -22,6 +31,8 @@ class SessionKernel:
         self.context = context
         self.visual: LatestValue[VisualSnapshot] = context.visual_slot
         self.affect = AffectEngine()
+        self._monotonic_clock = monotonic_clock
+        self._affect_updated_at = monotonic_clock()
         self._generation = 0
         self._lock = asyncio.Lock()
         self._recent_turns: deque[dict[str, object]] = deque(maxlen=8)
@@ -35,13 +46,29 @@ class SessionKernel:
         normalized = str(user_text or "").strip()
         if not normalized:
             raise ValueError("user_text must not be empty")
+        visual_version = await self.visual.snapshot()
+        visual = visual_version.value
+        face_emotions = (
+            visual.face_emotions
+            if visual is not None and visual.is_fresh(self.context.visual_max_age_ms)
+            else {}
+        )
+        cue = infer_affect_cue(normalized, face_emotions)
         async with self._lock:
             self._generation += 1
             generation = self._generation
             recent = list(self._recent_turns)
-            affect = self.affect.state
+            affect = self._advance_affect(cue)
         bundle = await self.context.assemble(normalized, recent, affect)
         return generation, bundle
+
+    async def current_affect(self, generation: int | None = None) -> AffectState | None:
+        """Return decayed state, or None when a caller belongs to an obsolete turn."""
+
+        async with self._lock:
+            if generation is not None and generation != self._generation:
+                return None
+            return self._advance_affect()
 
     async def cancel_current_turn(self) -> int:
         async with self._lock:
@@ -63,5 +90,11 @@ class SessionKernel:
             self._recent_turns.append(
                 {"turn_id": turn_id, "user": user_text, "assistant": assistant_text}
             )
-            self.affect.advance(0.0, cue)
+            self._advance_affect(cue)
             return True
+
+    def _advance_affect(self, cue: AffectCue | None = None) -> AffectState:
+        now = self._monotonic_clock()
+        elapsed = max(0.0, now - self._affect_updated_at)
+        self._affect_updated_at = now
+        return self.affect.advance(elapsed, cue)

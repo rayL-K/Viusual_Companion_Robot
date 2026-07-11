@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 from veyrasoul.affect.engine import AffectState
 
 
+AvatarPhase = Literal["listening", "thinking", "speaking", "idle"]
+
+
 @dataclass(frozen=True, slots=True)
 class AvatarIntent:
+    phase: AvatarPhase
     expression: str
     motion: str
     gaze_strength: float
@@ -20,18 +25,21 @@ class AvatarIntent:
 
 
 class AvatarDirector:
-    def intent_for(self, affect: AffectState, *, speaking: bool, listening: bool) -> AvatarIntent:
-        if listening:
+    def intent_for(self, affect: AffectState, *, phase: AvatarPhase) -> AvatarIntent:
+        if phase == "listening":
             expression, motion = "attentive", "listen"
+        elif phase == "thinking":
+            expression, motion = "thoughtful", "ponder"
         elif affect.arousal > 0.72 and affect.valence > 0.25:
             expression, motion = "delighted", "excited"
         elif affect.valence < -0.42:
             expression, motion = "concerned", "comfort"
-        elif speaking:
+        elif phase == "speaking":
             expression, motion = "warm", "talk"
         else:
             expression, motion = "soft", "idle"
         return AvatarIntent(
+            phase=phase,
             expression=expression,
             motion=motion,
             gaze_strength=_clamp(0.55 + affect.affinity * 0.35, 0.25, 1.0),

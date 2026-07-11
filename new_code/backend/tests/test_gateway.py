@@ -112,6 +112,41 @@ def make_app(memory_path: Path):
     )
 
 
+def assert_avatar_intent(
+    event: dict[str, object],
+    phase: str,
+    *,
+    turn_id: str | None = None,
+    generation: int | None = None,
+) -> None:
+    assert event["type"] == "avatar.intent"
+    if turn_id is not None:
+        assert event["turnId"] == turn_id
+    if generation is not None:
+        assert event["generation"] == generation
+    payload = event["payload"]
+    assert isinstance(payload, dict)
+    assert payload["phase"] == phase
+    assert {
+        "expression",
+        "motion",
+        "gazeStrength",
+        "bodyTension",
+        "smile",
+        "eyeOpen",
+        "speechRate",
+        "speechPitch",
+        "affect",
+    } <= payload.keys()
+    assert set(payload["affect"]) == {
+        "valence",
+        "arousal",
+        "dominance",
+        "affinity",
+        "trust",
+    }
+
+
 def test_health_endpoint(tmp_path) -> None:
     client = TestClient(make_app(tmp_path / "memory.db"))
     response = client.get("/v2/health")
@@ -146,7 +181,10 @@ def test_realtime_turn_sends_audio_before_matching_text(tmp_path) -> None:
         websocket.send_json({"v": 2, "type": "turn.user_text", "payload": {"text": "你记得什么？"}})
         phase = websocket.receive_json()
         assert phase["type"] == "reply.phase"
-
+        assert_avatar_intent(websocket.receive_json(), "thinking", generation=phase["generation"])
+        first_speaking = websocket.receive_json()
+        assert_avatar_intent(first_speaking, "speaking", generation=phase["generation"])
+        assert first_speaking["payload"]["segmentIndex"] == 0
         audio_message = websocket.receive()
         frame = parse_binary_frame(audio_message["bytes"])
         assert frame.kind is BinaryKind.AUDIO
@@ -156,6 +194,9 @@ def test_realtime_turn_sends_audio_before_matching_text(tmp_path) -> None:
         assert segment["payload"]["audioSeq"] == frame.sequence
         assert segment["payload"]["text"] == "你好。"
 
+        second_speaking = websocket.receive_json()
+        assert_avatar_intent(second_speaking, "speaking", generation=phase["generation"])
+        assert second_speaking["payload"]["segmentIndex"] == 1
         second_audio = parse_binary_frame(websocket.receive()["bytes"])
         second_segment = websocket.receive_json()
         assert second_segment["payload"]["audioSeq"] == second_audio.sequence
@@ -163,6 +204,7 @@ def test_realtime_turn_sends_audio_before_matching_text(tmp_path) -> None:
         completed = websocket.receive_json()
         assert completed["type"] == "reply.completed"
         assert completed["payload"]["segments"] == 2
+        assert_avatar_intent(websocket.receive_json(), "idle", generation=phase["generation"])
 
     turns = app.state.registry.memory.recent_turns("test-user")
     assert turns[-1]["assistant_text"] == "你好。我记得你喜欢乌龙茶。"
@@ -201,10 +243,14 @@ def test_visual_semantics_are_published_and_injected_into_every_turn(tmp_path) -
         assert "戴眼镜" in perception["payload"]["summary"]
 
         websocket.send_json({"v": 2, "type": "turn.user_text", "payload": {"text": "今天聊什么？"}})
-        assert websocket.receive_json()["type"] == "reply.phase"
+        phase = websocket.receive_json()
+        assert phase["type"] == "reply.phase"
+        assert_avatar_intent(websocket.receive_json(), "thinking", generation=phase["generation"])
+        assert_avatar_intent(websocket.receive_json(), "speaking", generation=phase["generation"])
         parse_binary_frame(websocket.receive()["bytes"])
         assert websocket.receive_json()["type"] == "reply.segment.ready"
         assert websocket.receive_json()["type"] == "reply.completed"
+        assert_avatar_intent(websocket.receive_json(), "idle", generation=phase["generation"])
 
     assert "视觉：一名戴眼镜的青年" in llm.messages[-1]["content"]
 
@@ -220,15 +266,31 @@ def test_new_turn_cancels_slow_previous_generation(tmp_path) -> None:
     )
     with TestClient(app).websocket_connect("/v2/realtime?session=interrupt-user") as websocket:
         websocket.receive_json()
-        websocket.send_json({"v": 2, "type": "turn.user_text", "payload": {"text": "第一问"}})
+        websocket.send_json(
+            {"v": 2, "type": "turn.user_text", "payload": {"text": "第一问", "turnId": "first"}}
+        )
         first_phase = websocket.receive_json()
-        websocket.send_json({"v": 2, "type": "turn.user_text", "payload": {"text": "第二问"}})
+        assert_avatar_intent(
+            websocket.receive_json(), "thinking", turn_id="first", generation=first_phase["generation"]
+        )
+        websocket.send_json(
+            {"v": 2, "type": "turn.user_text", "payload": {"text": "第二问", "turnId": "second"}}
+        )
         second_phase = websocket.receive_json()
         assert second_phase["generation"] > first_phase["generation"]
+        assert_avatar_intent(
+            websocket.receive_json(), "thinking", turn_id="second", generation=second_phase["generation"]
+        )
+        assert_avatar_intent(
+            websocket.receive_json(), "speaking", turn_id="second", generation=second_phase["generation"]
+        )
         parse_binary_frame(websocket.receive()["bytes"])
         segment = websocket.receive_json()
         assert segment["payload"]["text"] == "新的回复。"
         assert websocket.receive_json()["type"] == "reply.completed"
+        assert_avatar_intent(
+            websocket.receive_json(), "idle", turn_id="second", generation=second_phase["generation"]
+        )
 
     turns = app.state.registry.memory.recent_turns("interrupt-user")
     assert len(turns) == 1
@@ -251,17 +313,27 @@ def test_pcm_asr_updates_start_turn_and_cancel_previous_generation(tmp_path) -> 
         websocket.receive_json()
         websocket.send_bytes(pcm_frame)
         assert websocket.receive_json()["type"] == "asr.partial"
+        listening = websocket.receive_json()
+        assert_avatar_intent(listening, "listening")
         assert websocket.receive_json()["type"] == "asr.final"
         first_phase = websocket.receive_json()
         assert first_phase["type"] == "reply.phase"
+        assert first_phase["turnId"] == listening["turnId"]
+        assert first_phase["generation"] > listening["generation"]
+        assert_avatar_intent(websocket.receive_json(), "thinking", generation=first_phase["generation"])
 
         websocket.send_bytes(pcm_frame)
         assert websocket.receive_json()["type"] == "asr.partial"
+        second_listening = websocket.receive_json()
+        assert_avatar_intent(second_listening, "listening")
+        assert second_listening["generation"] > first_phase["generation"]
         assert websocket.receive_json()["type"] == "asr.final"
         second_phase = websocket.receive_json()
         assert second_phase["type"] == "reply.phase"
         assert second_phase["generation"] > first_phase["generation"]
-
+        assert second_phase["turnId"] == second_listening["turnId"]
+        assert_avatar_intent(websocket.receive_json(), "thinking", generation=second_phase["generation"])
+        assert_avatar_intent(websocket.receive_json(), "speaking", generation=second_phase["generation"])
         audio = parse_binary_frame(websocket.receive()["bytes"])
         assert audio.kind is BinaryKind.AUDIO
         segment = websocket.receive_json()
@@ -269,8 +341,38 @@ def test_pcm_asr_updates_start_turn_and_cancel_previous_generation(tmp_path) -> 
         assert segment["payload"]["audioSeq"] == audio.sequence
         assert segment["payload"]["text"] == "新的回复。"
         assert websocket.receive_json()["type"] == "reply.completed"
+        assert_avatar_intent(websocket.receive_json(), "idle", generation=second_phase["generation"])
 
     assert len(asr.sessions) == 1
     turns = app.state.registry.memory.recent_turns("voice-user")
     assert len(turns) == 1
     assert turns[0]["user_text"] == "第二问"
+
+
+def test_explicit_cancel_emits_generation_bound_idle_intent(tmp_path) -> None:
+    app = create_app(
+        AppServices(
+            memory_path=tmp_path / "memory.db",
+            llm=InterruptibleLlm(),
+            tts=FakeTts(),
+            stable_system_prompt="你是草莓兔兔。",
+        )
+    )
+    with TestClient(app).websocket_connect("/v2/realtime?session=cancel-user") as websocket:
+        websocket.receive_json()
+        websocket.send_json(
+            {"v": 2, "type": "turn.user_text", "payload": {"text": "第一问", "turnId": "cancel-me"}}
+        )
+        phase = websocket.receive_json()
+        assert_avatar_intent(websocket.receive_json(), "thinking", generation=phase["generation"])
+        websocket.send_json({"v": 2, "type": "turn.cancel", "payload": {}})
+        cancelled = websocket.receive_json()
+        assert cancelled["type"] == "turn.cancelled"
+        assert cancelled["turnId"] == "cancel-me"
+        assert cancelled["generation"] > phase["generation"]
+        assert_avatar_intent(
+            websocket.receive_json(),
+            "idle",
+            turn_id="cancel-me",
+            generation=cancelled["generation"],
+        )

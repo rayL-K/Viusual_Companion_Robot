@@ -3,6 +3,7 @@ import { AudioSegmentQueue } from "../audio/AudioSegmentQueue";
 import {
   BINARY_KIND_AUDIO,
   createBinaryFrame,
+  parseAvatarIntentPayload,
   parseBinaryFrame,
   parseServerEvent,
   PROTOCOL_VERSION,
@@ -26,6 +27,10 @@ export class RealtimeClient {
 
   connect(): void {
     if (this.socket && this.socket.readyState <= WebSocket.OPEN) return;
+    this.audioQueue.stop();
+    this.audioBySequence.clear();
+    this.activeGeneration = -1;
+    this.awaitingGeneration = true;
     connectionPhase.value = "connecting";
     const socket = new WebSocket(this.url);
     socket.binaryType = "arraybuffer";
@@ -92,7 +97,10 @@ export class RealtimeClient {
       }
       if (typeof message.data !== "string") return;
       const event = parseServerEvent(message.data);
-      if (event.type === "reply.phase") {
+      if (event.type === "avatar.intent") {
+        parseAvatarIntentPayload(event.payload);
+        if (!this.acceptGeneration(event.generation)) return;
+      } else if (event.type === "reply.phase") {
         if (!this.acceptGeneration(event.generation)) return;
       }
       if (event.type === "reply.segment.ready") {

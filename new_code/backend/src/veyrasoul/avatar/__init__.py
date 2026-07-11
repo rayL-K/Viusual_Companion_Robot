@@ -1,3 +1,3 @@
-from .director import AvatarDirector, AvatarIntent
+from .director import AvatarDirector, AvatarIntent, AvatarPhase
 
-__all__ = ["AvatarDirector", "AvatarIntent"]
+__all__ = ["AvatarDirector", "AvatarIntent", "AvatarPhase"]

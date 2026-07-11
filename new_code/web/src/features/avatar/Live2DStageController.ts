@@ -1,5 +1,4 @@
-import type { ReplyPhase } from "../../core/state/session";
-import { SignalMixer, type AffectFrame } from "./SignalMixer";
+import { SignalMixer, type AvatarRenderIntent } from "./SignalMixer";
 
 const DESKTOP_MODEL_URL = "/live2d/Strawberry_Rabbit/Strawberry_Rabbit.model3.json";
 const MOBILE_MODEL_URL = "/live2d/Strawberry_Rabbit/Strawberry_Rabbit.mobile-1024-r2.model3.json";
@@ -27,6 +26,25 @@ export type Live2DProfile = {
   modelUrl: string;
   renderResolution: number;
   label: "desktop" | "mobile";
+};
+
+const INITIAL_RENDER_INTENT: AvatarRenderIntent = {
+  phase: "idle",
+  expression: "soft",
+  motion: "idle",
+  gazeStrength: 0.68,
+  bodyTension: 0.22,
+  smile: 0.52,
+  eyeOpen: 0.82,
+  speechRate: 1,
+  speechPitch: 1,
+  affect: {
+    valence: 0.12,
+    arousal: 0.15,
+    dominance: 0,
+    affinity: 0.25,
+    trust: 0.2,
+  },
 };
 
 type CoreModel = {
@@ -74,7 +92,7 @@ export class Live2DStageController {
   private app: PixiApplication | null = null;
   private model: Live2DModel | null = null;
   private resizeObserver: ResizeObserver | null = null;
-  private phase: ReplyPhase = "idle";
+  private intent: AvatarRenderIntent = INITIAL_RENDER_INTENT;
   private gaze = { x: 0, y: 0 };
   private externalAudioRms = 0;
   private externalAudioAt = 0;
@@ -137,8 +155,8 @@ export class Live2DStageController {
     }
   }
 
-  setPhase(phase: ReplyPhase): void {
-    this.phase = phase;
+  setIntent(intent: AvatarRenderIntent): void {
+    this.intent = intent;
   }
 
   setAudioRms(rms: number): void {
@@ -163,18 +181,26 @@ export class Live2DStageController {
     if (!coreModel) return;
     const now = performance.now();
     const deltaMs = clamp(this.app?.ticker.deltaMS ?? 1000 / 60, 1, 50);
-    const affect = affectForPhase(this.phase);
-    const audioRms = now - this.externalAudioAt < 120
-      ? this.externalAudioRms
-      : syntheticSpeechRms(this.phase, now);
-    const frame = this.mixer.update(now, deltaMs, affect, audioRms, this.gaze);
+    const audioRms = selectMouthAudioRms({
+      actualRms: this.externalAudioRms,
+      actualAgeMs: now - this.externalAudioAt,
+      intent: this.intent,
+      elapsedMs: now,
+    });
+    const frame = this.mixer.update({
+      elapsedMs: now,
+      deltaMs,
+      intent: this.intent,
+      audioRms,
+      gaze: this.gaze,
+    });
 
     for (const [id, value] of Object.entries(HIDDEN_DISPLAY_PARAMETERS)) {
       coreModel.setParameterValueById(id, value, 1);
     }
     coreModel.setParameterValueById("ParamAngleX", frame.headX, 0.9);
     coreModel.setParameterValueById("ParamAngleY", frame.headY, 0.9);
-    coreModel.setParameterValueById("ParamBodyAngleX", frame.headX * 0.18, 0.65);
+    coreModel.setParameterValueById("ParamBodyAngleX", frame.bodyX, 0.65);
     coreModel.setParameterValueById("ParamEyeBallX", frame.eyeX, 0.9);
     coreModel.setParameterValueById("ParamEyeBallY", frame.eyeY, 0.9);
     coreModel.setParameterValueById("ParamEyeLOpen", blinkingValue(now) * frame.eyeOpen, 0.85);
@@ -233,16 +259,23 @@ function readBrowserProfileInput(): Live2DProfileInput {
   };
 }
 
-function affectForPhase(phase: ReplyPhase): AffectFrame {
-  if (phase === "listening") return { valence: 0.45, arousal: 0.48, affinity: 0.8 };
-  if (phase === "thinking") return { valence: 0.18, arousal: 0.28, affinity: 0.75 };
-  if (phase === "speaking") return { valence: 0.58, arousal: 0.62, affinity: 0.88 };
-  return { valence: 0.35, arousal: 0.18, affinity: 0.72 };
+export type MouthAudioInput = {
+  actualRms: number;
+  actualAgeMs: number;
+  intent: AvatarRenderIntent;
+  elapsedMs: number;
+};
+
+export function selectMouthAudioRms(input: MouthAudioInput): number {
+  if (input.actualAgeMs >= 0 && input.actualAgeMs < 120) return clamp(input.actualRms, 0, 1);
+  return syntheticSpeechRms(input.intent, input.elapsedMs);
 }
 
-function syntheticSpeechRms(phase: ReplyPhase, nowMs: number): number {
-  if (phase !== "speaking") return 0;
-  return 0.16 + Math.abs(Math.sin(nowMs / 83) * Math.sin(nowMs / 47)) * 0.28;
+function syntheticSpeechRms(intent: AvatarRenderIntent, nowMs: number): number {
+  if (intent.phase !== "speaking") return 0;
+  const rate = clamp(intent.speechRate, 0.5, 2);
+  const pitch = clamp(intent.speechPitch, 0.5, 2);
+  return 0.16 + Math.abs(Math.sin(nowMs / (83 / rate)) * Math.sin(nowMs / (47 / pitch))) * 0.28;
 }
 
 function blinkingValue(nowMs: number): number {

@@ -161,18 +161,22 @@ Gateway 已把语义结果发布到 `LatestValue[VisualSnapshot]` 和前端 `per
 - 最近 8 轮恢复、取消代际禁止错误写入；
 - 个人规模基准脚本和 JSON 结果。
 
-尚未实现：本地 embedding 模型适配器、文档切分/导入管线、Memory Curator、自动情节提取、置信度冲突策略的完整产品闭环。
+已实现 `MemoryCurator`：按 explicit/document/conversation/inference/vision 来源可靠度折算有效置信度；相同事实规范化去重并强化；弱来源冲突只写 `fact_evidence`，不覆盖可靠记忆；明确用户纠正或更强证据生成可追溯 revision。提示元数据中的来源最多保留 16 项，完整 provenance 留在证据表。
+
+尚未实现：本地 embedding 模型适配器、文档切分/导入管线、LLM/端侧事实抽取器、自动情节摘要与长期 evidence 压缩。
 
 ## 8. Live2D“生命感”系统
 
 `Live2DStageController` 已使用本地 Cubism/Pixi runtime 加载真实 Strawberry_Rabbit 模型；桌面使用 4096 纹理，粗指针、窄屏、低内存或受限纹理设备使用 1024 纹理。`SignalMixer` 在 60 FPS ticker 中合成呼吸、眨眼、微头动、平滑注视、情感到眼睛/微笑的连续映射。播放器从实际 WAV PCM 生成 20 ms RMS 包络，并按 `audio.currentTime` 驱动嘴形；加载失败保留轻量回退角色。
+
+后端会把明确用户情感自述与新鲜面部情绪作为弱证据，更新连续 valence/arousal/dominance/affinity/trust，并按真实单调时钟衰减。`AvatarDirector` 在 listening/thinking/speaking/idle 阶段生成渲染中立意图；`avatar.intent` 绑定 session/turn/generation/segmentIndex，前端再次按 sessionId + generation + seq 拒绝旧代与乱序事件。实际 WAV RMS 在口型混合中高于合成 speaking 波形。
 
 目标实现包括：
 
 - 从 model setting 读取 lip-sync/eye-blink 参数，而非硬编码单一嘴参数；
 - `requestAnimationFrame` 中合并生命、注意、情绪、话语、手势和打断层；
 - 各动作声明参数所有权，防止 motion 互相覆盖；
-- 后端 `avatar.intent`、viseme、说话人视线和语义重音与动作时间轴对齐；
+- 音素级 viseme、说话人视线和语义重音与动作时间轴对齐；
 - 用户开口立即转入倾听姿态，而非等待 ASR final。
 
 真实 Cubism 加载已在桌面、移动竖屏和移动横屏 Chromium 自动化环境通过；目标手机和 ELF2 公网链路上的稳定 60 FPS、GPU 占用与热降频仍必须实测，不能用桌面自动化结果代替。

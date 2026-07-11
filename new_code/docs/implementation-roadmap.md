@@ -15,13 +15,14 @@
 
 - 事件契约、latest-value、generation/cancellation；
 - SQLite WAL、事实 revision、FTS5 RAG、向量候选融合；
-- 连续 AffectState 和 AvatarIntent/SignalMixer 数学核心；
+- Memory Curator、来源可靠度、弱冲突保护、revision 与 provenance；
+- 连续 AffectState、真实时间衰减和 AvatarIntent/SignalMixer 闭环；
 - 单元测试与 2,000 条记忆基准脚本。
 
 待完成：
 
 - 本地 embedding 模型与文档 RAG 导入；
-- Memory Curator、情节抽取、来源/置信度产品闭环；
+- 事实抽取器、自动情节摘要和长期 evidence 压缩；
 - 跨进程/重启后的 session actor 恢复策略。
 
 ## Phase 2：实时纵向链路 — 进行中
@@ -32,7 +33,7 @@
 - 浏览器 AudioWorklet PCM16、视频关键帧采样和本地预览；
 - sherpa-onnx streaming ASR 适配器；
 - DeepSeek 非思考 SSE 输出；
-- sherpa-onnx Kokoro/VITS TTS 适配器；
+- sherpa-onnx Kokoro/Matcha/VITS TTS 适配器；
 - Matcha Baker + Vocos TTS 资产布局适配；
 - ASR/TTS 启动期预热，首轮不再承担模型加载；
 - 服务端音频先于配对文本、前端播放时显字；
@@ -61,7 +62,7 @@
 
 验收要求：本地预览保持流畅时，机器视觉不能形成帧队列；语义准确度和新鲜度需使用真实人物/室内场景数据集测量。
 
-## Phase 4：拟人表现与视频通话 UX — 真实 Live2D 纵切片完成，情感导演待接通
+## Phase 4：拟人表现与视频通话 UX — 连续情感与真实 Live2D 纵切片完成
 
 已完成：
 
@@ -72,20 +73,24 @@
 - 桌面 4096/移动 1024 纹理自适应、ResizeObserver fit、60 FPS ticker 与失败回退；
 - 连续参数 SignalMixer、指针视线、呼吸、眨眼、头眼和微笑；
 - 实际 WAV 20 ms RMS 包络按播放时间驱动口型；
+- 用户/视觉弱情感证据、真实时间衰减、renderer-neutral AvatarIntent；
+- listening/thinking/speaking/idle 与 generation/segmentIndex 同步；
+- 前端按 sessionId + generation + seq 拒绝旧代/乱序意图；
 - 桌面、移动竖屏和移动横屏 Chromium 模型加载与无溢出验证。
 
 待完成：
 
-- 后端 AvatarIntent 与 generation/segment 的协议和参数所有权；
-- 真实连续情感状态替换当前按 reply phase 映射的基础姿态；
 - viseme、语义重音与动作时间轴；
+- 更成熟的端侧情绪分类器替换当前可解释弱证据词典；
 - 真机摄像头、麦克风、方向切换、后台恢复和弱网矩阵；
 - 视觉回归/E2E 自动化，不只依赖静态截图。
 
-## Phase 5：板端与公网发布 — 部署骨架完成，实机未验收
+## Phase 5：板端与公网发布 — 部署骨架冻结，评审期间禁止执行
 
 - 已完成：Gateway 同源托管 `web/dist`；
 - 已完成：V2 Gateway/Cloudflare systemd 单元、环境模板、一键启动、健康等待与 V1 Tunnel 回滚；
+- 已完成：启动脚本加入显式激活锁，默认保护正在评审使用的 V1；
+- 当前约束：V2 仅做本机与自动化验证，不部署 ELF2、不切换 `robot.veyralux.org`；
 - 待完成：ELF2 上固定 ASR/TTS/VLM 模型与线程数；
 - 待完成：Cloudflare HTTPS/WSS 真实入口、鉴权和限流；
 - 断网、重连、打断、内存峰值、温度降频和 8 小时 soak；

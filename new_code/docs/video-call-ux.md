@@ -78,7 +78,7 @@ stateDiagram-v2
 - `HTMLAudioElement.play()` 成功时才向 UI 暴露同段文字；
 - `reply.completed` 在前端等待播放队列清空后再传播。
 
-Live2D 已按实际 WAV 的 20 ms RMS 包络和 `audio.currentTime` 驱动连续口型，且与文字开始显示共享同一个 `playing` 边界。仍待实现的是：让后端 AvatarIntent 与相同 generation/segment index 绑定，并把 viseme、语义重音和动作时间轴对齐，而不是在整段回复前随机启动一个 motion。
+Live2D 已按实际 WAV 的 20 ms RMS 包络和 `audio.currentTime` 驱动连续口型，且与文字开始显示共享同一个 `playing` 边界。后端 AvatarIntent 已绑定相同 session/turn/generation/segmentIndex，驱动 listening/thinking/speaking/idle、视线、身体张力、眼睛、微笑与连续五维情感。仍待实现的是音素级 viseme、语义重音和完整动作时间轴。
 
 ## 6. PC 优先，移动端功能完整
 
