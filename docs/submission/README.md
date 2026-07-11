@@ -8,21 +8,28 @@
 
 队员：王文康、夏鑫祥
 
-## 当前提交物
+## 最终提交物
 
 | 材料 | 文件 | 备注 |
 | --- | --- | --- |
-| 技术文档 | `技术文档_设计报告_12255_VeyraLux微睿霖光.pdf` | PDF 版，用于平台上传 |
-| 技术文档源稿 | `技术文档_设计报告_12255_VeyraLux微睿霖光.docx` | 基于模板导出的可编辑版本 |
-| 演示视频 | `演示视频_12255_VeyraLux微睿霖光.mp4` | MP4/H.264，已控制在 3 分钟与 300 MB 要求内 |
+| 授权书 | `参赛承诺与授权书_12255_VeyraLux微睿霖光.pdf` | PDF 版，用于平台上传 |
+| 技术文档 | `技术文档_设计报告_12255_VeyraLux微睿霖光.pdf` | 最终 PDF 设计报告 |
+| 演示视频 | `演示视频_12255_VeyraLux微睿霖光.mp4` | 非完整版，MP4/H.264，3 分钟及 300 MB 限制内；使用 Git LFS 保存 |
+| 重点代码 | `重点代码_12255_VeyraLux微睿霖光.zip` | 平台提交用关键代码压缩包，100 MB 以内 |
+| 技术文档源稿 | `技术文档_设计报告_12255_VeyraLux微睿霖光.docx` | 可编辑版本，仅供维护 |
 | 图表源文件 | `figures/` | 报告中使用的 SVG 与 PNG 回退图 |
-| 界面截图 | `screenshots/pc-web.png` | PC 端公网界面截图，当前宣传重点为 PC 端 |
+| 界面截图 | `screenshots/pc-web.png` | PC 端公网界面截图 |
 
 ## 作品入口
 
 - 在线演示入口：[https://robot.veyralux.org](https://robot.veyralux.org)
 - GitHub 仓库：[https://github.com/rayL-K/Viusual_Companion_Robot](https://github.com/rayL-K/Viusual_Companion_Robot)
 
-## 说明
+## 下载说明
 
-本次材料将 ELF2/RK3588 描述为端侧智能中枢，将 PC Web 描述为主要交互展示入口。移动端与微信小游戏保留基础兼容和后续扩展描述，但不作为当前主宣传界面，避免把尚未完全打磨的移动端体验放大到评审材料中。
+演示视频由 Git LFS 管理。克隆仓库后若视频显示为文本指针，请执行：
+
+```bash
+git lfs install
+git lfs pull
+```
