@@ -1,0 +1,32 @@
+[project]
+name = "veyrasoul-core"
+version = "0.1.0"
+description = "Low-latency multimodal companion runtime for RK3588"
+requires-python = ">=3.10,<3.13"
+dependencies = []
+
+[project.optional-dependencies]
+gateway = [
+  "fastapi>=0.116,<1.0",
+  "uvicorn[standard]>=0.35,<1.0",
+]
+models = [
+  "numpy>=1.24,<3.0",
+  "sherpa-onnx>=1.12,<2.0",
+]
+test = ["pytest>=8.0,<10.0"]
+
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "--strict-markers"

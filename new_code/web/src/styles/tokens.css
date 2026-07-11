@@ -1,0 +1,22 @@
+:root {
+  color-scheme: dark;
+  font-family: Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --ink: #f8f2f7;
+  --muted: #b9adb9;
+  --night: #151119;
+  --night-soft: #211824;
+  --glass: rgba(30, 23, 34, 0.72);
+  --glass-strong: rgba(27, 20, 31, 0.92);
+  --line: rgba(255, 255, 255, 0.11);
+  --rose: #ff6fae;
+  --rose-soft: #ffabd0;
+  --gold: #f1c684;
+  --mint: #87e6bf;
+  --shadow: 0 24px 80px rgba(3, 0, 8, 0.48);
+}
+
+* { box-sizing: border-box; }
+html, body, #app { width: 100%; min-height: 100%; margin: 0; }
+body { overflow: hidden; background: var(--night); color: var(--ink); }
+button, textarea { font: inherit; }
+button { color: inherit; }
