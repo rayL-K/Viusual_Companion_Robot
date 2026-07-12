@@ -47,6 +47,8 @@
 
 `new_code/artifacts/memory-benchmark.json` 记录 2,000 条数据、100 次检索的本机微基准。它只证明当前机器上的 Memory/RAG 路径量级，不能证明 ELF2 性能、LLM/TTS 时延或公网端到端时延。
 
+`new_code/artifacts/e2e-local.json` 记录真实 Chrome 在桌面 1440×900、移动 390×844 和横屏 844×390 下的本机纵切片结果：Live2D 已加载、fake camera 正在播放、文字经过真实音频播放边界后出现、三个通话按钮无裁切、文档无横纵溢出且无 pageerror。该链路使用确定性 LLM/VLM/TTS 桩，只能证明协议与 UI 生命周期，不代表真实模型时延或效果。
+
 前端请求 `frameRate: { ideal: 60, max: 60 }` 也不等于已实现 60 FPS。验收必须读取 `MediaStreamTrack.getSettings().frameRate`，再结合 `requestVideoFrameCallback` 或等价采样统计实际呈现帧率。
 
 ## 尚缺的测量设施

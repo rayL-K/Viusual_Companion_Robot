@@ -1,0 +1,93 @@
+{
+  "checkedAt": "2026-07-12T01:19:02.284Z",
+  "desktop": {
+    "viewportWidth": 1440,
+    "viewportHeight": 900,
+    "scrollWidth": 1440,
+    "scrollHeight": 900,
+    "live2dReady": true,
+    "callButtons": [
+      {
+        "clientWidth": 66,
+        "scrollWidth": 66,
+        "clientHeight": 64,
+        "scrollHeight": 64
+      },
+      {
+        "clientWidth": 66,
+        "scrollWidth": 66,
+        "clientHeight": 64,
+        "scrollHeight": 64
+      },
+      {
+        "clientWidth": 66,
+        "scrollWidth": 66,
+        "clientHeight": 64,
+        "scrollHeight": 64
+      }
+    ],
+    "cameraReadyMs": 2004,
+    "replyVisibleMs": 895,
+    "pageErrors": []
+  },
+  "mobile": {
+    "viewportWidth": 390,
+    "viewportHeight": 844,
+    "scrollWidth": 390,
+    "scrollHeight": 844,
+    "live2dReady": true,
+    "callButtons": [
+      {
+        "clientWidth": 58,
+        "scrollWidth": 58,
+        "clientHeight": 56,
+        "scrollHeight": 56
+      },
+      {
+        "clientWidth": 58,
+        "scrollWidth": 58,
+        "clientHeight": 56,
+        "scrollHeight": 56
+      },
+      {
+        "clientWidth": 58,
+        "scrollWidth": 58,
+        "clientHeight": 56,
+        "scrollHeight": 56
+      }
+    ],
+    "cameraReadyMs": 650,
+    "replyVisibleMs": 856,
+    "pageErrors": []
+  },
+  "landscape": {
+    "viewportWidth": 844,
+    "viewportHeight": 390,
+    "scrollWidth": 844,
+    "scrollHeight": 390,
+    "live2dReady": true,
+    "callButtons": [
+      {
+        "clientWidth": 66,
+        "scrollWidth": 66,
+        "clientHeight": 64,
+        "scrollHeight": 64
+      },
+      {
+        "clientWidth": 66,
+        "scrollWidth": 66,
+        "clientHeight": 64,
+        "scrollHeight": 64
+      },
+      {
+        "clientWidth": 66,
+        "scrollWidth": 66,
+        "clientHeight": 64,
+        "scrollHeight": 64
+      }
+    ],
+    "cameraReadyMs": 655,
+    "replyVisibleMs": 837,
+    "pageErrors": []
+  }
+}

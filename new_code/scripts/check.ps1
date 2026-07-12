@@ -1,5 +1,7 @@
 [CmdletBinding()]
-param()
+param(
+    [switch]$WithE2E
+)
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
@@ -36,6 +38,10 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Web checks failed." }
     npm run build
     if ($LASTEXITCODE -ne 0) { throw "Web build failed." }
+    if ($WithE2E) {
+        npm run e2e
+        if ($LASTEXITCODE -ne 0) { throw "Local browser E2E failed." }
+    }
 }
 finally {
     Pop-Location

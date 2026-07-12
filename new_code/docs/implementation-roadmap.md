@@ -93,6 +93,13 @@
 - 当前约束：V2 仅做本机与自动化验证，不部署 ELF2、不切换 `robot.veyralux.org`；
 - 待完成：ELF2 上固定 ASR/TTS/VLM 模型与线程数；
 - 待完成：Cloudflare HTTPS/WSS 真实入口、鉴权和限流；
+
+## Phase 6：本机拟真验证 — 进行中
+
+- 已完成：真实 ASGI Gateway、WebSocket binary media、确定性 LLM/VLM/TTS 桩和 Chrome E2E；
+- 已完成：1440×900、390×844 与 844×390 横屏下真实 Live2D、fake camera/mic、音频播放后显字、视觉语义、按钮裁切与整页溢出检查；
+- 已完成：E2E 不接触 ELF2、不使用正式 Tunnel，保证 V1 评审链路不变；
+- 待完成：断线重连、连续打断、长会话、内存增长和弱网注入。
 - 断网、重连、打断、内存峰值、温度降频和 8 小时 soak；
 - 灰度切换 `robot.veyralux.org`，保留 V1 一键回滚。
 

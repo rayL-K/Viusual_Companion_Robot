@@ -73,7 +73,12 @@ npm run build
 
 cd ..
 .\scripts\check.ps1
+
+# 使用确定性本机模型桩启动真实 Gateway + Chrome，验证桌面/移动视频通话纵切片
+.\scripts\check.ps1 -WithE2E
 ```
+
+浏览器 E2E 会使用 fake camera/microphone、本地短音频和确定性 LLM/VLM 桩，不需要密钥，也不会访问或部署 ELF2。它验证真实 WebSocket、二进制音频配对、播放时显字、视觉事件、Live2D 加载、媒体权限、按钮裁切和页面溢出；结果写入 `artifacts/e2e-local.json`。它不能替代真实模型自然度与性能测试。
 
 ## 启动开发界面
 
