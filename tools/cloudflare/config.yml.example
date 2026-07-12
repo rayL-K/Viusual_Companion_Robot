@@ -6,7 +6,7 @@ protocol: quic
 no-autoupdate: true
 
 ingress:
-  - hostname: robot.veyralux.org
+  - hostname: anima.veyralux.org
     service: http://127.0.0.1:8765
     originRequest:
       connectTimeout: 10s

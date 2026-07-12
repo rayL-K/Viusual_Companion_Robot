@@ -40,14 +40,14 @@ class FakeWebSocket {
 
 test("公网地址会转换为同源 WSS 实时通道", () => {
   assert.equal(
-    realtimeAsrUrl({ hostname: "robot.veyralux.org", origin: "https://robot.veyralux.org" }),
-    "wss://robot.veyralux.org/realtime",
+    realtimeAsrUrl({ hostname: "anima.veyralux.org", origin: "https://anima.veyralux.org" }),
+    "wss://anima.veyralux.org/realtime",
   );
 });
 
 test("语音块边录边上传，句尾消息返回板端识别结果", async () => {
   const client = new RealtimeAsrClient({
-    url: "wss://robot.veyralux.org/realtime",
+    url: "wss://anima.veyralux.org/realtime",
     WebSocketCtor: FakeWebSocket,
     timeoutMs: 1000,
   });

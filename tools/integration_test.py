@@ -42,7 +42,7 @@ def run(base_url: str, image_path: Path | None, token: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="验证 ELF2 本地视觉部署")
-    parser.add_argument("--base-url", default="https://robot.veyralux.org")
+    parser.add_argument("--base-url", default="https://anima.veyralux.org")
     parser.add_argument("--image", type=Path, help="用于真实推理的 JPEG/PNG")
     parser.add_argument("--token", default="", help="直连板端时使用；公网 Worker 会自动注入")
     args = parser.parse_args()

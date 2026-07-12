@@ -23,6 +23,12 @@ type GatewayEnv = Env & {
   DEVICE_TOKEN: string;
 };
 
+const PUBLIC_HOSTNAMES = new Set([
+  "anima.veyralux.org",
+  // 旧入口暂留作兼容别名，避免已发出的资料和浏览器缓存立即失效。
+  "robot.veyralux.org",
+]);
+
 function jsonError(status: number, message: string, requestId: string): Response {
   return Response.json(
     { error: message, request_id: requestId },
@@ -89,7 +95,7 @@ export default {
   async fetch(request, env, ctx): Promise<Response> {
     const url = new URL(request.url);
     const requestId = request.headers.get("CF-Ray") || crypto.randomUUID();
-    if (url.hostname !== "robot.veyralux.org") {
+    if (!PUBLIC_HOSTNAMES.has(url.hostname)) {
       return jsonError(404, "Not found", requestId);
     }
     if (
@@ -124,6 +130,11 @@ export default {
     const headers = new Headers(request.headers);
     headers.set("X-Forwarded-Host", url.hostname);
     headers.set("X-Forwarded-Proto", "https");
+    // ELF2 上的 V1 仍按旧正式域名校验 Origin；在不重启板端服务的前提下
+    // 将新域名安全迁移为主入口，响应仍由当前同源 Worker 返回。
+    if (headers.has("Origin")) {
+      headers.set("Origin", "https://robot.veyralux.org");
+    }
     const clientIp = request.headers.get("CF-Connecting-IP");
     if (clientIp) {
       headers.set("X-Forwarded-For", clientIp);
