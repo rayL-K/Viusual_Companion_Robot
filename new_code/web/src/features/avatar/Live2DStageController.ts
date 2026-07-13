@@ -5,6 +5,9 @@ import {
   type AvatarActionEnvelope,
   type AvatarOverlayExecutor,
 } from "./AvatarActionScheduler";
+import { AvatarInteractionController, type LocalContactFeedback } from "./interaction/AvatarInteractionController";
+import { InteractionDirector } from "./interaction/InteractionDirector";
+import { Live2DHitTestPort } from "./interaction/Live2DHitTestPort";
 
 const DESKTOP_MODEL_URL = "/live2d/Strawberry_Rabbit/Strawberry_Rabbit.model3.json";
 const MOBILE_MODEL_URL = "/live2d/Strawberry_Rabbit/Strawberry_Rabbit.mobile-1024-r2.model3.json";
@@ -80,7 +83,18 @@ type Live2DModel = {
   internalModel?: InternalModel;
   expression?: (name: string) => Promise<boolean>;
   motion?: (group: string, index?: number, priority?: number) => Promise<boolean>;
+  hitTest?: (x: number, y: number) => string[];
   destroy?: () => void;
+};
+
+type PixiRenderer = {
+  gl?: WebGLRenderingContext;
+  screen?: { width: number; height: number };
+  plugins?: {
+    interaction?: {
+      mapPositionToPoint: (point: { x: number; y: number }, clientX: number, clientY: number) => void;
+    };
+  };
 };
 
 type PixiApplication = {
@@ -92,7 +106,7 @@ type PixiApplication = {
     add: (callback: () => void) => void;
     remove: (callback: () => void) => void;
   };
-  renderer?: { gl?: WebGLRenderingContext };
+  renderer?: PixiRenderer;
   destroy: (removeView: boolean, options: { children: boolean; texture: boolean; baseTexture: boolean }) => void;
 };
 
@@ -114,14 +128,15 @@ export class Live2DStageController {
   private resizeObserver: ResizeObserver | null = null;
   private intent: AvatarActionEnvelope = INITIAL_RENDER_INTENT;
   private actionScheduler: AvatarActionScheduler | null = null;
+  private interactionController: AvatarInteractionController | null = null;
+  private readonly interactionDirector = new InteractionDirector();
+  private feedbackTimer: ReturnType<typeof setTimeout> | null = null;
   private gaze = { x: 0, y: 0 };
   private externalAudioRms = 0;
   private externalAudioAt = 0;
   private readonly mixer = new SignalMixer();
   private readonly applyContinuousSignals = () => this.updateFrame();
   private readonly resize = () => this.fitModel();
-  private readonly pointerMove = (event: PointerEvent) => this.updateGaze(event);
-  private readonly pointerLeave = () => { this.gaze = { x: 0, y: 0 }; };
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -166,8 +181,26 @@ export class Live2DStageController {
       model.internalModel?.on?.("beforeModelUpdate", this.applyContinuousSignals);
       app.stage.addChild(model);
       this.fitModel();
-      this.host.addEventListener("pointermove", this.pointerMove, { passive: true });
-      this.host.addEventListener("pointerleave", this.pointerLeave, { passive: true });
+      if (!model.hitTest || !app.renderer) throw new Error("Live2D 身体命中运行时不可用");
+      this.interactionController = new AvatarInteractionController(
+        this.host,
+        new Live2DHitTestPort(
+          { hitTest: (x, y) => model.hitTest?.(x, y) ?? [] },
+          app.renderer,
+          this.canvas,
+        ),
+        {
+          onInteraction: (event) => {
+            this.interactionDirector.accept(event, this.intent);
+            this.host.dataset.interactionArea = event.area;
+            this.host.dataset.interactionGesture = event.gesture;
+            this.host.dataset.interactionSequence = String(event.sequence);
+          },
+          onGaze: (gaze) => { this.gaze = gaze; },
+          onFeedback: (feedback) => this.showInteractionFeedback(feedback),
+        },
+      );
+      this.interactionController.start();
       if (typeof ResizeObserver !== "undefined") {
         this.resizeObserver = new ResizeObserver(this.resize);
         this.resizeObserver.observe(this.host);
@@ -192,12 +225,25 @@ export class Live2DStageController {
     this.externalAudioAt = performance.now();
   }
 
+  primaryContact(): void {
+    this.interactionController?.primaryContact();
+  }
+
   destroy(): void {
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
     window.removeEventListener("resize", this.resize);
-    this.host.removeEventListener("pointermove", this.pointerMove);
-    this.host.removeEventListener("pointerleave", this.pointerLeave);
+    this.interactionController?.destroy();
+    this.interactionController = null;
+    this.interactionDirector.reset();
+    if (this.feedbackTimer !== null) clearTimeout(this.feedbackTimer);
+    this.feedbackTimer = null;
+    delete this.host.dataset.contactPulse;
+    delete this.host.dataset.interactionArea;
+    delete this.host.dataset.interactionGesture;
+    delete this.host.dataset.interactionSequence;
+    this.host.style.removeProperty("--contact-x");
+    this.host.style.removeProperty("--contact-y");
     this.model?.internalModel?.off?.("beforeModelUpdate", this.applyContinuousSignals);
     this.actionScheduler?.destroy();
     this.actionScheduler = null;
@@ -223,6 +269,7 @@ export class Live2DStageController {
       intent: this.intent,
       audioRms,
       gaze: this.gaze,
+      reflex: this.interactionDirector.sample(now),
     });
 
     for (const [id, value] of Object.entries(HIDDEN_DISPLAY_PARAMETERS)) {
@@ -255,12 +302,20 @@ export class Live2DStageController {
     else { model.x = width * 0.5; model.y = height * 0.52; }
   }
 
-  private updateGaze(event: PointerEvent): void {
+  private showInteractionFeedback(feedback: LocalContactFeedback): void {
     const rect = this.host.getBoundingClientRect();
-    this.gaze = {
-      x: clamp((event.clientX - rect.left) / Math.max(rect.width, 1) * 2 - 1, -1, 1),
-      y: clamp(-((event.clientY - rect.top) / Math.max(rect.height, 1) * 2 - 1), -1, 1),
-    };
+    const x = clamp((feedback.clientX - rect.left) / Math.max(rect.width, 1) * 100, 0, 100);
+    const y = clamp((feedback.clientY - rect.top) / Math.max(rect.height, 1) * 100, 0, 100);
+    this.host.style.setProperty("--contact-x", `${x}%`);
+    this.host.style.setProperty("--contact-y", `${y}%`);
+    delete this.host.dataset.contactPulse;
+    void this.host.offsetWidth;
+    this.host.dataset.contactPulse = feedback.area;
+    if (this.feedbackTimer !== null) clearTimeout(this.feedbackTimer);
+    this.feedbackTimer = setTimeout(() => {
+      delete this.host.dataset.contactPulse;
+      this.feedbackTimer = null;
+    }, 560);
   }
 }
 

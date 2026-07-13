@@ -49,7 +49,18 @@ export function AvatarStage({ phase, intent }: AvatarStageProps) {
     <section class="avatar-stage" aria-label="Live2D 角色舞台">
       <div class="stage-light stage-light--one" />
       <div class="stage-light stage-light--two" />
-      <div ref={hostRef} class={`presence presence--${stageState}`} data-phase={phase.value}>
+      <div
+        ref={hostRef}
+        class={`presence presence--${stageState}`}
+        data-phase={phase.value}
+        tabIndex={0}
+        aria-label="与草莓兔兔互动：可用鼠标或触摸轻触、按住或抚摸角色身体"
+        onKeyDown={(event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          controllerRef.current?.primaryContact();
+        }}
+      >
         <div class="presence__halo" />
         {stageState !== "ready" && (
           <div class="presence__core" aria-hidden="true">

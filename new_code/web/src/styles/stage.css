@@ -21,7 +21,32 @@
   width: min(88%, 760px);
   height: min(96%, 900px);
   transform: translate(-50%, -50%);
+  touch-action: pinch-zoom;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  outline: none;
 }
+.presence:focus-visible {
+  border-radius: 28px;
+  box-shadow: 0 0 0 2px rgba(255, 214, 232, .72), 0 0 32px rgba(255, 111, 174, .24);
+}
+.presence::after {
+  position: absolute;
+  z-index: 6;
+  left: var(--contact-x, 50%);
+  top: var(--contact-y, 40%);
+  width: 18px;
+  height: 18px;
+  content: "";
+  pointer-events: none;
+  border: 1px solid rgba(255, 223, 236, .88);
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 255, 255, .42), rgba(255, 129, 181, .1) 62%, transparent 70%);
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(.45);
+}
+.presence[data-contact-pulse]::after { animation: contact-ripple .54s ease-out; }
 .presence__halo {
   position: absolute;
   left: 50%;
@@ -80,6 +105,19 @@
   transition: opacity .28s ease;
 }
 .presence--ready .live2d-canvas { opacity: 1; }
+
+@keyframes contact-ripple {
+  0% { opacity: .95; transform: translate(-50%, -50%) scale(.45); }
+  65% { opacity: .55; }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(2.8); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .presence[data-contact-pulse]::after {
+    animation-duration: .18s;
+    transform: translate(-50%, -50%) scale(1.2);
+  }
+}
 .stage-presence-label {
   position: absolute;
   left: 50%;

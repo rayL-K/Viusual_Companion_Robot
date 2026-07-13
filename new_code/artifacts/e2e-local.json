@@ -1,5 +1,5 @@
 {
-  "checkedAt": "2026-07-13T11:51:38.031Z",
+  "checkedAt": "2026-07-13T13:16:40.711Z",
   "viewports": {
     "desktop": {
       "viewportWidth": 1440,
@@ -28,9 +28,9 @@
         }
       ],
       "drawerLayout": {
-        "left": 1049.7161865234375,
+        "left": 1049.7275390625,
         "top": 12,
-        "right": 1439.7161865234375,
+        "right": 1439.7275390625,
         "bottom": 888,
         "clientWidth": 388,
         "scrollWidth": 388,
@@ -43,10 +43,25 @@
         "clientHeight": 681,
         "scrollHeight": 681
       },
-      "cameraReadyMs": 2483,
-      "replyVisibleMs": 898,
-      "interruptionVisibleMs": 1026,
-      "reconnectRecoveredMs": 827,
+      "cameraReadyMs": 2736,
+      "replyVisibleMs": 936,
+      "interruptionVisibleMs": 1125,
+      "reconnectRecoveredMs": 846,
+      "avatarInteraction": {
+        "tabIndex": 0,
+        "label": "与草莓兔兔互动：可用鼠标或触摸轻触、按住或抚摸角色身体",
+        "touchAction": "pinch-zoom",
+        "contact": {
+          "area": "face",
+          "gesture": "release",
+          "sequenceDelta": 4,
+          "point": {
+            "xFraction": 0.5,
+            "yFraction": 0.22
+          }
+        },
+        "keyboardSequenceDelta": 1
+      },
       "pageErrors": []
     },
     "small-mobile": {
@@ -77,9 +92,9 @@
       ],
       "drawerLayout": {
         "left": 8,
-        "top": 125.07190704345703,
+        "top": 123.79264068603516,
         "right": 312,
-        "bottom": 568.103157043457,
+        "bottom": 566.8239212036133,
         "clientWidth": 302,
         "scrollWidth": 302,
         "clientHeight": 441,
@@ -91,10 +106,25 @@
         "clientHeight": 779,
         "scrollHeight": 779
       },
-      "cameraReadyMs": 794,
-      "replyVisibleMs": 866,
-      "interruptionVisibleMs": 1193,
+      "cameraReadyMs": 902,
+      "replyVisibleMs": 912,
+      "interruptionVisibleMs": 1080,
       "reconnectRecoveredMs": null,
+      "avatarInteraction": {
+        "tabIndex": 0,
+        "label": "与草莓兔兔互动：可用鼠标或触摸轻触、按住或抚摸角色身体",
+        "touchAction": "pinch-zoom",
+        "contact": {
+          "area": "face",
+          "gesture": "release",
+          "sequenceDelta": 3,
+          "point": {
+            "xFraction": 0.5,
+            "yFraction": 0.22
+          }
+        },
+        "keyboardSequenceDelta": 1
+      },
       "pageErrors": []
     },
     "mobile": {
@@ -125,9 +155,9 @@
       ],
       "drawerLayout": {
         "left": 8,
-        "top": 343.12432861328125,
+        "top": 343.128173828125,
         "right": 382,
-        "bottom": 843.6868286132812,
+        "bottom": 843.690673828125,
         "clientWidth": 372,
         "scrollWidth": 372,
         "clientHeight": 499,
@@ -139,10 +169,25 @@
         "clientHeight": 681,
         "scrollHeight": 681
       },
-      "cameraReadyMs": 719,
-      "replyVisibleMs": 874,
-      "interruptionVisibleMs": 1205,
+      "cameraReadyMs": 994,
+      "replyVisibleMs": 897,
+      "interruptionVisibleMs": 1092,
       "reconnectRecoveredMs": null,
+      "avatarInteraction": {
+        "tabIndex": 0,
+        "label": "与草莓兔兔互动：可用鼠标或触摸轻触、按住或抚摸角色身体",
+        "touchAction": "pinch-zoom",
+        "contact": {
+          "area": "face",
+          "gesture": "release",
+          "sequenceDelta": 3,
+          "point": {
+            "xFraction": 0.5,
+            "yFraction": 0.22
+          }
+        },
+        "keyboardSequenceDelta": 1
+      },
       "pageErrors": []
     },
     "tablet-portrait": {
@@ -172,9 +217,9 @@
         }
       ],
       "drawerLayout": {
-        "left": 377.7049865722656,
+        "left": 377.7038879394531,
         "top": 12,
-        "right": 767.7049560546875,
+        "right": 767.703857421875,
         "bottom": 1012,
         "clientWidth": 388,
         "scrollWidth": 388,
@@ -187,10 +232,25 @@
         "clientHeight": 681,
         "scrollHeight": 681
       },
-      "cameraReadyMs": 763,
-      "replyVisibleMs": 847,
-      "interruptionVisibleMs": 1175,
+      "cameraReadyMs": 1005,
+      "replyVisibleMs": 857,
+      "interruptionVisibleMs": 1200,
       "reconnectRecoveredMs": null,
+      "avatarInteraction": {
+        "tabIndex": 0,
+        "label": "与草莓兔兔互动：可用鼠标或触摸轻触、按住或抚摸角色身体",
+        "touchAction": "pinch-zoom",
+        "contact": {
+          "area": "ear.left",
+          "gesture": "release",
+          "sequenceDelta": 3,
+          "point": {
+            "xFraction": 0.42,
+            "yFraction": 0.22
+          }
+        },
+        "keyboardSequenceDelta": 1
+      },
       "pageErrors": []
     },
     "tablet-landscape": {
@@ -220,9 +280,9 @@
         }
       ],
       "drawerLayout": {
-        "left": 632.0687866210938,
+        "left": 632.0658569335938,
         "top": 12,
-        "right": 1022.0687866210938,
+        "right": 1022.0658569335938,
         "bottom": 756,
         "clientWidth": 388,
         "scrollWidth": 388,
@@ -235,10 +295,25 @@
         "clientHeight": 681,
         "scrollHeight": 681
       },
-      "cameraReadyMs": 783,
-      "replyVisibleMs": 868,
-      "interruptionVisibleMs": 1184,
+      "cameraReadyMs": 902,
+      "replyVisibleMs": 898,
+      "interruptionVisibleMs": 1202,
       "reconnectRecoveredMs": null,
+      "avatarInteraction": {
+        "tabIndex": 0,
+        "label": "与草莓兔兔互动：可用鼠标或触摸轻触、按住或抚摸角色身体",
+        "touchAction": "pinch-zoom",
+        "contact": {
+          "area": "face",
+          "gesture": "release",
+          "sequenceDelta": 3,
+          "point": {
+            "xFraction": 0.5,
+            "yFraction": 0.22
+          }
+        },
+        "keyboardSequenceDelta": 1
+      },
       "pageErrors": []
     },
     "mobile-landscape": {
@@ -268,9 +343,9 @@
         }
       ],
       "drawerLayout": {
-        "left": 503.333251953125,
+        "left": 503.3371276855469,
         "top": 6,
-        "right": 843.333251953125,
+        "right": 843.337158203125,
         "bottom": 384,
         "clientWidth": 338,
         "scrollWidth": 338,
@@ -283,10 +358,25 @@
         "clientHeight": 681,
         "scrollHeight": 681
       },
-      "cameraReadyMs": 722,
-      "replyVisibleMs": 850,
-      "interruptionVisibleMs": 1176,
+      "cameraReadyMs": 896,
+      "replyVisibleMs": 876,
+      "interruptionVisibleMs": 1142,
       "reconnectRecoveredMs": null,
+      "avatarInteraction": {
+        "tabIndex": 0,
+        "label": "与草莓兔兔互动：可用鼠标或触摸轻触、按住或抚摸角色身体",
+        "touchAction": "pinch-zoom",
+        "contact": {
+          "area": "face",
+          "gesture": "release",
+          "sequenceDelta": 3,
+          "point": {
+            "xFraction": 0.5,
+            "yFraction": 0.22
+          }
+        },
+        "keyboardSequenceDelta": 1
+      },
       "pageErrors": []
     }
   }

@@ -191,10 +191,14 @@ Gateway 已把语义结果发布到 `LatestValue[VisualSnapshot]` 和前端 `per
 
 浏览器原生 `AvatarActionScheduler` 已在 capability allowlist 内调用 Strawberry Rabbit 的真实 expression/motion API，按优先级、持续时间、冷却和抢占管理离散动作，并与 generation/seq 同生命周期。连续 SignalMixer 在 Live2D `beforeModelUpdate` 阶段于 motion/expression 后写入，使 RMS 口型保持最终所有权。静态能力表已与当前 model3 资源核对；自动 manifest 生成、全资产视觉回归和目标手机帧耗仍待完成。
 
-目标实现包括：
+面向用户的动作盘已经移除。浏览器当前以 `@use-gesture/vanilla` 统一鼠标、触摸、手写笔和键盘入口，通过 model3 HitArea 将指针转换成 `face`、`ear.left`、`hand.right` 等稳定语义，再由本地 `InteractionDirector` 生成可衰减的短时反射。区域后缀表示舞台画面中的视觉左右，不是角色解剖学左右；原始坐标和轨迹不进入 WebSocket、对话或记忆。该纵切片目前处于本机实现、单元测试和运行时边界核验阶段，尚未完成真实手机触控、无障碍、误触率或生产性能验收。详见 [`live2d-interaction.md`](live2d-interaction.md)。
+
+V2 仍禁止部署或切换到 ELF2/公网评审链路。Cubism/Pixi 等运行库许可证不等于 Strawberry Rabbit 模型与美术的公开再分发许可；在模型授权证据闭环前，不得把当前资产状态描述为可公开发布。
+
+仍待完成的表现增强包括：
 
 - 从 model setting 读取 lip-sync/eye-blink 参数，而非硬编码单一嘴参数；
-- `requestAnimationFrame` 中合并生命、注意、情绪、话语、手势和打断层；
+- 继续核验生命、注意、情绪、话语、手势和打断层的逐参数所有权与真机帧耗；
 - 各动作声明参数所有权，防止 motion 互相覆盖；
 - 音素级 viseme、说话人视线和语义重音与动作时间轴对齐；
 - 用户开口立即转入倾听姿态，而非等待 ASR final。

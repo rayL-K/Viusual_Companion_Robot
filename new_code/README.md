@@ -18,6 +18,7 @@
 6. **情绪是连续状态**：用 valence/arousal/dominance/affinity/trust 驱动语气和参数曲线，而不是随机硬切表情。
 7. **板端隐私优先**：视觉、ASR、TTS、记忆和 RAG 目标部署在 ELF2；云端 LLM 只接收裁剪后的语言上下文。
 8. **VoxCPM 永不自动切换**：只有用户主动选择后才允许加载。
+9. **直接接触而非动作盘**：用户通过角色身体命中区域交互；表情和动作由自主导演结合语义与能力表选择，不向用户暴露模型动作列表。
 
 ## 当前实现状态（以代码为准）
 
@@ -38,6 +39,7 @@
 - 从实际 WAV PCM 预计算 20 ms RMS 包络并按播放时间驱动 Live2D 嘴形。
 - 连续情感证据、真实时间衰减和 generation-safe `avatar.intent` 已贯通后端与 Live2D；ASR partial 会立即触发 listening/barge-in，旧代意图不会污染新轮；
 - 浏览器原生 `AvatarActionScheduler` 已把 renderer-neutral 意图映射到真实 `.exp3/.motion3`，支持能力过滤、优先级、持续时间、冷却、抢占与代际门控；连续 SignalMixer/RMS 仍拥有最终参数混合顺序；
+- 用户动作盘已移除；`@use-gesture/vanilla`、模型 HitArea、舞台视觉左右语义、tap/press/stroke 和本地 `InteractionDirector` 已进入实现与单元测试阶段，原始指针轨迹不进入协议或记忆；
 - WebSocket 指数退避重连、AudioWorklet→ScriptProcessor 和 OffscreenCanvas→HTMLCanvas 兼容降级，以及 320×568、手机、平板和横屏 Chromium E2E。
 
 ### 已有适配器或界面骨架，但尚未完成真实板端闭环
@@ -46,6 +48,7 @@
 - Gateway 已把 JPEG 接入单槽 latest-value 调度器，并通过板内 `/analyze` VLM HTTP 适配器发布 `VisualSnapshot`；仓库内尚不包含真正的 RK3588 VLM worker，也未接入 RKNN 快视觉；
 - 新鲜 `VisualSnapshot` 已无条件进入每轮动态上下文并发布给前端；仍需用真实板内 VLM 服务验证准确度、超时和资源占用；
 - Live2D 真实模型、连续 AvatarIntent 和 RMS 口型已接通，并通过桌面/竖屏/横屏 Chromium 拟真验证；音素级 viseme、语义重音、完整动作时间轴和目标手机 GPU 实测尚未完成；
+- 身体交互目前只有本机实现、单元测试和运行时命中区域核验，尚未完成目标手机触控、误触率、无障碍和帧耗验收；Strawberry Rabbit 模型公网再分发授权也尚未闭环；
 - UI 已做桌面/移动端布局与构建检查，尚未完成覆盖主流手机浏览器的真机矩阵；
 - 当前匿名隔离依赖不可猜测的稳定 session hint，仅提供数据分区而不是账号认证；默认 Gateway 会拒绝显式 `?user=`，只有注入服务端 IdentityResolver 后才能建立正式用户身份；
 - V2 systemd、同源静态托管、Cloudflare Tunnel 单元与一键启动/回滚脚本已进入仓库，但已加显式激活保护；在比赛评审期间不得替换开发板与公网 V1。
@@ -99,6 +102,7 @@ npm run dev
 ## 文档索引
 
 - [`docs/architecture.md`](docs/architecture.md)：目标架构、当前纵向链路和模块边界
+- [`docs/live2d-interaction.md`](docs/live2d-interaction.md)：无动作盘身体交互、语义契约、生命周期和授权边界
 - [`docs/video-call-ux.md`](docs/video-call-ux.md)：视频通话式交互、媒体频率和端侧适配
 - [`docs/protocol.md`](docs/protocol.md)：Realtime Protocol v2
 - [`docs/latency-slo.md`](docs/latency-slo.md)：目标时延、测量口径和当前证据边界

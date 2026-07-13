@@ -72,6 +72,24 @@ describe("AvatarActionScheduler", () => {
     scheduler.destroy();
   });
 
+  it("maps the backend thoughtful and ponder semantics to supported model assets", () => {
+    const executor = createExecutor();
+    const scheduler = new AvatarActionScheduler(executor, STRAWBERRY_RABBIT_CAPABILITIES);
+
+    expect(scheduler.submit({
+      ...BASE_INTENT,
+      expression: "thoughtful",
+      motion: "ponder",
+    })).toMatchObject({
+      accepted: true,
+      expression: "scheduled",
+      motion: "scheduled",
+    });
+    expect(executor.setExpression).toHaveBeenLastCalledWith("question");
+    expect(executor.startMotion).toHaveBeenLastCalledWith("scene1", 1);
+    scheduler.destroy();
+  });
+
   it("rejects stale generation and sequence while a new domain clears cooldowns", () => {
     const executor = createExecutor();
     const scheduler = new AvatarActionScheduler(executor, STRAWBERRY_RABBIT_CAPABILITIES);

@@ -22,6 +22,7 @@ server.stderr.on("data", (chunk) => { serverLog += chunk; });
 let browser;
 try {
   await waitForHealth();
+  await verifyDistributionNotice();
   browser = await chromium.launch({
     executablePath: findBrowser(),
     headless: true,
@@ -81,6 +82,7 @@ async function verifyViewport(browserInstance, options) {
   page.on("pageerror", (error) => pageErrors.push(String(error)));
   await page.goto(origin, { waitUntil: "domcontentloaded" });
   await page.locator(".presence--ready").waitFor({ timeout: 30_000 });
+  const avatarInteraction = await verifyAvatarInteraction(page, options);
   await page.getByRole("button", { name: /开始陪伴通话/ }).click();
   await page.locator(".camera-pip video").waitFor({ state: "visible" });
   await page.waitForFunction(() => {
@@ -207,8 +209,80 @@ async function verifyViewport(browserInstance, options) {
     replyVisibleMs,
     interruptionVisibleMs,
     reconnectRecoveredMs,
+    avatarInteraction,
     pageErrors,
   };
+}
+
+async function verifyAvatarInteraction(page, options) {
+  assert(await page.locator(".action-wheel, [data-action-wheel], [aria-label*='动作盘']").count() === 0,
+    `${options.label}: legacy action wheel is still rendered`);
+
+  const presence = page.locator(".presence");
+  const accessibility = await presence.evaluate((element) => ({
+    tabIndex: element.tabIndex,
+    label: element.getAttribute("aria-label"),
+    touchAction: getComputedStyle(element).touchAction,
+  }));
+  assert(accessibility.tabIndex === 0, `${options.label}: avatar stage is not keyboard focusable`);
+  assert(accessibility.label?.includes("互动"), `${options.label}: avatar interaction label missing`);
+  assert(accessibility.touchAction === "pinch-zoom", `${options.label}: browser pinch zoom is not preserved`);
+
+  const contact = await probeBodyContact(page, presence, options);
+  assert(contact, `${options.label}: no declared Live2D body hit area responded`);
+  const acceptedSequenceDeltas = options.hasTouch ? [3] : [3, 4];
+  assert(acceptedSequenceDeltas.includes(contact.sequenceDelta),
+    `${options.label}: duplicated or incomplete contact/tap/release sequence`);
+  assert(contact.gesture === "release", `${options.label}: body interaction did not cleanly release`);
+
+  await verifyKeyboardInteraction(page, presence, options.label);
+  return { ...accessibility, contact, keyboardSequenceDelta: 1 };
+}
+
+async function probeBodyContact(page, presence, options) {
+  const rect = await presence.boundingBox();
+  assert(rect && rect.width > 0 && rect.height > 0, `${options.label}: avatar stage has no layout box`);
+  const xFractions = [0.5, 0.42, 0.58, 0.34, 0.66];
+  const yFractions = [0.22, 0.3, 0.4, 0.5, 0.62, 0.74, 0.84];
+
+  for (const yFraction of yFractions) {
+    for (const xFraction of xFractions) {
+      const before = await readInteractionState(presence);
+      const x = rect.x + rect.width * xFraction;
+      const y = rect.y + rect.height * yFraction;
+      if (options.hasTouch) await page.touchscreen.tap(x, y);
+      else await page.mouse.click(x, y);
+      const after = await readInteractionState(presence);
+      if (after.sequence > before.sequence && after.area) {
+        return {
+          area: after.area,
+          gesture: after.gesture,
+          sequenceDelta: after.sequence - before.sequence,
+          point: { xFraction, yFraction },
+        };
+      }
+    }
+  }
+  return null;
+}
+
+async function verifyKeyboardInteraction(page, presence, label) {
+  const beforeKeyboard = await readInteractionState(presence);
+  await presence.focus();
+  await page.keyboard.press("Enter");
+  const afterKeyboard = await readInteractionState(presence);
+  assert(afterKeyboard.sequence === beforeKeyboard.sequence + 1,
+    `${label}: keyboard interaction did not emit exactly one semantic event`);
+  assert(afterKeyboard.area === "face" && afterKeyboard.gesture === "tap",
+    `${label}: keyboard interaction did not map to a face tap`);
+}
+
+async function readInteractionState(presence) {
+  return presence.evaluate((element) => ({
+    sequence: Number(element.dataset.interactionSequence || 0),
+    area: element.dataset.interactionArea || null,
+    gesture: element.dataset.interactionGesture || null,
+  }));
 }
 
 async function waitForHealth() {
@@ -223,6 +297,14 @@ async function waitForHealth() {
     await delay(100);
   }
   throw new Error("demo gateway health timeout");
+}
+
+async function verifyDistributionNotice() {
+  const response = await fetch(`${origin}/THIRD_PARTY_NOTICES.md`);
+  assert(response.ok, "third-party notice is missing from the distribution");
+  const notice = await response.text();
+  assert(notice.includes("@use-gesture/vanilla") && notice.includes("10.3.1"),
+    "use-gesture notice is incomplete");
 }
 
 function findBrowser() {

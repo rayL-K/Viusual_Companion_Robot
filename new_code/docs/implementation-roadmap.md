@@ -81,12 +81,15 @@
 - listening/thinking/speaking/idle 与 generation/segmentIndex 同步；
 - 前端按 sessionId + generation + seq 拒绝旧代/乱序意图；
 - 浏览器原生 AvatarActionScheduler：真实 expression/motion、能力过滤、优先级/持续时间/冷却/抢占、代际门控与 RMS 最终混合顺序；
+- 面向用户的动作盘已移除；角色 expression/motion 由自主导演和浏览器能力表选择；
+- `@use-gesture/vanilla`、model3 HitArea、舞台视觉左右语义、tap/press/stroke、接触反馈和本地 InteractionDirector 已进入实现与单元测试阶段；
 - 1440×900、320×568、390×844、768×1024、1024×768、844×390 Chromium 模型加载与无溢出验证。
 
 待完成：
 
 - viseme、语义重音与动作时间轴；
-- 自动生成/校验 AvatarCapabilityManifest、全资产视觉回归和开发动作抽屉；
+- 自动生成/校验 AvatarCapabilityManifest、HitArea 叠图与全资产视觉回归；开发调试能力必须默认隐藏，不能重新成为用户动作盘；
+- 真实手机的触控命中率、误触、无障碍、帧耗 P95 和反复挂载资源回收验收；
 - 更成熟的端侧情绪分类器替换当前可解释弱证据词典；
 - 真机摄像头、麦克风、方向切换、后台恢复和弱网矩阵；
 - 视觉回归/E2E 自动化，不只依赖静态截图。
@@ -97,6 +100,7 @@
 - 已完成：V2 Gateway/Cloudflare systemd 单元、环境模板、一键启动、健康等待与 V1 Tunnel 回滚；
 - 已完成：启动脚本加入显式激活锁，默认保护正在评审使用的 V1；
 - 当前约束：V2 仅做本机与自动化验证，不部署 ELF2；`robot.veyralux.org` 只运行 V1，`anima.veyralux.org` 只保留给 V2 且当前不接管 V1；
+- 当前约束：Strawberry Rabbit 模型、美术、纹理与动作的公网再分发授权尚未闭环；运行库许可不能替代模型作者许可；
 - 待完成：ELF2 上固定 ASR/TTS/VLM 模型与线程数；
 - 待完成：Cloudflare HTTPS/WSS 真实入口、鉴权和限流；
 
@@ -119,4 +123,5 @@
 4. 摄像头本地预览与 5 秒语义更新互不拖慢；
 5. PC 和至少两种移动端浏览器完成权限、旋转、重连和安全区测试；
 6. 密钥不进入仓库，公网入口有 TLS、鉴权、限流和回滚；
-7. 长时间运行无持续内存增长、过热降频导致的不可接受退化或 OOM。
+7. 长时间运行无持续内存增长、过热降频导致的不可接受退化或 OOM；
+8. 公开制品中的 Live2D 模型资源具有可审计且覆盖 Web 托管/再分发用途的授权证据。

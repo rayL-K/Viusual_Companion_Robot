@@ -49,6 +49,7 @@ type ActionOrder = {
 const EXPRESSION_ALIASES: Readonly<Record<string, string | undefined>> = {
   soft: undefined,
   attentive: "question",
+  thoughtful: "question",
   warm: "blush",
   delighted: "heart",
   concerned: "anxious",
@@ -57,6 +58,7 @@ const EXPRESSION_ALIASES: Readonly<Record<string, string | undefined>> = {
 const MOTION_ALIASES: Readonly<Record<string, string | undefined>> = {
   idle: "scene1",
   listen: "governor",
+  ponder: "scene1",
   talk: "captain",
   excited: "admiral",
   comfort: "governor",

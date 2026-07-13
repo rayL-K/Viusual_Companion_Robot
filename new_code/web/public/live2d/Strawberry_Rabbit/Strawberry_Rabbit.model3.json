@@ -61,5 +61,18 @@
         "ParamEyeROpen"
       ]
     }
+  ],
+  "HitAreas": [
+    { "Id": "ArtMesh564", "Name": "Face" },
+    { "Id": "ArtMesh264", "Name": "EarVisualLeft" },
+    { "Id": "ArtMesh268", "Name": "EarVisualRight" },
+    { "Id": "ArtMesh541", "Name": "HandVisualLeft" },
+    { "Id": "ArtMesh439", "Name": "HandVisualRight" },
+    { "Id": "ArtMesh427", "Name": "ArmVisualLeft" },
+    { "Id": "ArtMesh432", "Name": "ArmVisualRight" },
+    { "Id": "ArtMesh361", "Name": "Torso" },
+    { "Id": "ArtMesh349", "Name": "Skirt" },
+    { "Id": "ArtMesh515", "Name": "LegVisualLeft" },
+    { "Id": "ArtMesh543", "Name": "LegVisualRight" }
   ]
 }

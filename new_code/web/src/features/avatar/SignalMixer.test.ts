@@ -75,4 +75,30 @@ describe("SignalMixer", () => {
     expect(vivid.eyeOpen).toBeGreaterThan(calm.eyeOpen);
     expect(vivid.smile).toBeGreaterThan(calm.smile);
   });
+
+  it("renders thoughtful ponder as a distinct subdued thinking pose", () => {
+    const neutral = new SignalMixer().update({
+      elapsedMs: 700,
+      deltaMs: 500,
+      intent: neutralIntent,
+      audioRms: 0,
+      gaze: { x: 0, y: 0 },
+    });
+    const thinking = new SignalMixer().update({
+      elapsedMs: 700,
+      deltaMs: 500,
+      intent: {
+        ...neutralIntent,
+        phase: "thinking",
+        expression: "thoughtful",
+        motion: "ponder",
+      },
+      audioRms: 0,
+      gaze: { x: 0, y: 0 },
+    });
+
+    expect(thinking.smile).toBeLessThan(neutral.smile);
+    expect(thinking.eyeOpen).toBeLessThan(neutral.eyeOpen);
+    expect(thinking.headY).toBeGreaterThan(neutral.headY);
+  });
 });

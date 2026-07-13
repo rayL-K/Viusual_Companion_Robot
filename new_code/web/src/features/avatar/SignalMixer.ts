@@ -1,3 +1,5 @@
+import type { AvatarReflexFrame } from "./interaction/types";
+
 export type AffectFrame = {
   valence: number;
   arousal: number;
@@ -37,6 +39,7 @@ export type SignalMixerInput = {
   intent: AvatarRenderIntent;
   audioRms: number;
   gaze: { x: number; y: number };
+  reflex?: AvatarReflexFrame;
 };
 
 type MotionProfile = {
@@ -50,6 +53,7 @@ const DEFAULT_MOTION: MotionProfile = { periodMs: 4_200, headX: 0.55, headY: 0.4
 const MOTION_PROFILES: Readonly<Record<string, MotionProfile>> = {
   idle: DEFAULT_MOTION,
   listen: { periodMs: 2_800, headX: 0.45, headY: 1.15, bodyX: 0.65 },
+  ponder: { periodMs: 3_200, headX: 0.35, headY: 1.05, bodyX: 0.45 },
   talk: { periodMs: 1_800, headX: 1.35, headY: 0.8, bodyX: 1.1 },
   excited: { periodMs: 1_050, headX: 2.7, headY: 1.9, bodyX: 2.1 },
   comfort: { periodMs: 3_600, headX: 0.8, headY: 0.55, bodyX: 1.4 },
@@ -59,6 +63,7 @@ const DEFAULT_EXPRESSION = { smile: 0, eyeOpen: 0 };
 const EXPRESSION_BIASES: Readonly<Record<string, { smile: number; eyeOpen: number }>> = {
   soft: DEFAULT_EXPRESSION,
   attentive: { smile: 0.02, eyeOpen: 0.06 },
+  thoughtful: { smile: -0.05, eyeOpen: -0.04 },
   warm: { smile: 0.06, eyeOpen: 0.02 },
   delighted: { smile: 0.13, eyeOpen: 0.08 },
   concerned: { smile: -0.16, eyeOpen: -0.05 },
@@ -85,6 +90,13 @@ export class SignalMixer {
 
   update(input: SignalMixerInput): AvatarFrame {
     const { elapsedMs, deltaMs, intent, audioRms, gaze } = input;
+    const reflex = input.reflex ?? {
+      headXOffset: 0,
+      headYOffset: 0,
+      bodyXOffset: 0,
+      smileOffset: 0,
+      eyeOpenOffset: 0,
+    };
     const { affect } = intent;
     const motion = MOTION_PROFILES[intent.motion.toLowerCase()] ?? DEFAULT_MOTION;
     const expression = EXPRESSION_BIASES[intent.expression.toLowerCase()] ?? DEFAULT_EXPRESSION;
@@ -100,20 +112,29 @@ export class SignalMixer {
     const microY = Math.sin(elapsedMs / 4_210 + 0.7) * (0.55 + tension * 0.35);
     const motionX = Math.sin(motionPhase) * motion.headX * tension;
     const motionY = Math.sin(motionPhase * 0.58 + 0.8) * motion.headY * tension;
-    const targetHeadX = clamp(gaze.x * 24 * gazeWeight + microX + motionX, -28, 28);
+    const targetHeadX = clamp(gaze.x * 24 * gazeWeight + microX + motionX + reflex.headXOffset, -28, 28);
     const targetHeadY = clamp(
-      gaze.y * 15 * gazeWeight + microY + motionY + affect.dominance * 1.5,
+      gaze.y * 15 * gazeWeight + microY + motionY + affect.dominance * 1.5 + reflex.headYOffset,
       -18,
       18,
     );
     const targetBodyX = clamp(
-      targetHeadX * 0.1 + Math.sin(motionPhase * 0.72) * motion.bodyX * (0.35 + tension),
+      targetHeadX * 0.1 + Math.sin(motionPhase * 0.72) * motion.bodyX * (0.35 + tension)
+        + reflex.bodyXOffset,
       -10,
       10,
     );
     const emotionalSmile = (affect.valence + 1) / 2;
-    const targetSmile = clamp(intent.smile * 0.78 + emotionalSmile * 0.22 + expression.smile, 0, 1);
-    const targetEyeOpen = clamp(intent.eyeOpen + expression.eyeOpen + affect.arousal * 0.03, 0.45, 1);
+    const targetSmile = clamp(
+      intent.smile * 0.78 + emotionalSmile * 0.22 + expression.smile + reflex.smileOffset,
+      0,
+      1,
+    );
+    const targetEyeOpen = clamp(
+      intent.eyeOpen + expression.eyeOpen + affect.arousal * 0.03 + reflex.eyeOpenOffset,
+      0.45,
+      1,
+    );
     const breathPeriod = 1_350 - affect.arousal * 320 + tension * 90;
     const breath = 0.5 + Math.sin(elapsedMs / breathPeriod) * 0.5;
     const postureResponseMs = 260 - tension * 115;

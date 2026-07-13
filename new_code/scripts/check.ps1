@@ -38,6 +38,9 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Web checks failed." }
     npm run build
     if ($LASTEXITCODE -ne 0) { throw "Web build failed." }
+    if (-not (Test-Path -LiteralPath (Join-Path $PWD "dist\THIRD_PARTY_NOTICES.md"))) {
+        throw "Third-party notices were not copied into the web distribution."
+    }
     if ($WithE2E) {
         npm run e2e
         if ($LASTEXITCODE -ne 0) { throw "Local browser E2E failed." }
