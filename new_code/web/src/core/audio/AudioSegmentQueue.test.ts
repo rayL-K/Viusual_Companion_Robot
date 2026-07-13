@@ -1,8 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AudioSegmentQueue, type PlayableAudio } from "./AudioSegmentQueue";
 
 describe("AudioSegmentQueue", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
   it("does not reveal text before audio reports actual playback", async () => {
     let releasePlayback!: () => void;
     const playbackStarted = new Promise<void>((resolve) => { releasePlayback = resolve; });
@@ -61,5 +63,19 @@ describe("AudioSegmentQueue", () => {
     releaseFirst();
     await Promise.resolve();
     expect(started).not.toContain(2);
+  });
+
+  it("returns a structured error for an unsupported browser audio format", async () => {
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal("URL", { createObjectURL: () => "blob:test", revokeObjectURL });
+    vi.stubGlobal("Audio", class {
+      preload = "";
+      canPlayType(): string { return ""; }
+    });
+    const queue = new AudioSegmentQueue();
+    await expect(
+      queue.enqueue(new ArrayBuffer(2), "audio/not-real", () => undefined),
+    ).rejects.toMatchObject({ code: "unsupported-audio-format" });
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:test");
   });
 });

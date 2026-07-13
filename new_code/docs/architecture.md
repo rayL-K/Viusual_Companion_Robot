@@ -47,6 +47,22 @@ flowchart LR
 
 完整 Perception Hub、生产环境切换和长时间服务验收仍属于后续阶段；Cubism 真实模型驱动与 V2 systemd/Cloudflare 部署骨架已经进入代码。
 
+### 2.1 模态 Port/API 边界
+
+V2 不以“换模型时改编排代码”为扩展方式。每个模态只有一个稳定核心契约，具体本地/云端供应商由组合根注入：
+
+| 模态/边界 | 稳定契约 | 当前实现 | 可替换位置 |
+| --- | --- | --- | --- |
+| LLM | `StreamingLlm.stream_reply(messages)` | DeepSeek SSE，thinking disabled | 新增本地/云端 adapter 后在 `gateway/__main__.py` 组合，不改 TurnService |
+| TTS | `SpeechSynthesizer.synthesize(SpeechSynthesisRequest)` | sherpa-onnx Kokoro/Matcha/VITS；显式 `voice_id` | 本地 sidecar 或云 TTS adapter；Vox/SoulX 只能用户主动选择 |
+| ASR | `StreamingAsrFactory/Session` | sherpa-onnx streaming | 浏览器/云 ASR adapter 仍须输出相同 partial/final 契约 |
+| 语义视觉 | `VisionAnalyzer.analyze(VisualFrame)` | 板内 HTTP `/analyze` adapter | RKNN/VLM 进程或云视觉 adapter；必须遵守数据出境策略 |
+| 摄像头/麦克风传输 | VSR2 binary kinds 1/2 | WebSocket PCM16/JPEG | WebRTC/WebTransport 仍须保留 sequence、timestamp、generation |
+| 角色表现 | `avatar.intent` + 浏览器 capability 层 | SignalMixer + AvatarActionScheduler | 替换 Live2D/3D 渲染器时不暴露模型资产名到服务端 |
+| 个性化 | `AnimaProfileRepository` + settings events | 每 User/Anima SQLite + `Anima.md` | 远端配置库 adapter 必须保持 owner scope 与 revision |
+
+记忆/RAG 当前仍是进程内 `MemoryStore/HybridRetriever` 组合，不属于感知模态，但同样受 User/Anima 物理分库约束。未来拆进独立服务时先抽 Repository Port，不让远端路径或租户 ID 由客户端自由指定。
+
 ## 3. 当前可运行纵向链路
 
 ```mermaid
@@ -155,6 +171,8 @@ Gateway 已把语义结果发布到 `LatestValue[VisualSnapshot]` 和前端 `per
 当前已实现：
 
 - SQLite WAL 作为单一事实源；
+- 匿名 session hint 派生稳定但不可作为认证的 UserId；每个 User/Anima 物理分库、路径使用哈希 key，程序目录和 `VEYRASOUL_DATA_ROOT` 分离；
+- 每个 Anima 的 `Anima.md`、回复上限/延迟/音色与 revision 持久化；旧共享库只按同 session 幂等迁移 turns，不猜测全局 facts 的所有者；
 - FTS5 trigram 词法候选；
 - 可选向量候选及 RRF/重要度/时间融合；
 - 同一 `subject + predicate` 的 revision 历史和单一 active 值；
@@ -163,13 +181,15 @@ Gateway 已把语义结果发布到 `LatestValue[VisualSnapshot]` 和前端 `per
 
 已实现 `MemoryCurator`：按 explicit/document/conversation/inference/vision 来源可靠度折算有效置信度；相同事实规范化去重并强化；弱来源冲突只写 `fact_evidence`，不覆盖可靠记忆；明确用户纠正或更强证据生成可追溯 revision。提示元数据中的来源最多保留 16 项，完整 provenance 留在证据表。
 
-尚未实现：本地 embedding 模型适配器、文档切分/导入管线、LLM/端侧事实抽取器、自动情节摘要与长期 evidence 压缩。
+尚未实现：可信账号认证/Auth Resolver、匿名身份升级、本地 embedding 模型适配器、文档切分/导入管线、LLM/端侧事实抽取器、自动情节摘要与长期 evidence 压缩。详见 [`user-data-isolation.md`](user-data-isolation.md)。
 
 ## 8. Live2D“生命感”系统
 
 `Live2DStageController` 已使用本地 Cubism/Pixi runtime 加载真实 Strawberry_Rabbit 模型；桌面使用 4096 纹理，粗指针、窄屏、低内存或受限纹理设备使用 1024 纹理。`SignalMixer` 在 60 FPS ticker 中合成呼吸、眨眼、微头动、平滑注视、情感到眼睛/微笑的连续映射。播放器从实际 WAV PCM 生成 20 ms RMS 包络，并按 `audio.currentTime` 驱动嘴形；加载失败保留轻量回退角色。
 
 后端会把明确用户情感自述与新鲜面部情绪作为弱证据，更新连续 valence/arousal/dominance/affinity/trust，并按真实单调时钟衰减。`AvatarDirector` 在 listening/thinking/speaking/idle 阶段生成渲染中立意图；`avatar.intent` 绑定 session/turn/generation/segmentIndex，前端再次按 sessionId + generation + seq 拒绝旧代与乱序事件。实际 WAV RMS 在口型混合中高于合成 speaking 波形。
+
+浏览器原生 `AvatarActionScheduler` 已在 capability allowlist 内调用 Strawberry Rabbit 的真实 expression/motion API，按优先级、持续时间、冷却和抢占管理离散动作，并与 generation/seq 同生命周期。连续 SignalMixer 在 Live2D `beforeModelUpdate` 阶段于 motion/expression 后写入，使 RMS 口型保持最终所有权。静态能力表已与当前 model3 资源核对；自动 manifest 生成、全资产视觉回归和目标手机帧耗仍待完成。
 
 目标实现包括：
 

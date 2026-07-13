@@ -7,7 +7,12 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from veyrasoul.gateway import AppServices, create_app
-from veyrasoul.orchestration.ports import AsrUpdate, AsrUpdateHandler
+from veyrasoul.identity import AnimaId, SessionIdentity, UserId
+from veyrasoul.orchestration.ports import (
+    AsrUpdate,
+    AsrUpdateHandler,
+    SpeechSynthesisRequest,
+)
 from veyrasoul.domain.perception import VisualSnapshot
 from veyrasoul.perception import VisualFrame
 from veyrasoul.transport import BinaryKind, build_binary_frame, parse_binary_frame
@@ -21,8 +26,12 @@ class FakeLlm:
 
 
 class FakeTts:
-    async def synthesize(self, text: str) -> tuple[bytes, str]:
-        return b"RIFF" + text.encode("utf-8"), "audio/wav"
+    def __init__(self) -> None:
+        self.requests: list[SpeechSynthesisRequest] = []
+
+    async def synthesize(self, request: SpeechSynthesisRequest) -> tuple[bytes, str]:
+        self.requests.append(request)
+        return b"RIFF" + request.text.encode("utf-8"), "audio/wav"
 
 
 class CapturingLlm(FakeLlm):
@@ -45,6 +54,11 @@ class FakeVision:
         )
 
 
+class FailingVision:
+    async def analyze(self, frame: VisualFrame) -> VisualSnapshot:
+        raise RuntimeError(f"private path leaked: C:/users/test/{frame.sequence}")
+
+
 class InterruptibleLlm:
     async def stream_reply(self, messages: list[dict[str, str]]):
         prompt = messages[-1]["content"]
@@ -53,6 +67,15 @@ class InterruptibleLlm:
             yield "已经过期的回复。"
         else:
             yield "新的回复。"
+
+
+class ProfileAwareLlm:
+    def __init__(self) -> None:
+        self.messages: list[dict[str, str]] = []
+
+    async def stream_reply(self, messages: list[dict[str, str]]):
+        self.messages = messages
+        yield "1234567890。"
 
 
 class FakeAsrSession:
@@ -99,6 +122,19 @@ class FakeAsrFactory:
         session = FakeAsrSession(self.transcripts.copy())
         self.sessions.append(session)
         return session
+
+
+def resolve_client_asserted_identity(
+    raw_user_id: object,
+    raw_anima_id: object,
+    _session_id: str,
+) -> SessionIdentity:
+    return SessionIdentity(
+        user_id=UserId.parse(raw_user_id),
+        anima_id=AnimaId.default() if raw_anima_id is None else AnimaId.parse(raw_anima_id),
+        anonymous=False,
+        assurance="client_asserted",
+    )
 
 
 def make_app(memory_path: Path):
@@ -206,7 +242,14 @@ def test_realtime_turn_sends_audio_before_matching_text(tmp_path) -> None:
         assert completed["payload"]["segments"] == 2
         assert_avatar_intent(websocket.receive_json(), "idle", generation=phase["generation"])
 
-    turns = app.state.registry.memory.recent_turns("test-user")
+    from veyrasoul.identity import AnimaId, UserId
+    from veyrasoul.memory import MemoryStore
+
+    turns = MemoryStore(
+        app.state.registry.layout.state_database(
+            UserId.anonymous_for("test-user"), AnimaId.default()
+        )
+    ).recent_turns("test-user")
     assert turns[-1]["assistant_text"] == "你好。我记得你喜欢乌龙茶。"
 
 
@@ -255,6 +298,31 @@ def test_visual_semantics_are_published_and_injected_into_every_turn(tmp_path) -
     assert "视觉：一名戴眼镜的青年" in llm.messages[-1]["content"]
 
 
+def test_visual_failure_returns_stable_error_without_internal_details(tmp_path) -> None:
+    app = create_app(
+        AppServices(
+            memory_path=tmp_path / "memory.db",
+            llm=FakeLlm(),
+            tts=FakeTts(),
+            vision=FailingVision(),
+            stable_system_prompt="你是草莓兔兔。",
+        )
+    )
+    jpeg = b"\xff\xd8camera-frame\xff\xd9"
+    with TestClient(app).websocket_connect("/v2/realtime?session=visual-error") as websocket:
+        websocket.receive_json()
+        websocket.send_bytes(
+            build_binary_frame(BinaryKind.JPEG, 9, int(time.time() * 1000), jpeg)
+        )
+        error = websocket.receive_json()
+    assert error["type"] == "perception.error"
+    assert error["payload"] == {
+        "code": "perception_failed",
+        "message": "视觉语义分析暂时不可用",
+    }
+    assert "private path" not in str(error)
+
+
 def test_new_turn_cancels_slow_previous_generation(tmp_path) -> None:
     app = create_app(
         AppServices(
@@ -292,7 +360,14 @@ def test_new_turn_cancels_slow_previous_generation(tmp_path) -> None:
             websocket.receive_json(), "idle", turn_id="second", generation=second_phase["generation"]
         )
 
-    turns = app.state.registry.memory.recent_turns("interrupt-user")
+    from veyrasoul.identity import AnimaId, UserId
+    from veyrasoul.memory import MemoryStore
+
+    turns = MemoryStore(
+        app.state.registry.layout.state_database(
+            UserId.anonymous_for("interrupt-user"), AnimaId.default()
+        )
+    ).recent_turns("interrupt-user")
     assert len(turns) == 1
     assert turns[0]["user_text"] == "第二问"
 
@@ -344,7 +419,14 @@ def test_pcm_asr_updates_start_turn_and_cancel_previous_generation(tmp_path) -> 
         assert_avatar_intent(websocket.receive_json(), "idle", generation=second_phase["generation"])
 
     assert len(asr.sessions) == 1
-    turns = app.state.registry.memory.recent_turns("voice-user")
+    from veyrasoul.identity import AnimaId, UserId
+    from veyrasoul.memory import MemoryStore
+
+    turns = MemoryStore(
+        app.state.registry.layout.state_database(
+            UserId.anonymous_for("voice-user"), AnimaId.default()
+        )
+    ).recent_turns("voice-user")
     assert len(turns) == 1
     assert turns[0]["user_text"] == "第二问"
 
@@ -376,3 +458,209 @@ def test_explicit_cancel_emits_generation_bound_idle_intent(tmp_path) -> None:
             turn_id="cancel-me",
             generation=cancelled["generation"],
         )
+
+
+def test_settings_events_persist_profile_and_constrain_next_turn(tmp_path) -> None:
+    llm = ProfileAwareLlm()
+    tts = FakeTts()
+    app = create_app(
+        AppServices(
+            memory_path=tmp_path / "legacy.db",
+            data_root=tmp_path / "accounts",
+            llm=llm,
+            tts=tts,
+            stable_system_prompt="默认 Anima 人设",
+            identity_resolver=resolve_client_asserted_identity,
+        )
+    )
+    url = "/v2/realtime?session=profile-session&user=alice&anima=rabbit"
+    with TestClient(app).websocket_connect(url) as websocket:
+        ready = websocket.receive_json()
+        assert ready["payload"]["protocol"] == 2
+        assert ready["payload"]["userId"] == "alice"
+        assert ready["payload"]["animaId"] == "rabbit"
+        assert ready["payload"]["anonymous"] is False
+        assert ready["payload"]["identityAssurance"] == "client_asserted"
+        websocket.send_json({"v": 2, "type": "settings.get", "payload": {}})
+        initial = websocket.receive_json()
+        assert initial["type"] == "settings.current"
+        assert initial["payload"]["personaMarkdown"] == "默认 Anima 人设"
+
+        websocket.send_json(
+            {
+                "v": 2,
+                "type": "settings.update",
+                "payload": {
+                    "expectedRevision": 1,
+                    "personaMarkdown": "你是只对 Alice 温柔的月兔。",
+                    "maxReplyChars": 8,
+                    "replyDelayMs": 20,
+                    "voiceId": "sid:3",
+                },
+            }
+        )
+        changed = websocket.receive_json()
+        assert changed["type"] == "settings.current"
+        assert changed["payload"]["updated"] is True
+        assert changed["payload"]["revision"] == 2
+
+        started = time.monotonic()
+        websocket.send_json(
+            {"v": 2, "type": "turn.user_text", "payload": {"text": "介绍一下自己"}}
+        )
+        phase = websocket.receive_json()
+        assert phase["type"] == "reply.phase"
+        assert_avatar_intent(websocket.receive_json(), "thinking", generation=phase["generation"])
+        assert_avatar_intent(websocket.receive_json(), "speaking", generation=phase["generation"])
+        parse_binary_frame(websocket.receive()["bytes"])
+        segment = websocket.receive_json()
+        assert segment["payload"]["text"] == "12345678"
+        assert time.monotonic() - started >= 0.015
+        completed = websocket.receive_json()
+        assert completed["payload"]["text"] == "12345678"
+        assert_avatar_intent(websocket.receive_json(), "idle", generation=phase["generation"])
+
+    assert tts.requests[-1] == SpeechSynthesisRequest(text="12345678", voice_id="sid:3")
+    assert any("只对 Alice 温柔" in message["content"] for message in llm.messages)
+    assert any("最多 8 个字符" in message["content"] for message in llm.messages)
+
+    with TestClient(app).websocket_connect(url) as websocket:
+        websocket.receive_json()
+        websocket.send_json({"v": 2, "type": "settings.get", "payload": {}})
+        restored = websocket.receive_json()
+        assert restored["payload"]["voiceId"] == "sid:3"
+        assert restored["payload"]["revision"] == 2
+
+
+def test_invalid_identity_and_settings_return_actionable_protocol_errors(tmp_path) -> None:
+    client = TestClient(make_app(tmp_path / "memory.db"))
+    with client.websocket_connect("/v2/realtime?session=../../shared") as websocket:
+        error = websocket.receive_json()
+        assert error["payload"]["code"] == "invalid_session"
+
+    with client.websocket_connect("/v2/realtime?session=x&user=../../admin") as websocket:
+        error = websocket.receive_json()
+        assert error["type"] == "error"
+        assert error["payload"]["code"] == "invalid_identity"
+
+    with client.websocket_connect("/v2/realtime?session=x&user=alice") as websocket:
+        error = websocket.receive_json()
+        assert error["payload"]["code"] == "invalid_identity"
+        assert "IdentityResolver" in error["payload"]["message"]
+
+    with client.websocket_connect("/v2/realtime?session=x") as websocket:
+        websocket.receive_json()
+        websocket.send_json(
+            {
+                "v": 2,
+                "type": "settings.update",
+                "payload": {"expectedRevision": 1, "maxReplyChars": 7},
+            }
+        )
+        error = websocket.receive_json()
+        assert error["type"] == "error"
+        assert error["payload"]["code"] == "invalid_settings"
+
+
+def test_user_databases_and_conversation_history_are_isolated(tmp_path) -> None:
+    memory_path = tmp_path / "legacy.db"
+    app = create_app(
+        AppServices(
+            memory_path=memory_path,
+            llm=FakeLlm(),
+            tts=FakeTts(),
+            stable_system_prompt="你是草莓兔兔，回复自然、温暖且简洁。",
+            identity_resolver=resolve_client_asserted_identity,
+        )
+    )
+    client = TestClient(app)
+    for user in ("alice", "bob"):
+        with client.websocket_connect(
+            f"/v2/realtime?session=shared-session&user={user}"
+        ) as websocket:
+            websocket.receive_json()
+            websocket.send_json(
+                {
+                    "v": 2,
+                    "type": "turn.user_text",
+                    "payload": {"text": f"来自 {user} 的私有对话"},
+                }
+            )
+            phase = websocket.receive_json()
+            assert_avatar_intent(websocket.receive_json(), "thinking", generation=phase["generation"])
+            for _ in range(2):
+                assert_avatar_intent(
+                    websocket.receive_json(), "speaking", generation=phase["generation"]
+                )
+                parse_binary_frame(websocket.receive()["bytes"])
+                websocket.receive_json()
+            websocket.receive_json()
+            assert_avatar_intent(websocket.receive_json(), "idle", generation=phase["generation"])
+
+    layout = app.state.registry.layout
+    from veyrasoul.identity import AnimaId, UserId
+    from veyrasoul.memory import MemoryStore
+
+    alice_store = MemoryStore(layout.state_database(UserId.parse("alice"), AnimaId.default()))
+    bob_store = MemoryStore(layout.state_database(UserId.parse("bob"), AnimaId.default()))
+    assert alice_store.db_path != bob_store.db_path
+    assert alice_store.recent_turns("shared-session")[0]["user_text"] == (
+        "来自 alice 的私有对话"
+    )
+    assert bob_store.recent_turns("shared-session")[0]["user_text"] == (
+        "来自 bob 的私有对话"
+    )
+
+
+def test_anonymous_default_session_keeps_legacy_memory_database(tmp_path) -> None:
+    from veyrasoul.memory import MemoryStore
+
+    memory_path = tmp_path / "legacy.db"
+    MemoryStore(memory_path).add_turn("old-session", "old-turn", "以前的问题", "以前的回答")
+    llm = CapturingLlm()
+    app = create_app(
+        AppServices(
+            memory_path=memory_path,
+            llm=llm,
+            tts=FakeTts(),
+            stable_system_prompt="默认人设",
+        )
+    )
+    with TestClient(app).websocket_connect("/v2/realtime?session=old-session") as websocket:
+        ready = websocket.receive_json()
+        assert ready["payload"]["anonymous"] is True
+        assert ready["payload"]["identityAssurance"] == "anonymous_session_hint"
+        websocket.send_json(
+            {"v": 2, "type": "turn.user_text", "payload": {"text": "现在呢？"}}
+        )
+        phase = websocket.receive_json()
+        assert_avatar_intent(websocket.receive_json(), "thinking", generation=phase["generation"])
+        assert_avatar_intent(websocket.receive_json(), "speaking", generation=phase["generation"])
+        parse_binary_frame(websocket.receive()["bytes"])
+        websocket.receive_json()
+        websocket.receive_json()
+        assert_avatar_intent(websocket.receive_json(), "idle", generation=phase["generation"])
+
+    assert any(message["content"] == "以前的问题" for message in llm.messages)
+    assert app.state.registry.memory.db_path == memory_path
+
+
+def test_distinct_anonymous_sessions_use_distinct_owners_and_databases(tmp_path) -> None:
+    app = make_app(tmp_path / "legacy.db")
+    client = TestClient(app)
+    owners: list[str] = []
+    for session in ("browser-a", "browser-b"):
+        with client.websocket_connect(f"/v2/realtime?session={session}") as websocket:
+            ready = websocket.receive_json()
+            owners.append(ready["payload"]["userId"])
+            websocket.send_json({"v": 2, "type": "settings.get", "payload": {}})
+            assert websocket.receive_json()["type"] == "settings.current"
+
+    assert owners[0] != owners[1]
+    from veyrasoul.identity import AnimaId, UserId
+
+    layout = app.state.registry.layout
+    first = layout.state_database(UserId.parse(owners[0]), AnimaId.default())
+    second = layout.state_database(UserId.parse(owners[1]), AnimaId.default())
+    assert first != second
+    assert first.is_file() and second.is_file()

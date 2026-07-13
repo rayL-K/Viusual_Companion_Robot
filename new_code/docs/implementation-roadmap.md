@@ -18,12 +18,16 @@
 - Memory Curator、来源可靠度、弱冲突保护、revision 与 provenance；
 - 连续 AffectState、真实时间衰减和 AvatarIntent/SignalMixer 闭环；
 - 单元测试与 2,000 条记忆基准脚本。
+- 匿名 session 派生 UserId、每 User/Anima 哈希目录和物理 SQLite 分库；
+- `Anima.md`、回复上限/延迟/音色 revision 与前后端设置闭环；
+- 旧共享库只按相同 session 安全迁移 turns，不自动归属全局 facts。
 
 待完成：
 
 - 本地 embedding 模型与文档 RAG 导入；
 - 事实抽取器、自动情节摘要和长期 evidence 压缩；
 - 跨进程/重启后的 session actor 恢复策略。
+- Auth Resolver/token、匿名数据升级/导出/删除与加密备份恢复实现。
 
 ## Phase 2：实时纵向链路 — 进行中
 
@@ -76,11 +80,13 @@
 - 用户/视觉弱情感证据、真实时间衰减、renderer-neutral AvatarIntent；
 - listening/thinking/speaking/idle 与 generation/segmentIndex 同步；
 - 前端按 sessionId + generation + seq 拒绝旧代/乱序意图；
-- 桌面、移动竖屏和移动横屏 Chromium 模型加载与无溢出验证。
+- 浏览器原生 AvatarActionScheduler：真实 expression/motion、能力过滤、优先级/持续时间/冷却/抢占、代际门控与 RMS 最终混合顺序；
+- 1440×900、320×568、390×844、768×1024、1024×768、844×390 Chromium 模型加载与无溢出验证。
 
 待完成：
 
 - viseme、语义重音与动作时间轴；
+- 自动生成/校验 AvatarCapabilityManifest、全资产视觉回归和开发动作抽屉；
 - 更成熟的端侧情绪分类器替换当前可解释弱证据词典；
 - 真机摄像头、麦克风、方向切换、后台恢复和弱网矩阵；
 - 视觉回归/E2E 自动化，不只依赖静态截图。
@@ -90,18 +96,20 @@
 - 已完成：Gateway 同源托管 `web/dist`；
 - 已完成：V2 Gateway/Cloudflare systemd 单元、环境模板、一键启动、健康等待与 V1 Tunnel 回滚；
 - 已完成：启动脚本加入显式激活锁，默认保护正在评审使用的 V1；
-- 当前约束：V2 仅做本机与自动化验证，不部署 ELF2、不切换 `robot.veyralux.org`；
+- 当前约束：V2 仅做本机与自动化验证，不部署 ELF2、不切换评审主入口 `anima.veyralux.org`；`robot.veyralux.org` 继续作为 V1 兼容别名；
 - 待完成：ELF2 上固定 ASR/TTS/VLM 模型与线程数；
 - 待完成：Cloudflare HTTPS/WSS 真实入口、鉴权和限流；
 
 ## Phase 6：本机拟真验证 — 进行中
 
 - 已完成：真实 ASGI Gateway、WebSocket binary media、确定性 LLM/VLM/TTS 桩和 Chrome E2E；
-- 已完成：1440×900、390×844 与 844×390 横屏下真实 Live2D、fake camera/mic、音频播放后显字、视觉语义、按钮裁切与整页溢出检查；
+- 已完成：六种桌面/手机/平板横竖屏下真实 Live2D、fake camera/mic、音频播放后显字、视觉语义、设置面板、按钮裁切与整页溢出检查；
+- 已完成：慢回复被新一轮打断后，旧 generation 文字与声音不会复活；
+- 已完成：桌面浏览器强制关闭真实 WebSocket 后指数退避重建连接，并可继续对话；本次本机恢复约 0.8 秒，只是确定性基准，不代表公网 SLO；
 - 已完成：E2E 不接触 ELF2、不使用正式 Tunnel，保证 V1 评审链路不变；
-- 待完成：断线重连、连续打断、长会话、内存增长和弱网注入。
+- 待完成：丢包/高延迟/限带宽注入、连续多次重连、长会话和内存增长。
 - 断网、重连、打断、内存峰值、温度降频和 8 小时 soak；
-- 灰度切换 `robot.veyralux.org`，保留 V1 一键回滚。
+- 灰度切换 `anima.veyralux.org`，保留 `robot.veyralux.org` 兼容别名与 V1 一键回滚。
 
 ## 发布前硬门槛
 

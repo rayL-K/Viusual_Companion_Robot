@@ -10,12 +10,16 @@ import {
   connectionPhase,
   drawerOpen,
   replyPhase,
+  resetAvatarGenerationDomain,
   transcript,
   visualSummary,
 } from "../core/state/session";
 import { AvatarStage } from "../features/avatar/AvatarStage";
 import { CallControls } from "../features/call/CallControls";
 import { CameraPreview } from "../features/call/CameraPreview";
+import { AnimaSettingsPanel } from "../features/settings/AnimaSettingsPanel";
+
+type DrawerView = "overview" | "settings";
 
 export function App() {
   const [draft, setDraft] = useState("");
@@ -25,6 +29,7 @@ export function App() {
   const [microphoneEnabled, setMicrophoneEnabled] = useState(true);
   const [callSeconds, setCallSeconds] = useState(0);
   const [mediaError, setMediaError] = useState("");
+  const [drawerView, setDrawerView] = useState<DrawerView>("overview");
   const videoRef = useRef<HTMLVideoElement>(null);
   const callStartedAtRef = useRef(0);
   const client = useMemo(() => new RealtimeClient(realtimeUrl()), []);
@@ -32,6 +37,7 @@ export function App() {
 
   useEffect(() => {
     const removeHandler = client.onEvent((event) => {
+      if (event.type === "session.ready") resetAvatarGenerationDomain(event.sessionId);
       if (event.type === "reply.phase") replyPhase.value = parseReplyPhase(event.payload.phase);
       if (event.type === "reply.segment.ready") {
         const text = String(event.payload.text ?? "");
@@ -116,7 +122,7 @@ export function App() {
   };
 
   return (
-    <main class="shell">
+    <main class={`shell ${callActive ? "shell--in-call" : "shell--idle"}`}>
       <header class="topbar">
         <div class="brand">
           <span class="brand__mark">V</span>
@@ -127,60 +133,86 @@ export function App() {
           <span class={`connection connection--${connectionPhase.value}`}>
             <i />{connectionLabel(connectionPhase.value)}
           </span>
-          <button class="icon-button" type="button" onClick={() => (drawerOpen.value = true)} aria-label="打开控制台">⌁</button>
+          <button class="icon-button" type="button" onClick={() => { setDrawerView("overview"); drawerOpen.value = true; }} aria-label="打开控制台">
+            <span class="icon-button__dots" aria-hidden="true"><i /><i /><i /></span>
+          </button>
         </div>
       </header>
 
-      <AvatarStage phase={replyPhase} intent={avatarIntent} />
-      <CameraPreview videoRef={videoRef} visible={callActive} cameraEnabled={cameraEnabled} />
+      <div class="experience">
+        <section class="stage-region" aria-label="陪伴画面">
+          <AvatarStage phase={replyPhase} intent={avatarIntent} />
+          <CameraPreview videoRef={videoRef} visible={callActive} cameraEnabled={cameraEnabled} />
+        </section>
 
-      <section class="dialogue" aria-live="polite">
-        <div class="dialogue__identity"><span>草莓兔兔</span><small>与你同在</small></div>
-        <p>{assistantText.value}</p>
-      </section>
+        <section class="conversation-rail" aria-label="陪伴对话">
+          <section class="dialogue" aria-live="polite">
+            <div class="dialogue__identity"><span>草莓兔兔</span><small>与你同在</small></div>
+            <p>{assistantText.value}</p>
+          </section>
 
-      <section class={`composer ${callActive ? "composer--in-call" : "composer--pre-call"}`} aria-label="对话输入">
-        <button
-          class={`voice-button ${callActive && !microphoneEnabled ? "is-off" : ""}`}
-          type="button"
-          aria-label={callActive ? (microphoneEnabled ? "关闭麦克风" : "打开麦克风") : "开始语音通话"}
-          onClick={() => callActive ? toggleMicrophone() : void startCall()}
-        >{callActive && !microphoneEnabled ? "×" : "◉"}</button>
-        <label class="composer__field">
-          <span class="sr-only">输入想说的话</span>
-          <textarea
-            value={draft}
-            onInput={(event) => setDraft(event.currentTarget.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); submit(); }
-            }}
-            placeholder={transcript.value || "告诉我你正在想什么…"}
-            rows={1}
-          />
-        </label>
-        <button class="send-button" type="button" onClick={submit} disabled={!draft.trim()}>发送</button>
-      </section>
+          <div class="interaction-deck">
+            {mediaError && <p class="media-error" role="alert">{mediaError}</p>}
+            <section class={`composer ${callActive ? "composer--in-call" : "composer--pre-call"}`} aria-label="对话输入">
+              <button
+                class={`voice-button ${callActive && !microphoneEnabled ? "is-off" : ""}`}
+                type="button"
+                aria-label={callActive ? (microphoneEnabled ? "关闭麦克风" : "打开麦克风") : "开始语音通话"}
+                onClick={() => callActive ? toggleMicrophone() : void startCall()}
+              ><span aria-hidden="true">{callActive && !microphoneEnabled ? "×" : "◉"}</span></button>
+              <label class="composer__field">
+                <span class="sr-only">输入想说的话</span>
+                <textarea
+                  value={draft}
+                  onInput={(event) => setDraft(event.currentTarget.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); submit(); }
+                  }}
+                  placeholder={transcript.value || "告诉我你正在想什么…"}
+                  rows={1}
+                />
+              </label>
+              <button class="send-button" type="button" onClick={submit} disabled={!draft.trim()}>发送</button>
+            </section>
 
-      {callActive ? (
-        <CallControls
-          cameraEnabled={cameraEnabled}
-          microphoneEnabled={microphoneEnabled}
-          onToggleCamera={toggleCamera}
-          onToggleMicrophone={toggleMicrophone}
-          onEnd={endCall}
-        />
-      ) : (
-        <button class="start-call" type="button" onClick={() => void startCall()} disabled={callStarting}>
-          <span>◉</span><strong>{callStarting ? "正在建立通话…" : "开始陪伴通话"}</strong><small>打开摄像头与麦克风</small>
-        </button>
-      )}
-      {mediaError && <p class="media-error" role="alert">{mediaError}</p>}
+            <div class="call-actions">
+              {callActive ? (
+                <CallControls
+                  cameraEnabled={cameraEnabled}
+                  microphoneEnabled={microphoneEnabled}
+                  onToggleCamera={toggleCamera}
+                  onToggleMicrophone={toggleMicrophone}
+                  onEnd={endCall}
+                />
+              ) : (
+                <button class="start-call" type="button" onClick={() => void startCall()} disabled={callStarting}>
+                  <span aria-hidden="true">◉</span>
+                  <strong>{callStarting ? "正在建立通话…" : "开始陪伴通话"}</strong>
+                  <small>打开摄像头与麦克风</small>
+                </button>
+              )}
+            </div>
+          </div>
+        </section>
+      </div>
 
       <aside class={`drawer ${drawerOpen.value ? "drawer--open" : ""}`} aria-hidden={!drawerOpen.value}>
-        <div class="drawer__header"><div><small>CONTROL ROOM</small><h2>感知与连接</h2></div><button type="button" onClick={() => (drawerOpen.value = false)}>×</button></div>
-        <article class="sense-card"><span>视觉上下文</span><p>{visualSummary.value}</p></article>
-        <article class="sense-card"><span>隐私边界</span><p>摄像头、语音、记忆与 RAG 均在 ELF2 处理。</p></article>
-        <div class="drawer__controls"><button type="button">摄像头</button><button type="button">麦克风</button><button type="button">角色设置</button><button type="button">运行状态</button></div>
+        <div class="drawer__header"><div><small>CONTROL ROOM</small><h2>感知与连接</h2></div><button type="button" aria-label="关闭控制台" onClick={() => (drawerOpen.value = false)}>×</button></div>
+        <div class="drawer__body">
+          {drawerView === "settings" ? (
+            <AnimaSettingsPanel client={client} onBack={() => setDrawerView("overview")} />
+          ) : (
+            <>
+              <article class="sense-card"><span>视觉上下文</span><p>{visualSummary.value}</p></article>
+              <article class="sense-card"><span>数据边界</span><p>当前是匿名隔离空间；它提供数据分区，不等同于账号认证。V2 仍未部署。</p></article>
+              <div class="drawer__controls">
+                <button type="button" onClick={toggleCamera} disabled={!callActive}>{cameraEnabled ? "关闭摄像头" : "打开摄像头"}</button>
+                <button type="button" onClick={toggleMicrophone} disabled={!callActive}>{microphoneEnabled ? "关闭麦克风" : "打开麦克风"}</button>
+                <button type="button" onClick={() => setDrawerView("settings")}>角色设置</button>
+              </div>
+            </>
+          )}
+        </div>
       </aside>
       {drawerOpen.value && <button class="scrim" type="button" aria-label="关闭控制台" onClick={() => (drawerOpen.value = false)} />}
     </main>

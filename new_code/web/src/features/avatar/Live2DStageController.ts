@@ -1,4 +1,10 @@
 import { SignalMixer, type AvatarRenderIntent } from "./SignalMixer";
+import {
+  AvatarActionScheduler,
+  STRAWBERRY_RABBIT_CAPABILITIES,
+  type AvatarActionEnvelope,
+  type AvatarOverlayExecutor,
+} from "./AvatarActionScheduler";
 
 const DESKTOP_MODEL_URL = "/live2d/Strawberry_Rabbit/Strawberry_Rabbit.model3.json";
 const MOBILE_MODEL_URL = "/live2d/Strawberry_Rabbit/Strawberry_Rabbit.mobile-1024-r2.model3.json";
@@ -51,6 +57,18 @@ type CoreModel = {
   setParameterValueById: (id: string, value: number, weight?: number) => void;
 };
 
+type ExpressionManager = { resetExpression: () => void };
+type MotionManager = {
+  expressionManager?: ExpressionManager;
+  stopAllMotions: () => void;
+};
+type InternalModel = {
+  coreModel?: CoreModel;
+  motionManager?: MotionManager;
+  on?: (event: "beforeModelUpdate", callback: () => void) => void;
+  off?: (event: "beforeModelUpdate", callback: () => void) => void;
+};
+
 type Live2DModel = {
   anchor?: { set: (x: number, y?: number) => void };
   scale: { x: number; y: number; set: (value: number) => void };
@@ -59,7 +77,9 @@ type Live2DModel = {
   y: number;
   width: number;
   height: number;
-  internalModel?: { coreModel?: CoreModel };
+  internalModel?: InternalModel;
+  expression?: (name: string) => Promise<boolean>;
+  motion?: (group: string, index?: number, priority?: number) => Promise<boolean>;
   destroy?: () => void;
 };
 
@@ -92,12 +112,13 @@ export class Live2DStageController {
   private app: PixiApplication | null = null;
   private model: Live2DModel | null = null;
   private resizeObserver: ResizeObserver | null = null;
-  private intent: AvatarRenderIntent = INITIAL_RENDER_INTENT;
+  private intent: AvatarActionEnvelope = INITIAL_RENDER_INTENT;
+  private actionScheduler: AvatarActionScheduler | null = null;
   private gaze = { x: 0, y: 0 };
   private externalAudioRms = 0;
   private externalAudioAt = 0;
   private readonly mixer = new SignalMixer();
-  private readonly tick = () => this.updateFrame();
+  private readonly applyContinuousSignals = () => this.updateFrame();
   private readonly resize = () => this.fitModel();
   private readonly pointerMove = (event: PointerEvent) => this.updateGaze(event);
   private readonly pointerLeave = () => { this.gaze = { x: 0, y: 0 }; };
@@ -137,9 +158,14 @@ export class Live2DStageController {
         throw new Error("Live2D 舞台已在加载期间关闭");
       }
       this.model = model;
+      this.actionScheduler = new AvatarActionScheduler(
+        createOverlayExecutor(model),
+        STRAWBERRY_RABBIT_CAPABILITIES,
+      );
+      this.actionScheduler.submit(this.intent);
+      model.internalModel?.on?.("beforeModelUpdate", this.applyContinuousSignals);
       app.stage.addChild(model);
       this.fitModel();
-      app.ticker.add(this.tick);
       this.host.addEventListener("pointermove", this.pointerMove, { passive: true });
       this.host.addEventListener("pointerleave", this.pointerLeave, { passive: true });
       if (typeof ResizeObserver !== "undefined") {
@@ -155,7 +181,9 @@ export class Live2DStageController {
     }
   }
 
-  setIntent(intent: AvatarRenderIntent): void {
+  setIntent(intent: AvatarActionEnvelope): void {
+    const result = this.actionScheduler?.submit(intent);
+    if (result && !result.accepted) return;
     this.intent = intent;
   }
 
@@ -170,7 +198,9 @@ export class Live2DStageController {
     window.removeEventListener("resize", this.resize);
     this.host.removeEventListener("pointermove", this.pointerMove);
     this.host.removeEventListener("pointerleave", this.pointerLeave);
-    this.app?.ticker.remove(this.tick);
+    this.model?.internalModel?.off?.("beforeModelUpdate", this.applyContinuousSignals);
+    this.actionScheduler?.destroy();
+    this.actionScheduler = null;
     this.app?.destroy(false, { children: true, texture: true, baseTexture: true });
     this.app = null;
     this.model = null;
@@ -232,6 +262,15 @@ export class Live2DStageController {
       y: clamp(-((event.clientY - rect.top) / Math.max(rect.height, 1) * 2 - 1), -1, 1),
     };
   }
+}
+
+function createOverlayExecutor(model: Live2DModel): AvatarOverlayExecutor {
+  return {
+    setExpression: (name) => model.expression?.(name) ?? false,
+    resetExpression: () => model.internalModel?.motionManager?.expressionManager?.resetExpression(),
+    startMotion: (group, priority) => model.motion?.(group, undefined, priority) ?? false,
+    stopMotions: () => model.internalModel?.motionManager?.stopAllMotions(),
+  };
 }
 
 export function selectLive2DProfile(input: Live2DProfileInput, requestedResolution = 1): Live2DProfile {

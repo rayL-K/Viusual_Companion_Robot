@@ -145,6 +145,34 @@ class MemoryStore:
             ).fetchall()
         return [dict(row) for row in reversed(rows)]
 
+    def copy_session_to(self, target: "MemoryStore", session_id: str) -> int:
+        """Idempotently migrate one legacy session without exposing other users' rows."""
+
+        normalized = _required_text(session_id, "session_id", 100)
+        if self.db_path.resolve() == target.db_path.resolve():
+            return 0
+        with self.connection() as source:
+            rows = source.execute(
+                """
+                SELECT session_id, turn_id, user_text, assistant_text, created_at_ms
+                FROM turns WHERE session_id=? ORDER BY id
+                """,
+                (normalized,),
+            ).fetchall()
+        if not rows:
+            return 0
+        with target.connection(immediate=True) as destination:
+            before = destination.total_changes
+            destination.executemany(
+                """
+                INSERT OR IGNORE INTO turns(
+                    session_id, turn_id, user_text, assistant_text, created_at_ms
+                ) VALUES(?, ?, ?, ?, ?)
+                """,
+                [tuple(row) for row in rows],
+            )
+            return destination.total_changes - before
+
     def upsert_fact(
         self,
         *,

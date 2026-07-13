@@ -4,57 +4,35 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import time
 import uuid
-from collections import OrderedDict
-from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 
 from veyrasoul.affect import AffectState
-from veyrasoul.avatar import AvatarDirector, AvatarIntent, AvatarPhase
+from veyrasoul.avatar import AvatarIntent, AvatarPhase
 from veyrasoul.domain.perception import VisualSnapshot
-from veyrasoul.memory import HybridRetriever, MemoryStore
-from veyrasoul.orchestration.context import ContextAssembler
-from veyrasoul.orchestration.ports import (
-    AsrUpdate,
-    SpeechSynthesizer,
-    StreamingAsrFactory,
-    StreamingAsrSession,
-    StreamingLlm,
+from veyrasoul.identity import (
+    AnimaId,
+    InvalidIdentity,
+    SessionIdentity,
+    UserId,
+    validate_session_hint,
 )
-from veyrasoul.orchestration.session import SessionKernel
-from veyrasoul.orchestration.turn_service import TurnService
-from veyrasoul.perception import VisualSemanticScheduler, VisionAnalyzer
-from veyrasoul.runtime.latest_value import LatestValue
+from veyrasoul.orchestration.ports import AsrUpdate, StreamingAsrSession
+from veyrasoul.personalization import ProfileConflictError, ProfileValidationError
+from veyrasoul.perception import VisualSemanticScheduler
 from veyrasoul.transport import BinaryKind, build_binary_frame, parse_binary_frame
 
-
-@dataclass(frozen=True, slots=True)
-class AppServices:
-    memory_path: Path
-    llm: StreamingLlm
-    tts: SpeechSynthesizer
-    stable_system_prompt: str
-    asr: StreamingAsrFactory | None = None
-    vision: VisionAnalyzer | None = None
-    vision_refresh_seconds: float = 5.0
-    max_sessions: int = 8
-    startup: tuple[Callable[[], Awaitable[None]], ...] = ()
-    shutdown: tuple[Callable[[], Awaitable[None]], ...] = ()
-    web_dist: Path | None = None
+from .runtime import AppServices, RuntimeSession, SessionRegistry
 
 
-@dataclass(slots=True)
-class RuntimeSession:
-    kernel: SessionKernel
-    turn_service: TurnService
-    avatar_director: AvatarDirector
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,37 +45,6 @@ class CancelledTurn:
 class ListeningTurn:
     generation: int
     turn_id: str
-
-
-class SessionRegistry:
-    def __init__(self, services: AppServices) -> None:
-        self.services = services
-        self.memory = MemoryStore(services.memory_path)
-        self._sessions: OrderedDict[str, RuntimeSession] = OrderedDict()
-        self._lock = asyncio.Lock()
-
-    async def get(self, session_id: str) -> RuntimeSession:
-        async with self._lock:
-            existing = self._sessions.get(session_id)
-            if existing:
-                self._sessions.move_to_end(session_id)
-                return existing
-            visual = LatestValue()
-            retriever = HybridRetriever(self.memory)
-            context = ContextAssembler(visual, retriever)
-            runtime = RuntimeSession(
-                kernel=SessionKernel(session_id, self.memory, context),
-                turn_service=TurnService(
-                    self.services.llm,
-                    self.services.tts,
-                    self.services.stable_system_prompt,
-                ),
-                avatar_director=AvatarDirector(),
-            )
-            self._sessions[session_id] = runtime
-            while len(self._sessions) > max(1, self.services.max_sessions):
-                self._sessions.popitem(last=False)
-            return runtime
 
 
 class ConnectionWriter:
@@ -264,9 +211,35 @@ def create_app(services: AppServices) -> FastAPI:
     @app.websocket("/v2/realtime")
     async def realtime(websocket: WebSocket) -> None:
         await websocket.accept()
-        session_id = _clean_identifier(websocket.query_params.get("session")) or uuid.uuid4().hex
-        runtime = await registry.get(session_id)
+        raw_session = websocket.query_params.get("session")
+        try:
+            session_id = (
+                validate_session_hint(raw_session) if raw_session is not None else uuid.uuid4().hex
+            )
+        except InvalidIdentity as exc:
+            writer = ConnectionWriter(websocket, uuid.uuid4().hex)
+            await writer.event(
+                "error",
+                payload={"code": "invalid_session", "message": str(exc)},
+            )
+            await websocket.close(code=1008, reason="invalid session")
+            return
         writer = ConnectionWriter(websocket, session_id)
+        try:
+            resolver = services.identity_resolver or _parse_session_identity
+            identity = resolver(
+                websocket.query_params.get("user"),
+                websocket.query_params.get("anima"),
+                session_id,
+            )
+        except InvalidIdentity as exc:
+            await writer.event(
+                "error",
+                payload={"code": "invalid_identity", "message": str(exc)},
+            )
+            await websocket.close(code=1008, reason="invalid identity")
+            return
+        runtime = await registry.get(session_id, identity)
         turns = TurnController(runtime, writer)
         asr_session = services.asr.create_session() if services.asr else None
         vision_scheduler = (
@@ -282,12 +255,18 @@ def create_app(services: AppServices) -> FastAPI:
         if vision_scheduler:
             await vision_scheduler.start(
                 lambda snapshot: _handle_visual_snapshot(snapshot, runtime, writer),
-                lambda error: writer.event(
-                    "perception.error",
-                    payload={"message": str(error)[:240]},
-                ),
+                lambda error: _handle_perception_error(error, writer),
             )
-        await writer.event("session.ready", payload={"protocol": 2})
+        await writer.event(
+            "session.ready",
+            payload={
+                "protocol": 2,
+                "userId": identity.user_id.value,
+                "animaId": identity.anima_id.value,
+                "anonymous": identity.anonymous,
+                "identityAssurance": identity.assurance,
+            },
+        )
         try:
             while True:
                 message = await websocket.receive()
@@ -308,6 +287,45 @@ def create_app(services: AppServices) -> FastAPI:
                 payload = event["payload"]
                 if event_type == "session.hello":
                     await writer.event("session.hello.ack", payload={"protocol": 2})
+                    continue
+                if event_type == "settings.get":
+                    await _emit_settings(runtime, writer)
+                    continue
+                if event_type == "settings.update":
+                    try:
+                        profile = runtime.profiles.update(payload)
+                    except ProfileConflictError:
+                        await writer.event(
+                            "error",
+                            payload={
+                                "code": "settings_conflict",
+                                "message": "角色设置已在另一处更新，请重新载入后再保存",
+                            },
+                        )
+                        continue
+                    except ProfileValidationError as exc:
+                        await writer.event(
+                            "error",
+                            payload={"code": "invalid_settings", "message": str(exc)},
+                        )
+                        continue
+                    except RuntimeError as exc:
+                        _LOGGER.warning(
+                            "Anima settings persistence failed (%s)",
+                            type(exc).__name__,
+                        )
+                        await writer.event(
+                            "error",
+                            payload={
+                                "code": "settings_persistence_failed",
+                                "message": "角色设置暂时无法保存",
+                            },
+                        )
+                        continue
+                    await writer.event(
+                        "settings.current",
+                        payload={**profile.to_wire(), "updated": True},
+                    )
                     continue
                 if event_type == "turn.cancel":
                     cancelled = await turns.cancel()
@@ -367,6 +385,7 @@ async def _run_turn(
 ) -> None:
     generation = 0
     try:
+        profile = runtime.profiles.get()
         generation, context = await runtime.kernel.begin_turn(user_text)
         await writer.event(
             "reply.phase",
@@ -383,7 +402,7 @@ async def _run_turn(
             affect=context.affect,
         )
         texts: list[str] = []
-        async for segment in runtime.turn_service.generate(user_text, context):
+        async for segment in runtime.turn_service.generate(user_text, context, profile):
             if generation != runtime.kernel.generation:
                 return
             await _emit_avatar_intent(
@@ -430,7 +449,8 @@ async def _run_turn(
             )
     except asyncio.CancelledError:
         raise
-    except Exception:
+    except Exception as exc:
+        _LOGGER.warning("Reply generation failed (%s)", type(exc).__name__)
         if generation == runtime.kernel.generation:
             await writer.event(
                 "error",
@@ -562,6 +582,36 @@ async def _handle_visual_snapshot(
     )
 
 
+async def _handle_perception_error(
+    error: Exception,
+    writer: ConnectionWriter,
+) -> None:
+    _LOGGER.warning("Visual semantic analysis failed (%s)", type(error).__name__)
+    await writer.event(
+        "perception.error",
+        payload={
+            "code": "perception_failed",
+            "message": "视觉语义分析暂时不可用",
+        },
+    )
+
+
+async def _emit_settings(
+    runtime: RuntimeSession,
+    writer: ConnectionWriter,
+) -> None:
+    try:
+        profile = runtime.profiles.get()
+    except RuntimeError as exc:
+        _LOGGER.warning("Anima settings read failed (%s)", type(exc).__name__)
+        await writer.event(
+            "error",
+            payload={"code": "settings_read_failed", "message": "角色设置暂时无法读取"},
+        )
+        return
+    await writer.event("settings.current", payload=profile.to_wire())
+
+
 async def _cancel_task(task: asyncio.Task[None] | None) -> None:
     if task is None or task.done():
         return
@@ -588,3 +638,20 @@ def _parse_client_event(raw: str) -> dict[str, Any]:
 def _clean_identifier(value: object) -> str:
     text = str(value or "").strip()
     return "".join(character for character in text if character.isalnum() or character in "-_:")[:100]
+
+
+def _parse_session_identity(
+    raw_user_id: object,
+    raw_anima_id: object,
+    session_id: str,
+) -> SessionIdentity:
+    if raw_user_id is not None:
+        raise InvalidIdentity("显式 user 参数需要服务端认证 IdentityResolver")
+    user_id = UserId.anonymous_for(session_id)
+    anima_id = AnimaId.default() if raw_anima_id is None else AnimaId.parse(raw_anima_id)
+    return SessionIdentity(
+        user_id=user_id,
+        anima_id=anima_id,
+        anonymous=True,
+        assurance="anonymous_session_hint",
+    )

@@ -3,7 +3,14 @@ import wave
 
 import numpy as np
 
-from veyrasoul.integrations.sherpa_tts import SherpaTtsConfig, SherpaTtsSynthesizer, wav_bytes
+import pytest
+
+from veyrasoul.integrations.sherpa_tts import (
+    SherpaTtsConfig,
+    SherpaTtsSynthesizer,
+    _voice_sid,
+    wav_bytes,
+)
 
 
 def test_wav_bytes_encodes_mono_pcm16() -> None:
@@ -21,3 +28,13 @@ def test_health_detects_matcha_layout(tmp_path) -> None:
     health = SherpaTtsSynthesizer(SherpaTtsConfig(tmp_path)).health()
     assert health["ok"] is True
     assert health["engine"] == "matcha"
+
+
+def test_sherpa_voice_ids_map_to_provider_sid_at_adapter_boundary() -> None:
+    assert _voice_sid("default", 2) == 2
+    assert _voice_sid("3", 0) == 3
+    assert _voice_sid("sid:4", 0) == 4
+    with pytest.raises(ValueError, match="sherpa-onnx"):
+        _voice_sid("warm-female", 0)
+    with pytest.raises(ValueError, match="sherpa-onnx"):
+        _voice_sid("sid:999999", 0)

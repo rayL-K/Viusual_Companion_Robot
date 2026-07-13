@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import type { AvatarIntentPayload } from "../realtime/protocol";
-import { reduceAvatarIntent, type AvatarIntentState } from "./session";
+import {
+  avatarIntent,
+  reduceAvatarIntent,
+  resetAvatarGenerationDomain,
+  type AvatarIntentState,
+} from "./session";
 
 const current: AvatarIntentState = {
   sessionId: "s1",
@@ -53,6 +58,16 @@ describe("avatar intent state", () => {
     expect(result.sessionId).toBe("s2");
     expect(result.generation).toBe(0);
     expect(result.phase).toBe("listening");
+  });
+
+  it("resets the generation domain when the same server session restarts", () => {
+    avatarIntent.value = current;
+    resetAvatarGenerationDomain("s1");
+
+    expect(avatarIntent.value.sessionId).toBe("s1");
+    expect(avatarIntent.value.generation).toBe(-1);
+    expect(avatarIntent.value.seq).toBe(-1);
+    expect(avatarIntent.value.phase).toBe("idle");
   });
 });
 

@@ -35,6 +35,9 @@ def build_app():
     memory_path = Path(
         os.environ.get("VEYRASOUL_MEMORY_PATH", v2_root / "data" / "memory" / "veyrasoul.db")
     )
+    data_root = Path(
+        os.environ.get("VEYRASOUL_DATA_ROOT", v2_root / "data")
+    ).expanduser()
     web_dist_value = os.environ.get("VEYRASOUL_WEB_DIST", str(v2_root / "web" / "dist")).strip()
     web_dist = Path(web_dist_value).expanduser() if web_dist_value else None
     vlm = LocalVlmClient(
@@ -90,6 +93,7 @@ def build_app():
         startup=(asr.warmup, tts.warmup),
         shutdown=(llm.aclose, vlm.aclose),
         web_dist=web_dist,
+        data_root=data_root,
     )
     return create_app(services)
 

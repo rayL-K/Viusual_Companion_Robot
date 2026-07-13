@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import math
 import os
@@ -14,6 +15,7 @@ from pathlib import Path
 import uvicorn
 
 from veyrasoul.domain.perception import VisualSnapshot
+from veyrasoul.orchestration.ports import SpeechSynthesisRequest
 from veyrasoul.perception import VisualFrame
 
 from .app import AppServices, create_app
@@ -24,14 +26,22 @@ _DEMO_TEMP = tempfile.TemporaryDirectory(prefix="veyrasoul-e2e-")
 
 class DemoLlm:
     async def stream_reply(self, messages: list[dict[str, str]]) -> AsyncIterator[str]:
-        del messages
+        prompt = messages[-1]["content"] if messages else ""
+        if "慢回复" in prompt:
+            await asyncio.sleep(1.2)
+            yield "这条过期回复不应该出现在界面里。"
+            return
+        if "立即打断" in prompt:
+            yield "新的回复已经接管。"
+            yield "旧一代内容和声音都已失效。"
+            return
         yield "我已经听见你啦。"
         yield "现在的画面和声音都在陪伴链路里顺畅流动。"
 
 
 class DemoTts:
-    async def synthesize(self, text: str) -> tuple[bytes, str]:
-        frequency = 420 + min(len(text), 40) * 3
+    async def synthesize(self, request: SpeechSynthesisRequest) -> tuple[bytes, str]:
+        frequency = 420 + min(len(request.text), 40) * 3
         return _tone_wav(frequency, 0.32), "audio/wav"
 
 

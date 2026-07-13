@@ -9,11 +9,18 @@ import {
   PROTOCOL_VERSION,
   type ServerEvent,
 } from "./protocol";
+import { getOrCreateAnonymousSessionId } from "./sessionIdentity";
 
 type EventHandler = (event: ServerEvent) => void;
 
+const INITIAL_RECONNECT_DELAY_MS = 500;
+const MAX_RECONNECT_DELAY_MS = 8_000;
+
 export class RealtimeClient {
   private socket: WebSocket | null = null;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectAttempt = 0;
+  private reconnectEnabled = false;
   private handlers = new Set<EventHandler>();
   private audioBySequence = new Map<bigint, ArrayBuffer>();
   private activeGeneration = -1;
@@ -27,35 +34,76 @@ export class RealtimeClient {
 
   connect(): void {
     if (this.socket && this.socket.readyState <= WebSocket.OPEN) return;
+    this.reconnectEnabled = true;
+    this.clearReconnectTimer();
+    this.openSocket();
+  }
+
+  disconnect(): void {
+    this.reconnectEnabled = false;
+    this.clearReconnectTimer();
     this.audioQueue.stop();
     this.audioBySequence.clear();
-    this.activeGeneration = -1;
-    this.awaitingGeneration = true;
+    const socket = this.socket;
+    this.socket = null;
+    socket?.close(1000, "page lifecycle ended");
+    connectionPhase.value = "offline";
+  }
+
+  private openSocket(): void {
+    if (!this.reconnectEnabled || (this.socket && this.socket.readyState <= WebSocket.OPEN)) return;
     connectionPhase.value = "connecting";
-    const socket = new WebSocket(this.url);
+    let socket: WebSocket;
+    try {
+      socket = new WebSocket(this.url);
+    } catch (error) {
+      console.error("实时连接创建失败", error);
+      connectionPhase.value = "error";
+      this.scheduleReconnect();
+      return;
+    }
     socket.binaryType = "arraybuffer";
     this.socket = socket;
     socket.addEventListener("open", () => {
+      if (this.socket !== socket || !this.reconnectEnabled) {
+        socket.close(1000, "superseded connection");
+        return;
+      }
+      this.reconnectAttempt = 0;
+      this.clearReconnectTimer();
       connectionPhase.value = "online";
       this.send("session.hello", { capabilities: ["pcm16", "jpeg", "reply-segments"] });
     });
-    socket.addEventListener("message", (message) => void this.handleMessage(message));
+    socket.addEventListener("message", (message) => void this.handleMessage(socket, message));
     socket.addEventListener("close", () => {
-      if (this.socket === socket) {
-        this.socket = null;
-        connectionPhase.value = "offline";
-      }
+      if (this.socket !== socket) return;
+      this.socket = null;
+      this.audioQueue.stop();
+      this.audioBySequence.clear();
+      connectionPhase.value = "offline";
+      this.scheduleReconnect();
     });
     socket.addEventListener("error", () => {
+      if (this.socket !== socket) return;
       connectionPhase.value = "error";
     });
   }
 
-  disconnect(): void {
-    this.audioQueue.stop();
-    this.audioBySequence.clear();
-    this.socket?.close(1000, "page lifecycle ended");
-    this.socket = null;
+  private scheduleReconnect(): void {
+    if (!this.reconnectEnabled || this.reconnectTimer !== null || this.socket) return;
+    const exponent = Math.min(this.reconnectAttempt, 30);
+    const delayMs = Math.min(INITIAL_RECONNECT_DELAY_MS * 2 ** exponent, MAX_RECONNECT_DELAY_MS);
+    this.reconnectAttempt += 1;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.openSocket();
+    }, delayMs);
+  }
+
+  private clearReconnectTimer(): void {
+    if (this.reconnectTimer === null) return;
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
   }
 
   onEvent(handler: EventHandler): () => void {
@@ -83,7 +131,8 @@ export class RealtimeClient {
     return true;
   }
 
-  private async handleMessage(message: MessageEvent): Promise<void> {
+  private async handleMessage(socket: WebSocket, message: MessageEvent): Promise<void> {
+    if (this.socket !== socket) return;
     try {
       if (message.data instanceof ArrayBuffer) {
         const frame = parseBinaryFrame(message.data);
@@ -97,6 +146,11 @@ export class RealtimeClient {
       }
       if (typeof message.data !== "string") return;
       const event = parseServerEvent(message.data);
+      if (event.type === "session.ready") {
+        this.resetGenerationDomain();
+        this.emit(event);
+        return;
+      }
       if (event.type === "avatar.intent") {
         parseAvatarIntentPayload(event.payload);
         if (!this.acceptGeneration(event.generation)) return;
@@ -130,6 +184,13 @@ export class RealtimeClient {
     }
   }
 
+  private resetGenerationDomain(): void {
+    this.audioQueue.stop();
+    this.audioBySequence.clear();
+    this.activeGeneration = -1;
+    this.awaitingGeneration = true;
+  }
+
   private acceptGeneration(generation: number): boolean {
     if (generation < this.activeGeneration) return false;
     if (this.awaitingGeneration && generation <= this.activeGeneration) return false;
@@ -154,7 +215,10 @@ function parseAudioSequence(value: unknown): bigint {
   return BigInt(value);
 }
 
-export function realtimeUrl(locationLike: Location = window.location): string {
+export function realtimeUrl(
+  locationLike: Pick<Location, "protocol" | "host"> = window.location,
+  sessionId = getOrCreateAnonymousSessionId(),
+): string {
   const protocol = locationLike.protocol === "https:" ? "wss:" : "ws:";
-  return `${protocol}//${locationLike.host}/v2/realtime`;
+  return `${protocol}//${locationLike.host}/v2/realtime?session=${encodeURIComponent(sessionId)}`;
 }

@@ -73,6 +73,15 @@ export function applyAvatarIntent(update: AvatarIntentUpdate): boolean {
   return true;
 }
 
+export function resetAvatarGenerationDomain(sessionId: string): void {
+  avatarIntent.value = {
+    ...INITIAL_AVATAR_INTENT,
+    sessionId,
+    generation: -1,
+    seq: -1,
+  };
+}
+
 export function phaseLabel(phase: ReplyPhase): string {
   return {
     idle: "陪伴中",

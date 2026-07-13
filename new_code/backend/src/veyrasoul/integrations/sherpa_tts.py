@@ -11,6 +11,8 @@ from pathlib import Path
 
 import numpy as np
 
+from veyrasoul.orchestration.ports import SpeechSynthesisRequest
+
 
 @dataclass(frozen=True, slots=True)
 class SherpaTtsConfig:
@@ -27,11 +29,21 @@ class SherpaTtsSynthesizer:
         self._engine = None
         self._load_lock = threading.Lock()
 
-    async def synthesize(self, text: str) -> tuple[bytes, str]:
+    async def synthesize(
+        self,
+        request: SpeechSynthesisRequest | str,
+    ) -> tuple[bytes, str]:
+        # 兼容 V2.1 前直接传文本的内部调用；新端口使用供应商无关的 voice_id。
+        if isinstance(request, SpeechSynthesisRequest):
+            text = request.text
+            sid = _voice_sid(request.voice_id, self.config.sid)
+        else:
+            text = request
+            sid = self.config.sid
         normalized = str(text or "").strip()
         if not normalized:
             raise ValueError("TTS text must not be empty")
-        return await asyncio.to_thread(self._synthesize_sync, normalized)
+        return await asyncio.to_thread(self._synthesize_sync, normalized, sid)
 
     async def warmup(self) -> None:
         """在服务接收会话前加载模型，避免首轮用户承担冷启动。"""
@@ -47,11 +59,11 @@ class SherpaTtsSynthesizer:
             "engine": _engine_kind(root),
         }
 
-    def _synthesize_sync(self, text: str) -> tuple[bytes, str]:
+    def _synthesize_sync(self, text: str, sid: int) -> tuple[bytes, str]:
         engine = self._load()
         audio = engine.generate(
             text,
-            sid=max(0, int(self.config.sid)),
+            sid=max(0, int(sid)),
             speed=max(0.5, min(2.0, float(self.config.speed))),
         )
         samples = np.asarray(audio.samples, dtype=np.float32).reshape(-1)
@@ -166,3 +178,14 @@ def _required(path: Path) -> Path:
     if not path.is_file():
         raise FileNotFoundError(f"required TTS asset is missing: {path}")
     return path
+
+
+def _voice_sid(voice_id: str, default_sid: int) -> int:
+    normalized = str(voice_id or "default").strip().lower()
+    if normalized == "default":
+        return max(0, int(default_sid))
+    if normalized.startswith("sid:"):
+        normalized = normalized[4:]
+    if normalized.isdecimal() and int(normalized) <= 65_535:
+        return int(normalized)
+    raise ValueError("当前 sherpa-onnx 音色仅支持 default、数字或 sid:<数字>")

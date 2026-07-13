@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 
-from veyrasoul.integrations.deepseek import build_messages
+from veyrasoul.personalization.model import AnimaProfile
 
 from .context import ContextBundle
-from .ports import SpeechSynthesizer, StreamingLlm
+from .ports import SpeechSynthesisRequest, SpeechSynthesizer, StreamingLlm
+from .prompt import build_messages
 from .reply_pipeline import ReadyReplySegment, ReplyPipeline
 
 
@@ -23,6 +25,7 @@ class TurnService:
         self,
         user_text: str,
         context: ContextBundle,
+        profile: AnimaProfile,
     ) -> AsyncIterator[ReadyReplySegment]:
         history: list[dict[str, str]] = []
         for turn in context.recent_turns:
@@ -35,6 +38,8 @@ class TurnService:
         affect = context.affect
         messages = build_messages(
             stable_system_prompt=self.stable_system_prompt,
+            persona_prompt=profile.persona_markdown,
+            response_constraint=profile.response_constraint(),
             history=history,
             user_text=user_text,
             visual_context=context.visual.prompt_summary() if context.visual else "",
@@ -44,6 +49,40 @@ class TurnService:
                 f"affinity={affect.affinity:.2f}, trust={affect.trust:.2f}"
             ),
         )
-        pipeline = ReplyPipeline(self.tts.synthesize)
-        async for segment in pipeline.run(self.llm.stream_reply(messages)):
+        if profile.reply_delay_ms:
+            await asyncio.sleep(profile.reply_delay_ms / 1000.0)
+
+        async def synthesize(text: str) -> tuple[bytes, str]:
+            return await self.tts.synthesize(
+                SpeechSynthesisRequest(text=text, voice_id=profile.voice_id)
+            )
+
+        pipeline = ReplyPipeline(synthesize)
+        limited_stream = _limit_stream(
+            self.llm.stream_reply(messages),
+            profile.max_reply_chars,
+        )
+        async for segment in pipeline.run(limited_stream):
             yield segment
+
+
+async def _limit_stream(
+    stream: AsyncIterator[str],
+    maximum_chars: int,
+) -> AsyncIterator[str]:
+    remaining = max(1, int(maximum_chars))
+    try:
+        async for chunk in stream:
+            value = str(chunk or "")
+            if not value:
+                continue
+            clipped = value[:remaining]
+            if clipped:
+                remaining -= len(clipped)
+                yield clipped
+            if remaining <= 0:
+                return
+    finally:
+        close = getattr(stream, "aclose", None)
+        if callable(close):
+            await close()

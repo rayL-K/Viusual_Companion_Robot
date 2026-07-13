@@ -2,11 +2,11 @@
 
 ## 1. 连接
 
-WebSocket 路径：`/v2/realtime?session=<stable-session-id>`
+WebSocket 路径：`/v2/realtime?session=<stable-session-id>&anima=<optional-anima-id>`
 
 连接建立后客户端发送 `session.hello`。控制事件使用 JSON text frame，PCM、JPEG 和回复音频使用 binary frame，避免 Base64 体积和主线程编码开销。前端默认连接当前页面的同源 `ws(s)://<host>/v2/realtime`。
 
-当前 Gateway 接受 query string session；正式公网发布前仍需把登录身份、设备和 session 绑定到可信鉴权层，不能把 query 参数本身当作认证。
+缺省 `user` 时，Gateway 将严格校验后的稳定 session hint 哈希为匿名 UserId，使不同浏览器默认落入不同物理分库。默认组合根会**拒绝所有显式 `user` query**；正式账号必须由服务端 IdentityResolver/token 产生可信 UserId，不能把 query、JSON 或 localStorage 当作身份凭据。测试可注入 `client_asserted` resolver 验证分库，但该 resolver 不进入默认运行组合。
 
 ## 2. JSON envelope
 
@@ -71,6 +71,20 @@ WebSocket 路径：`/v2/realtime?session=<stable-session-id>`
 
 推进 generation、取消旧任务并返回 `turn.cancelled`。浏览器同时应立即停止本地旧音频，不能只等待服务器确认。
 
+### `settings.get` / `settings.update`
+
+```json
+{"v":2,"type":"settings.get","payload":{}}
+{"v":2,"type":"settings.update","payload":{"expectedRevision":3,"personaMarkdown":"# 草莓兔兔\n自然、真诚。","maxReplyChars":160,"replyDelayMs":0,"voiceId":"default"}}
+```
+
+- `personaMarkdown`：1–20000 字符；写入该 User/Anima 的 `Anima.md` 和 SQLite revision；
+- `maxReplyChars`：8–2000，既进入提示约束，也在流式输出端硬截断；
+- `replyDelayMs`：0–10000，用户显式设置的延迟；默认 0，不用于伪造“思考感”；
+- `voiceId`：受限标识符，由当前 TTS Port 验证；不能触发 Vox/SoulX 的隐式自动切换；
+- `expectedRevision`：必须等于最近一次 `settings.current.revision`；多标签页/多设备旧编辑器会收到 `settings_conflict`，不能静默覆盖新设置；
+- 未知字段、布尔伪装整数或越界值均返回稳定 `invalid_settings` 错误。
+
 ## 5. 服务器事件
 
 | 事件 | 当前实现 | 语义 |
@@ -88,6 +102,9 @@ WebSocket 路径：`/v2/realtime?session=<stable-session-id>`
 | `perception.snapshot` | 是（有 vision 时） | 5 秒调度后的语义摘要、帧序号、观察时间和置信度 |
 | `perception.error` | 是（有 vision 时） | VLM 分析失败；当前返回截断后的内部错误文本，生产前需改稳定错误码 |
 | `avatar.intent` | 是 | generation-safe 的连续情感与渲染意图；可绑定回复分段 |
+| `settings.current` | 是 | 当前 User/Anima 设置与 revision；更新成功时带 `updated=true` |
+
+`session.ready.payload` 还包含 `userId`、`animaId`、`anonymous` 和 `identityAssurance`。默认匿名值为 `anonymous_session_hint`；未来认证 resolver 必须返回 `authenticated`。`client_asserted` 只用于隔离测试/显式开发组合，不能冒充正式账号认证。
 
 ### `avatar.intent`
 

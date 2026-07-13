@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AudioSegmentQueue, type PlayableAudio } from "../audio/AudioSegmentQueue";
+import { connectionPhase } from "../state/session";
 import { BINARY_KIND_AUDIO, createBinaryFrame, type ServerEvent } from "./protocol";
-import { RealtimeClient } from "./RealtimeClient";
+import { RealtimeClient, realtimeUrl } from "./RealtimeClient";
 
 class FakeWebSocket {
   static readonly CONNECTING = 0;
@@ -30,7 +31,12 @@ class FakeWebSocket {
     this.sent.push(data);
   }
 
-  close(): void {
+  close(_code?: number, _reason?: string): void {
+    this.readyState = FakeWebSocket.CLOSED;
+    this.dispatch("close");
+  }
+
+  serverClose(): void {
     this.readyState = FakeWebSocket.CLOSED;
     this.dispatch("close");
   }
@@ -50,6 +56,7 @@ class FakeWebSocket {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   FakeWebSocket.instances = [];
 });
@@ -117,6 +124,85 @@ describe("RealtimeClient reply generations", () => {
     expect(expressions).toEqual(["attentive", "warm"]);
     client.disconnect();
   });
+
+  it("accepts generation zero after session.ready starts a new server domain", async () => {
+    const { client, socket } = connectedClient(new AudioSegmentQueue(() => playable(Promise.resolve())));
+    const received: ServerEvent[] = [];
+    client.onEvent((event) => received.push(event));
+
+    socket.message(serverEvent("reply.phase", 8, { phase: "thinking" }));
+    socket.message(serverEvent("session.ready", 0, { protocol: 2 }));
+    socket.message(serverEvent("reply.phase", 0, { phase: "thinking" }));
+    await flushTasks();
+
+    expect(received.filter((event) => event.type === "reply.phase").map((event) => event.generation))
+      .toEqual([8, 0]);
+    client.disconnect();
+  });
+});
+
+describe("RealtimeClient reconnect lifecycle", () => {
+  it("reconnects with exponential backoff and resets it after open", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const client = new RealtimeClient("ws://test/v2/realtime");
+    client.connect();
+    const first = requireSocket(0);
+
+    first.serverClose();
+    await vi.advanceTimersByTimeAsync(499);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    const second = requireSocket(1);
+
+    second.serverClose();
+    await vi.advanceTimersByTimeAsync(999);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1);
+    const third = requireSocket(2);
+    third.open();
+    third.serverClose();
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(FakeWebSocket.instances).toHaveLength(4);
+    client.disconnect();
+  });
+
+  it("disconnect cancels pending retries and stale socket close events", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const client = new RealtimeClient("ws://test/v2/realtime");
+    client.connect();
+    const first = requireSocket(0);
+    first.serverClose();
+    await vi.advanceTimersByTimeAsync(500);
+    const second = requireSocket(1);
+    second.open();
+
+    first.serverClose();
+    expect(connectionPhase.value).toBe("online");
+    client.disconnect();
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(connectionPhase.value).toBe("offline");
+    expect(FakeWebSocket.instances).toHaveLength(2);
+  });
+});
+
+describe("realtimeUrl", () => {
+  it("selects secure WebSocket and includes the persistent session id", () => {
+    expect(realtimeUrl(
+      { protocol: "https:", host: "anima.veyralux.org" },
+      "anon_12345678123412341234123456789abc",
+    )).toBe(
+      "wss://anima.veyralux.org/v2/realtime?session=anon_12345678123412341234123456789abc",
+    );
+  });
+
+  it("encodes the session query value at the URL boundary", () => {
+    expect(realtimeUrl({ protocol: "http:", host: "localhost:5174" }, "id:one/two"))
+      .toBe("ws://localhost:5174/v2/realtime?session=id%3Aone%2Ftwo");
+  });
 });
 
 function connectedClient(queue: AudioSegmentQueue): { client: RealtimeClient; socket: FakeWebSocket } {
@@ -127,6 +213,12 @@ function connectedClient(queue: AudioSegmentQueue): { client: RealtimeClient; so
   if (!socket) throw new Error("测试 WebSocket 未创建");
   socket.open();
   return { client, socket };
+}
+
+function requireSocket(index: number): FakeWebSocket {
+  const socket = FakeWebSocket.instances[index];
+  if (!socket) throw new Error(`测试 WebSocket ${index} 未创建`);
+  return socket;
 }
 
 function serverEvent(type: string, generation: number, payload: Record<string, unknown>): string {

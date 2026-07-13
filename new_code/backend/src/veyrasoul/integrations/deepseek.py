@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, AsyncIterator, Iterable, Mapping
+from typing import Any, AsyncIterator, Mapping
 
 import httpx
+
+from veyrasoul.orchestration.prompt import build_messages
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,37 +76,6 @@ class DeepSeekStreamClient:
 
     async def aclose(self) -> None:
         await self._client.aclose()
-
-
-def build_messages(
-    *,
-    stable_system_prompt: str,
-    history: Iterable[Mapping[str, str]],
-    user_text: str,
-    visual_context: str = "",
-    memory_context: Iterable[str] = (),
-    affect_context: str = "",
-) -> list[dict[str, str]]:
-    """Keep stable prefix first so provider-side prefix caching can work."""
-
-    messages = [{"role": "system", "content": stable_system_prompt.strip()}]
-    for item in history:
-        role = str(item.get("role") or "").strip()
-        content = str(item.get("content") or "").strip()
-        if role in {"user", "assistant"} and content:
-            messages.append({"role": role, "content": content[:12_000]})
-    context_parts = [f"视觉：{visual_context.strip()}" if visual_context.strip() else ""]
-    memories = [str(value).strip() for value in memory_context if str(value).strip()]
-    if memories:
-        context_parts.append("相关记忆：\n- " + "\n- ".join(memories[:8]))
-    if affect_context.strip():
-        context_parts.append(f"角色当前情感连续状态：{affect_context.strip()}")
-    dynamic_context = "\n".join(part for part in context_parts if part)
-    final = user_text.strip()
-    if dynamic_context:
-        final = f"<current_context>\n{dynamic_context}\n</current_context>\n\n用户：{final}"
-    messages.append({"role": "user", "content": final})
-    return messages
 
 
 def parse_sse_line(line: str) -> dict[str, Any] | None:

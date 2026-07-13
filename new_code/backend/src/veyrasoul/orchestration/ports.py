@@ -11,8 +11,14 @@ class StreamingLlm(Protocol):
     def stream_reply(self, messages: list[dict[str, str]]) -> AsyncIterator[str]: ...
 
 
+@dataclass(frozen=True, slots=True)
+class SpeechSynthesisRequest:
+    text: str
+    voice_id: str = "default"
+
+
 class SpeechSynthesizer(Protocol):
-    async def synthesize(self, text: str) -> tuple[bytes, str]: ...
+    async def synthesize(self, request: SpeechSynthesisRequest) -> tuple[bytes, str]: ...
 
 
 @dataclass(frozen=True, slots=True)
