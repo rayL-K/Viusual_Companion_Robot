@@ -16,7 +16,7 @@ test("公网模式把所有推理请求汇聚到同一 HTTPS 网关", async () =
   requests.length = 0;
   const client = new DeviceApiClient(() => ({
     mode: "public",
-    publicUrl: "https://robot.veyralux.org",
+    publicUrl: "https://anima.veyralux.org",
     host: "192.168.5.21",
     controlPort: 8765,
     token: "device-token",
@@ -25,8 +25,8 @@ test("公网模式把所有推理请求汇聚到同一 HTTPS 网关", async () =
   await client.health();
   await client.vision("ZmFrZQ==");
 
-  assert.equal(requests[0].url, "https://robot.veyralux.org/health");
-  assert.equal(requests[1].url, "https://robot.veyralux.org/vision");
+  assert.equal(requests[0].url, "https://anima.veyralux.org/health");
+  assert.equal(requests[1].url, "https://anima.veyralux.org/vision");
   assert.equal(requests[1].header["X-Device-Token"], "device-token");
 });
 
@@ -34,7 +34,7 @@ test("局域网模式直接访问同一个板端视觉接口", async () => {
   requests.length = 0;
   const client = new DeviceApiClient(() => ({
     mode: "local",
-    publicUrl: "https://robot.veyralux.org",
+    publicUrl: "https://anima.veyralux.org",
     host: "192.168.5.22",
     controlPort: 8765,
     token: "",
@@ -48,7 +48,7 @@ test("主动说话人请求同时携带 PCM16 和连续画面", async () => {
   requests.length = 0;
   const client = new DeviceApiClient(() => ({
     mode: "public",
-    publicUrl: "https://robot.veyralux.org",
+    publicUrl: "https://anima.veyralux.org",
     host: "192.168.5.22",
     controlPort: 8765,
     token: "",
@@ -59,7 +59,7 @@ test("主动说话人请求同时携带 PCM16 和连续画面", async () => {
     Array.from({ length: 20 }, (_, index) => ({ image: `frame-${index}` })),
   );
 
-  assert.equal(requests[0].url, "https://robot.veyralux.org/active-speaker");
+  assert.equal(requests[0].url, "https://anima.veyralux.org/active-speaker");
   assert.equal(requests[0].data.sample_rate, 16000);
   assert.equal(requests[0].data.frames.length, 16);
   assert.equal(requests[0].data.frames[0].image, "frame-4");

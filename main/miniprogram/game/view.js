@@ -103,7 +103,7 @@ class GameView {
       weight: "600",
       anchorX: 0.5,
     });
-    this._text(String(state.deviceHost || "robot.veyralux.org"), this.width / 2, header.y + 48, {
+    this._text(String(state.deviceHost || "anima.veyralux.org"), this.width / 2, header.y + 48, {
       size: 16,
       color: COLORS.muted,
       anchorX: 0.5,
@@ -310,7 +310,7 @@ class GameView {
     });
     const addressLabel = config.mode === "local"
       ? `${config.host || ""}:${config.controlPort || ""}`
-      : config.publicUrl || "https://robot.veyralux.org";
+      : config.publicUrl || "https://anima.veyralux.org";
     this._text("当前入口", rect.x, rect.y + 155, { size: 22, color: COLORS.muted });
     this._roundedRect({ x: rect.x, y: rect.y + 190, width: rect.width, height: 66 }, 18, COLORS.surface, 1, COLORS.border);
     this._text(addressLabel, rect.x + 18, rect.y + 223, {

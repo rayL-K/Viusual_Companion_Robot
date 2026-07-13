@@ -8,14 +8,14 @@
 
 单帧中的“关注对象”和经过音画时序验证的“主动说话人”是两个概念。当前生产链路能在 ELF2 上检测多人、选择关注脸、匹配本地登记身份、分析情绪与姿态，并用同步的 16 kHz PCM 和连续人脸帧运行 Light-ASD；只有音画一致性达到门限时才会标记真正的主动说话人。
 
-在线入口：[robot.veyralux.org](https://robot.veyralux.org)（PC、手机竖屏与横屏自适应）。微信小游戏保留现有开发版，但当前收尾与验收只针对 Web，不再扩展小游戏功能。
+在线入口：[anima.veyralux.org](https://anima.veyralux.org)（PC、手机竖屏与横屏自适应）。微信小游戏保留现有开发版，但当前收尾与验收只针对 Web，不再扩展小游戏功能。
 
 ## 当前闭环架构
 
 ```mermaid
 flowchart LR
     U --> WEB["响应式 Web\nPC / 手机 / 横竖屏"]
-    WEB -->|"HTTPS"| EDGE["robot.veyralux.org\nCloudflare Worker"]
+    WEB -->|"HTTPS"| EDGE["anima.veyralux.org\nCloudflare Worker"]
     EDGE -->|"Workers VPC Service"| TUNNEL["Cloudflare QUIC Tunnel"]
     TUNNEL --> GW["ELF2 统一网关\n设备令牌鉴权"]
     GW --> YOLO["YOLOv5s RKNN"]
@@ -52,7 +52,7 @@ flowchart LR
 | **语音打断 (VAD)** | ✅ | 客户端自适应噪声底线、宽带噪声门控与浏览器降噪；板端 WebRTC VAD 级别 3、8% 有效语音门限，TTS 播放期间支持高阈值抢占 |
 | **记忆模块** | ✅ | SQLite 保存最近对话与显式长期记忆；姓名、生日、喜好和“请记住”内容会以有界结构加入对话上下文 |
 | **消息总线** | ✅ | RobotEvent + 事件类型常量，解耦模块通信 |
-| **公网链路** | ✅ | `robot.veyralux.org` → Worker → VPC Service → QUIC Tunnel → ELF2，含鉴权与 Live2D 边缘缓存 |
+| **公网链路** | ✅ | `anima.veyralux.org` → Worker → VPC Service → QUIC Tunnel → ELF2，含鉴权与 Live2D 边缘缓存 |
 | **ELF2 部署** | ✅ | emotion、VLM、control、cloudflared 四项常驻 systemd 服务；VoxCPM 按请求运行，避免与 Qwen3-VL 同时长期占用 8 GiB 内存 |
 
 ## 项目结构

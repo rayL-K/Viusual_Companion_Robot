@@ -4,7 +4,7 @@
 
 ## 当前生产入口
 
-- 公网 Web：`https://robot.veyralux.org`
+- 公网 Web：`https://anima.veyralux.org`
 - 微信小游戏 AppID：`wx8b9c56c00cb5c9ec`
 - 当前小游戏开发版：`0.3.1`（已上传，尚未提交审核/发布）
 - ELF2：`elf2-desktop.local`，项目目录 `/home/wenkang/embedded_competition`；当前手机热点地址由 DHCP 分配
@@ -21,7 +21,7 @@
 ```text
 Web getUserMedia / 小游戏 wx.createCamera + PCM 采集
   -> 低频 JPEG，或最后 2 秒 PCM + 最后 16 帧
-  -> robot.veyralux.org/vision 或 /active-speaker
+  -> anima.veyralux.org/vision 或 /active-speaker
   -> Cloudflare Worker 注入设备令牌
   -> ELF2 BoardVisionService
   -> YOLOv5s + YOLOv8n-pose RKNN

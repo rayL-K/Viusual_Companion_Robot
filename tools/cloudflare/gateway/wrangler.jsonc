@@ -31,6 +31,10 @@
   },
   "routes": [
     {
+      "pattern": "anima.veyralux.org",
+      "custom_domain": true
+    },
+    {
       "pattern": "robot.veyralux.org",
       "custom_domain": true
     }

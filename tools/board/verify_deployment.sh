@@ -8,7 +8,7 @@ readonly SERVICES=(
   visual-companion-cloudflared.service
 )
 readonly LOCAL_BASE="http://127.0.0.1:8765"
-readonly PUBLIC_BASE="https://robot.veyralux.org"
+readonly PUBLIC_BASE="https://anima.veyralux.org"
 readonly VOX_MODEL="/opt/visual-companion-voxcpm/models/voxcpm1.5-q4_k-audiovae-f16.gguf"
 readonly VOX_SHA256="ce5edb331e869d89a8f816c9288fba4c1cffa636099808d240974a34f2ce8361"
 

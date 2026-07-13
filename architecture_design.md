@@ -157,7 +157,7 @@ ELF2 为 RK3588、8 GiB 共享 DRAM，没有独立显存。
    检查全部通过。
 2. ELF2 `/vision-health` 返回本地 RKNN + FER+ 已加载。
 3. 使用真人脸、多人、动物与背景图片调用板内 `/vision`，人脸与物体结果符合样例。
-4. 通过 `https://robot.veyralux.org/vision` 重复同一真实图片，并用带真实音轨的多人视频测试 `/active-speaker`。
+4. 通过 `https://anima.veyralux.org/vision` 重复同一真实图片，并用带真实音轨的多人视频测试 `/active-speaker`。
 5. 公网 Web 在 PC、手机竖屏和手机横屏无水平溢出，Live2D、气泡和输入区不重叠。
 6. 小游戏开发者工具编译、预览和上传成功；真机摄像头授权仍需发布前人工确认。
 7. 连续运行测试期间无 OOM、持续内存增长、服务重启循环和 Tunnel 断连。

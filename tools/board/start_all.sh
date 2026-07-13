@@ -103,7 +103,7 @@ start_services() {
   wait_for_url "统一视觉模型" "http://127.0.0.1:8765/vision-health"
   systemctl is-active --quiet visual-companion-cloudflared.service \
     || fail "Cloudflare Tunnel 未运行"
-  log "全部服务已启动；公网入口：https://robot.veyralux.org"
+  log "全部服务已启动；公网入口：https://anima.veyralux.org"
   show_status
 }
 

@@ -1,6 +1,6 @@
 # Visual Companion Robot 微信小游戏
 
-该目录是 ELF2/RK3588 陪伴机器人的微信小游戏交互层（为保留历史路径，目录名仍为 `miniprogram`）。模型推理、记忆、ASR、TTS 和 FER+ 继续运行在开发板；小游戏负责 Canvas Live2D、麦克风、播放、文字交互和运行状态展示。默认通过 `https://robot.veyralux.org` 连接 Cloudflare Tunnel，因此手机只要联网即可使用。
+该目录是 ELF2/RK3588 陪伴机器人的微信小游戏交互层（为保留历史路径，目录名仍为 `miniprogram`）。模型推理、记忆、ASR、TTS 和 FER+ 继续运行在开发板；小游戏负责 Canvas Live2D、麦克风、播放、文字交互和运行状态展示。默认通过 `https://anima.veyralux.org` 连接 Cloudflare Tunnel，因此手机只要联网即可使用。
 
 交互层使用 `game.js + game.json` 入口、单屏 WebGL Live2D 舞台、固定四宫格工具 Dock 和 Canvas 功能面板。全面屏安全区、按钮居中、面板遮挡与模型/聊天气泡隔离均在布局层统一计算。Live2D 使用 Cubism Core 5.1.0，并持续写入模型说明中 `Ctrl+Shift` 水印热键对应的 `Param261 = 1`，因此水印默认关闭且不会被动作重新打开。
 
@@ -8,7 +8,7 @@
 
 1. 在微信开发者工具中导入本目录。
 2. 工程使用正式小游戏 AppID `wx8b9c56c00cb5c9ec`。
-3. 在小游戏后台把 `https://robot.veyralux.org` 加入服务器合法域名。
+3. 在小游戏后台把 `https://anima.veyralux.org` 加入服务器合法域名。
 4. 公网模式无需填写令牌：Cloudflare Worker 使用服务端 Secret 向 ELF2 代签，令牌不会进入小游戏包。
 5. 公网不可用时可切换“局域网调试”，直接连接 ELF2 有线或 Wi-Fi 地址；此模式可按板端配置携带设备令牌。
 
