@@ -1,0 +1,33 @@
+{
+  "name": "@veyralux/brand-site",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "packageManager": "npm@11.16.0",
+  "engines": {
+    "node": ">=24 <27"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "typecheck": "tsc -b --pretty false",
+    "deploy:dry-run": "npm run build && wrangler deploy --dry-run"
+  },
+  "dependencies": {
+    "@fontsource-variable/manrope": "5.2.8",
+    "gsap": "3.15.0",
+    "preact": "10.29.7"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "2.10.5",
+    "@testing-library/preact": "3.2.4",
+    "@types/node": "24.13.3",
+    "jsdom": "29.1.1",
+    "typescript": "7.0.2",
+    "vite": "8.1.4",
+    "vitest": "4.1.10",
+    "wrangler": "4.110.0"
+  }
+}

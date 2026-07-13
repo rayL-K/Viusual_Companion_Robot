@@ -8,7 +8,7 @@
 
 单帧中的“关注对象”和经过音画时序验证的“主动说话人”是两个概念。当前生产链路能在 ELF2 上检测多人、选择关注脸、匹配本地登记身份、分析情绪与姿态，并用同步的 16 kHz PCM 和连续人脸帧运行 Light-ASD；只有音画一致性达到门限时才会标记真正的主动说话人。
 
-V1 在线入口：[robot.veyralux.org](https://robot.veyralux.org)（PC、手机竖屏与横屏自适应）。`anima.veyralux.org` 专用于尚未发布的 V2，不与 V1 共用入口。微信小游戏保留现有开发版，但当前收尾与验收只针对 Web，不再扩展小游戏功能。
+品牌主页：[veyralux.org](https://veyralux.org)。V1 在线入口：[robot.veyralux.org](https://robot.veyralux.org)（PC、手机竖屏与横屏自适应）。`anima.veyralux.org` 专用于尚未发布的 V2，不与 V1 共用入口。微信小游戏保留现有开发版，但当前收尾与验收只针对 Web，不再扩展小游戏功能。
 
 ## 当前闭环架构
 

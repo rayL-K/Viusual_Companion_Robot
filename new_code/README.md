@@ -2,7 +2,7 @@
 
 `new_code/` 是虚拟陪伴机器人 V2 的独立实现。旧系统保持冻结，只作为行为参照与模型资源迁移来源；V2 不在旧代码上继续叠加功能。
 
-> **当前运行边界：** `robot.veyralux.org` 只承载正在评审使用的 V1；`anima.veyralux.org` 只保留给 V2，当前不得指向 V1。V2 只允许在开发电脑和自动化环境中开发验证，暂不上传、安装或切换到开发板。仓库内的 V2 systemd/Cloudflare 文件仅是未来部署草案，激活脚本默认拒绝切换。
+> **当前运行边界：** `veyralux.org` 是独立品牌门户；`robot.veyralux.org` 只承载正在评审使用的 V1；`anima.veyralux.org` 只保留给 V2，当前不得指向 V1。V2 只允许在开发电脑和自动化环境中开发验证，暂不上传、安装或切换到开发板。仓库内的 V2 systemd/Cloudflare 文件仅是未来部署草案，激活脚本默认拒绝切换。
 
 ## 产品目标
 
@@ -61,6 +61,7 @@
 new_code/
 ├── backend/                 # 会话编排、记忆/RAG、模型适配器、ASGI Gateway
 ├── web/                     # PC 优先、移动端完整的 Preact + TypeScript 通话界面
+├── brand-site/              # veyralux.org 独立品牌门户与 Static Assets 部署
 ├── config/                  # 稳定角色提示词（不得放密钥）
 ├── docs/                    # 架构、协议、部署、UX、SLO 和路线图
 ├── artifacts/               # 基准结果；截图等本地产物默认不提交
@@ -77,6 +78,12 @@ python -m pytest -q
 cd ..\web
 npm ci
 npm run check
+npm run build
+
+cd ..\brand-site
+npm ci
+npm run typecheck
+npm test
 npm run build
 
 cd ..
@@ -102,6 +109,7 @@ npm run dev
 ## 文档索引
 
 - [`docs/architecture.md`](docs/architecture.md)：目标架构、当前纵向链路和模块边界
+- [`docs/brand-site-creative-direction.md`](docs/brand-site-creative-direction.md)：品牌门户内容、动效、域名与事实边界
 - [`docs/live2d-interaction.md`](docs/live2d-interaction.md)：无动作盘身体交互、语义契约、生命周期和授权边界
 - [`docs/video-call-ux.md`](docs/video-call-ux.md)：视频通话式交互、媒体频率和端侧适配
 - [`docs/protocol.md`](docs/protocol.md)：Realtime Protocol v2
