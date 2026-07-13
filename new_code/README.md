@@ -107,4 +107,5 @@ npm run dev
 - [`docs/user-data-isolation.md`](docs/user-data-isolation.md)：用户/Anima 数据、备份、迁移与安全边界
 - [`docs/reference-evaluations.md`](docs/reference-evaluations.md)：SoulX-Podcast 与 Neuro 的事实核查和取舍
 - [`docs/reference-kourichat.md`](docs/reference-kourichat.md)：KouriChat clean-room 对话/记忆设计取舍
+- [`docs/server-buying-guide.md`](docs/server-buying-guide.md)：服务器容量、三档采购方案、云 GPU 试租与三年 TCO 决策门
 - [`docs/reviews/2026-07-13-v2-differential-security-review.md`](docs/reviews/2026-07-13-v2-differential-security-review.md)：本轮身份/数据/实时链路差分安全审查
