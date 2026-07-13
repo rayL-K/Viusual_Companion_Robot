@@ -96,7 +96,7 @@
 - 已完成：Gateway 同源托管 `web/dist`；
 - 已完成：V2 Gateway/Cloudflare systemd 单元、环境模板、一键启动、健康等待与 V1 Tunnel 回滚；
 - 已完成：启动脚本加入显式激活锁，默认保护正在评审使用的 V1；
-- 当前约束：V2 仅做本机与自动化验证，不部署 ELF2、不切换评审主入口 `anima.veyralux.org`；`robot.veyralux.org` 继续作为 V1 兼容别名；
+- 当前约束：V2 仅做本机与自动化验证，不部署 ELF2；`robot.veyralux.org` 只运行 V1，`anima.veyralux.org` 只保留给 V2 且当前不接管 V1；
 - 待完成：ELF2 上固定 ASR/TTS/VLM 模型与线程数；
 - 待完成：Cloudflare HTTPS/WSS 真实入口、鉴权和限流；
 
@@ -109,7 +109,7 @@
 - 已完成：E2E 不接触 ELF2、不使用正式 Tunnel，保证 V1 评审链路不变；
 - 待完成：丢包/高延迟/限带宽注入、连续多次重连、长会话和内存增长。
 - 断网、重连、打断、内存峰值、温度降频和 8 小时 soak；
-- 灰度切换 `anima.veyralux.org`，保留 `robot.veyralux.org` 兼容别名与 V1 一键回滚。
+- 仅在 V2 门禁通过后启用 `anima.veyralux.org`；`robot.veyralux.org` 始终保持 V1 独立入口与一键回滚能力。
 
 ## 发布前硬门槛
 

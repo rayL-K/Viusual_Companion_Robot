@@ -1,6 +1,6 @@
 # ELF2（RK3588）部署说明
 
-> **当前禁止部署 V2 到 ELF2。** 评委可能随时访问主入口 `anima.veyralux.org`（`robot.veyralux.org` 为兼容别名），开发板和正式 Tunnel 必须持续运行 V1。本文只保存未来切换所需的设计与命令，不是当前操作手册；`start-elf2.sh` 默认拒绝激活。
+> **当前禁止部署 V2 到 ELF2。** 评委可能随时访问 V1 专用入口 `robot.veyralux.org`，开发板和 V1 Tunnel 必须持续运行。`anima.veyralux.org` 只保留给 V2，当前不得回源到 V1。本文只保存未来启用 V2 所需的设计与命令，不是当前操作手册；`start-elf2.sh` 默认拒绝激活。
 
 ## 1. 运行环境
 
@@ -199,4 +199,4 @@ VEYRASOUL_ALLOW_V2_BOARD_ACTIVATION=I_UNDERSTAND_V1_WILL_BE_REPLACED ./scripts/s
 6. 摄像头本地预览实际 FPS，2 Hz JPEG 不拖慢预览；
 7. 已接入的 5 秒语义调度在真实 VLM worker 上验证准确性、新鲜度和队列有界；
 8. 8 小时 RSS、温度、CPU/NPU 频率和重连测试；
-9. `anima.veyralux.org` 在 PC/移动端使用 HTTPS/WSS、媒体权限和鉴权通过；`robot.veyralux.org` 兼容别名保持可用。
+9. V2 专用入口 `anima.veyralux.org` 在 PC/移动端使用 HTTPS/WSS、媒体权限和鉴权通过，同时确认 V1 专用入口 `robot.veyralux.org` 未被 V2 路由接管。

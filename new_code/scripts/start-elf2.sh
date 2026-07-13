@@ -56,7 +56,7 @@ case "${ACTION}" in
     wait_for_health
     systemctl "${ACTION}" veyrasoul-v2-cloudflared.service
     systemctl is-active --quiet "${SERVICES[@]}" || fail "至少一个 V2 服务未运行"
-    log "服务已启动：https://anima.veyralux.org（兼容别名：https://robot.veyralux.org）"
+    log "V2 服务已启动：https://anima.veyralux.org；V1 独立入口：https://robot.veyralux.org"
     ;;
   stop)
     systemctl stop "${SERVICES[@]}"
