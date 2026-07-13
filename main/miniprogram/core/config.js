@@ -2,7 +2,7 @@ const STORAGE_KEY = "visual-companion.device-config.v2";
 const LEGACY_STORAGE_KEY = "visual-companion.device-config.v1";
 const DEFAULT_DEVICE_CONFIG = Object.freeze({
   mode: "public",
-  publicUrl: "https://anima.veyralux.org",
+  publicUrl: "https://robot.veyralux.org",
   host: "192.168.5.21",
   controlPort: 8765,
   token: "",

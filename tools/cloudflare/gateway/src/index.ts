@@ -24,8 +24,6 @@ type GatewayEnv = Env & {
 };
 
 const PUBLIC_HOSTNAMES = new Set([
-  "anima.veyralux.org",
-  // 旧入口暂留作兼容别名，避免已发出的资料和浏览器缓存立即失效。
   "robot.veyralux.org",
 ]);
 
@@ -130,8 +128,7 @@ export default {
     const headers = new Headers(request.headers);
     headers.set("X-Forwarded-Host", url.hostname);
     headers.set("X-Forwarded-Proto", "https");
-    // ELF2 上的 V1 仍按旧正式域名校验 Origin；在不重启板端服务的前提下
-    // 将新域名安全迁移为主入口，响应仍由当前同源 Worker 返回。
+    // V1 入口固定为 robot.veyralux.org；V2 使用独立的 anima 子域和部署。
     if (headers.has("Origin")) {
       headers.set("Origin", "https://robot.veyralux.org");
     }

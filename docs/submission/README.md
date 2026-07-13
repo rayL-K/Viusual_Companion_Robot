@@ -19,7 +19,7 @@
 
 ## 作品入口
 
-- 在线演示入口：[https://anima.veyralux.org](https://anima.veyralux.org)
+- 在线演示入口：[https://robot.veyralux.org](https://robot.veyralux.org)
 - GitHub 仓库：[https://github.com/rayL-K/Viusual_Companion_Robot](https://github.com/rayL-K/Viusual_Companion_Robot)
 
 ## 下载说明

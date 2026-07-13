@@ -79,8 +79,8 @@ test("Web 连续视觉通过同源长连接传帧并接收板端结果", async (
   }
 
   assert.equal(
-    realtimeVisionUrl({ hostname: "anima.veyralux.org", origin: "https://anima.veyralux.org" }),
-    "wss://anima.veyralux.org/realtime",
+    realtimeVisionUrl({ hostname: "robot.veyralux.org", origin: "https://robot.veyralux.org" }),
+    "wss://robot.veyralux.org/realtime",
   );
   const client = new RealtimeVisionClient({ WebSocketCtor: FakeWebSocket, timeoutMs: 100 });
   await client.connect();

@@ -21,7 +21,7 @@ test("小游戏通过同源 WebSocket 边录边传并接收板端 ASR 结果", a
   const wxApi = {
     arrayBufferToBase64(buffer) { return Buffer.from(buffer).toString("base64"); },
     connectSocket(options) {
-      assert.equal(options.url, "wss://anima.veyralux.org/realtime");
+      assert.equal(options.url, "wss://robot.veyralux.org/realtime");
       assert.equal(options.header["X-Device-Token"], "test-token");
       queueMicrotask(() => socket.handlers.open());
       return socket;
@@ -29,7 +29,7 @@ test("小游戏通过同源 WebSocket 边录边传并接收板端 ASR 结果", a
   };
   const api = {
     config: () => ({ token: "test-token" }),
-    websocketUrl: () => "wss://anima.veyralux.org/realtime",
+    websocketUrl: () => "wss://robot.veyralux.org/realtime",
   };
   const { RealtimeAsrClient } = require("../core/realtime-asr-client");
   const client = new RealtimeAsrClient({ api, wxApi });

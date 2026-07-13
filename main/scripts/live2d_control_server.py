@@ -1208,7 +1208,7 @@ class ControlHandler(BaseHTTPRequestHandler):
         hostname = str(parsed.hostname or "").lower()
         if parsed.scheme in {"http", "https"} and hostname in {"127.0.0.1", "localhost", "::1"}:
             return True
-        public_host = str(os.environ.get("VISUAL_COMPANION_PUBLIC_HOST") or "anima.veyralux.org").lower()
+        public_host = str(os.environ.get("VISUAL_COMPANION_PUBLIC_HOST") or "robot.veyralux.org").lower()
         return parsed.scheme == "https" and hostname in {"servicewechat.com", public_host}
 
     def is_device_authenticated(self) -> bool:

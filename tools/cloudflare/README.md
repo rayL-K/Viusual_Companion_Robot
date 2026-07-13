@@ -1,6 +1,6 @@
 # Cloudflare Tunnel 部署
 
-公网入口统一为 `https://anima.veyralux.org`。Cloudflare Worker 通过 Workers VPC Service 进入 ELF2 的专用 Tunnel，再访问 IPv4 回环地址控制网关；控制网关通过 `127.0.0.1:8766` 调用 FER+，不直接暴露情绪服务或家庭公网 IP。
+公网入口统一为 `https://robot.veyralux.org`。Cloudflare Worker 通过 Workers VPC Service 进入 ELF2 的专用 Tunnel，再访问 IPv4 回环地址控制网关；控制网关通过 `127.0.0.1:8766` 调用 FER+，不直接暴露情绪服务或家庭公网 IP。
 
 ## 首次创建
 
@@ -24,7 +24,7 @@ sudo systemctl enable --now visual-companion-cloudflared
 
 `config.yml.example` 保留给需要本地管理凭据文件的部署方式；两种方式不要同时启用。
 
-边缘 Worker 位于 `gateway/`，配置 VPC Service binding 和 `anima.veyralux.org` 自定义域：
+边缘 Worker 位于 `gateway/`，配置 VPC Service binding 和 `robot.veyralux.org` 自定义域：
 
 ```bash
 cd tools/cloudflare/gateway
@@ -35,7 +35,7 @@ npm run deploy
 
 ## 微信侧
 
-在微信公众平台的“开发管理 → 开发设置 → 服务器域名”中，将 `https://anima.veyralux.org` 配置为 `request` 与 `downloadFile` 合法域名。正式版不启用“不校验合法域名”。
+在微信公众平台的“开发管理 → 开发设置 → 服务器域名”中，将 `https://robot.veyralux.org` 配置为 `request` 与 `downloadFile` 合法域名。正式版不启用“不校验合法域名”。
 
 ## 安全边界
 
