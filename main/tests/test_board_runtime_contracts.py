@@ -26,7 +26,7 @@ def test_deployment_verifier_covers_local_public_and_vox_invariants() -> None:
 
     for endpoint in ("/vision-health", "/asr-health", "voice=matcha_baker", "voice=voxcpm_board"):
         assert endpoint in script
-    assert "https://anima.veyralux.org" in script
+    assert "https://robot.veyralux.org" in script
     assert "pgrep -x voxcpm-server" in script
     assert "sha256sum --check" in script
 

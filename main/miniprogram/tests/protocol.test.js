@@ -28,7 +28,7 @@ test("控制计划只保留已知动作并限制语速", () => {
 test("设备配置拒绝路径和非法端口", () => {
   assert.deepEqual(normalizeDeviceConfig({ mode: "local", host: "http://192.168.5.21", controlPort: 8765 }), {
     mode: "local",
-    publicUrl: "https://anima.veyralux.org",
+    publicUrl: "https://robot.veyralux.org",
     host: "192.168.5.21",
     controlPort: 8765,
     token: "",
@@ -37,7 +37,7 @@ test("设备配置拒绝路径和非法端口", () => {
   assert.throws(() => normalizeDeviceConfig({ host: "192.168.5.999" }), /设备地址/);
   assert.throws(() => normalizeDeviceConfig({ host: "192.168.5.21?redirect=evil" }), /设备地址/);
   assert.throws(() => normalizeDeviceConfig({ controlPort: 70000 }), /设备端口/);
-  assert.throws(() => normalizeDeviceConfig({ publicUrl: "http://anima.veyralux.org" }), /HTTPS/);
+  assert.throws(() => normalizeDeviceConfig({ publicUrl: "http://robot.veyralux.org" }), /HTTPS/);
   assert.equal(normalizeDeviceConfig({}).mode, "public");
 });
 
@@ -56,7 +56,7 @@ test("旧版局域网配置迁移后恢复公网默认链路", () => {
   try {
     const config = loadDeviceConfig();
     assert.equal(config.mode, "public");
-    assert.equal(config.publicUrl, "https://anima.veyralux.org");
+    assert.equal(config.publicUrl, "https://robot.veyralux.org");
     assert.equal(writes.get(STORAGE_KEY).mode, "public");
   } finally {
     global.wx = savedWx;

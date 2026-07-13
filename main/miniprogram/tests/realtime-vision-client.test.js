@@ -20,7 +20,7 @@ test("小游戏连续视觉复用同源 WebSocket 并接收板端结果", async 
   const socket = createSocket();
   const wxApi = {
     connectSocket(options) {
-      assert.equal(options.url, "wss://anima.veyralux.org/realtime");
+      assert.equal(options.url, "wss://robot.veyralux.org/realtime");
       assert.equal(options.header["X-Device-Token"], "test-token");
       queueMicrotask(() => socket.handlers.open());
       return socket;
@@ -28,7 +28,7 @@ test("小游戏连续视觉复用同源 WebSocket 并接收板端结果", async 
   };
   const api = {
     config: () => ({ token: "test-token" }),
-    websocketUrl: () => "wss://anima.veyralux.org/realtime",
+    websocketUrl: () => "wss://robot.veyralux.org/realtime",
   };
   const { RealtimeVisionClient } = require("../core/realtime-vision-client");
   const client = new RealtimeVisionClient({ api, wxApi, timeoutMs: 100 });
