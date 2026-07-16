@@ -1,6 +1,6 @@
 export function SignalPresence() {
   return (
-    <div class="hero__signal" aria-hidden="true">
+    <div class="hero__signal" aria-hidden="true" data-motion-layer="hero-signal" data-motion-behavior="scrub" data-motion-scope="hero">
       <div class="signal-presence">
         <span class="signal-presence__orbit signal-presence__orbit--outer" />
         <span class="signal-presence__orbit signal-presence__orbit--middle" />

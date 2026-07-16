@@ -11,8 +11,7 @@ export function SiteFooter() {
         <small>团队：王文康 · 夏鑫祥</small>
       </div>
       <div class="site-footer__links">
-        <ExternalLink href={SITE_LINKS.v1}>V1 / Robot</ExternalLink>
-        <span title="V2 尚未公开">V2 / Anima · 开发中</span>
+        <a href="#products">Anima / v0.0.1</a>
         <ExternalLink href={SITE_LINKS.github}>GitHub</ExternalLink>
         <a href="/THIRD_PARTY_NOTICES.txt">第三方许可</a>
       </div>

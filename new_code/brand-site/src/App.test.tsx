@@ -7,15 +7,13 @@ import { describe, expect, it } from "vitest";
 import { App } from "./App";
 
 describe("VeyraLux brand site", () => {
-  it("renders the brand promise and both product entry points", () => {
-    render(<App />);
+  it("renders the Anima v0.0.1 promise without legacy product references", () => {
+    const { container } = render(<App />);
 
     expect(screen.getByRole("heading", { level: 1, name: /让陪伴/ })).toBeTruthy();
-    expect(screen.getAllByRole("link", { name: /进入 V1/ })[0]?.getAttribute("href")).toBe(
-      "https://robot.veyralux.org",
-    );
-    expect(screen.queryByRole("link", { name: /探索 V2/ })).toBeNull();
-    expect(screen.getByLabelText("Anima V2 尚未公开")).toBeTruthy();
+    expect(screen.getByRole("link", { name: /认识 Anima · v0\.0\.1/ }).getAttribute("href")).toBe("#products");
+    expect(screen.getByLabelText("Anima v0.0.1 尚未公开")).toBeTruthy();
+    expect(container.textContent).toContain("VERSION 0.0.1");
   });
 
   it("provides keyboard-first navigation and descriptive product imagery", () => {
@@ -24,7 +22,8 @@ describe("VeyraLux brand site", () => {
     expect(screen.getByRole("link", { name: "跳到主要内容" }).getAttribute("href")).toBe("#main-content");
     expect(screen.getByRole("navigation", { name: "主要导航" })).toBeTruthy();
     expect(screen.getByAltText(/ELF 2.*开发板/)).toBeTruthy();
-    expect(screen.getByAltText(/Anima V2/)).toBeTruthy();
+    expect(screen.getByAltText(/^Anima v0\.0\.1 桌面端/)).toBeTruthy();
+    expect(document.querySelector('[data-motion-layer="living-field"]')).toBeTruthy();
     expect(screen.getByText(/王文康/)).toBeTruthy();
     expect(screen.getAllByRole("link", { name: /GitHub/ })[0]?.getAttribute("href")).toContain("github.com");
   });

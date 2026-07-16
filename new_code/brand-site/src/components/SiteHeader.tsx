@@ -1,8 +1,7 @@
 import { useEffect } from "preact/hooks";
 
-import { NAV_ITEMS, SITE_LINKS, type SectionId } from "../site-config";
+import { NAV_ITEMS, type SectionId } from "../site-config";
 import { Brand } from "./Brand";
-import { ExternalLink } from "./ExternalLink";
 
 type SiteHeaderProps = {
   menuOpen: boolean;
@@ -39,9 +38,12 @@ export function SiteHeader({ menuOpen, setMenuOpen, jumpTo }: SiteHeaderProps) {
       </nav>
 
       <div class="site-header__actions">
-        <ExternalLink class="header-entry" href={SITE_LINKS.v1} ariaLabel="进入 V1 草莓兔兔，打开新窗口">
-          进入 V1 <span aria-hidden="true">↗</span>
-        </ExternalLink>
+        <a class="header-entry" href="#products" onClick={(event) => {
+          event.preventDefault();
+          jumpTo("products");
+        }}>
+          Anima v0.0.1 <span aria-hidden="true">↓</span>
+        </a>
         <button
           class="menu-toggle"
           type="button"

@@ -1,13 +1,12 @@
-import { ExternalLink } from "../components/ExternalLink";
 import { SignalPresence } from "../components/SignalPresence";
-import { SITE_LINKS, type SectionId } from "../site-config";
+import type { SectionId } from "../site-config";
 
 export function Hero({ jumpTo }: { jumpTo: (id: SectionId) => void }) {
   return (
     <section class="hero" id="top" aria-labelledby="hero-title">
-      <div class="hero__aura hero__aura--rose" aria-hidden="true" />
+      <div class="hero__aura hero__aura--rose" aria-hidden="true" data-motion-layer="hero-aura" data-motion-behavior="scrub" data-motion-scope="hero" />
       <div class="hero__aura hero__aura--violet" aria-hidden="true" />
-      <div class="hero__content">
+      <div class="hero__content" data-motion-layer="hero-copy" data-motion-behavior="scrub" data-motion-scope="hero">
         <p class="hero__brandline">VeyraLux 微睿霖光 · 多模态虚拟陪伴</p>
         <h1 id="hero-title" class="hero__title">
           <span class="hero__line"><span>让陪伴</span></span>
@@ -18,18 +17,21 @@ export function Hero({ jumpTo }: { jumpTo: (id: SectionId) => void }) {
           让每一次回应更及时，也更懂此刻的你。
         </p>
         <div class="hero__actions">
-          <ExternalLink
+          <a
             class="button button--primary"
-            href={SITE_LINKS.v1}
-            ariaLabel="进入 V1 草莓兔兔，打开新窗口"
+            href="#products"
+            onClick={(event) => {
+              event.preventDefault();
+              jumpTo("products");
+            }}
           >
-            进入 V1 · 草莓兔兔 <span aria-hidden="true">↗</span>
-          </ExternalLink>
-          <a class="button button--quiet" href="#products" onClick={(event) => {
+            认识 Anima · v0.0.1 <span aria-hidden="true">↓</span>
+          </a>
+          <a class="button button--quiet" href="#pipeline" onClick={(event) => {
             event.preventDefault();
-            jumpTo("products");
+            jumpTo("pipeline");
           }}>
-            了解 V2 · Anima <span aria-hidden="true">↓</span>
+            查看实时链路 <span aria-hidden="true">↓</span>
           </a>
         </div>
         <div class="hero__proof" aria-label="系统特征">

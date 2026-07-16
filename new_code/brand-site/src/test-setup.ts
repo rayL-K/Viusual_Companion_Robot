@@ -27,3 +27,8 @@ Object.defineProperty(window, "ResizeObserver", {
   configurable: true,
   value: ResizeObserverStub,
 });
+
+Object.defineProperty(window.HTMLCanvasElement.prototype, "getContext", {
+  configurable: true,
+  value: () => null,
+});

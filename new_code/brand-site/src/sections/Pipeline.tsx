@@ -9,27 +9,29 @@ const stages = [
 export function Pipeline() {
   return (
     <section class="pipeline section" id="pipeline" aria-labelledby="pipeline-title">
-      <header class="section-heading" data-reveal>
-        <p>一条回应，五次接力</p>
-        <h2 id="pipeline-title">把“等待感”拆到每一个环节。</h2>
-        <span>语义先后相依，计算可以并行准备。V2 让模块保持独立，并以可取消的事件流衔接数据。</span>
-      </header>
+      <div class="pipeline__scene">
+        <header class="section-heading" data-motion="pipeline-heading">
+          <p>一条回应，五次接力</p>
+          <h2 id="pipeline-title">把“等待感”拆到每一个环节。</h2>
+          <span>语义先后相依，计算可以并行准备。Anima v0.0.1 让模块保持独立，并以可取消的事件流衔接数据。</span>
+        </header>
 
-      <div class="signal-flow">
-        <div class="signal-flow__rail" aria-hidden="true"><span class="signal-flow__progress" /></div>
-        <ol class="signal-flow__list" aria-label="多模态交互处理流程">
-          {stages.map((stage, index) => (
-            <li class="signal-flow__stage">
-              <div class="signal-flow__node"><span>{index + 1}</span></div>
-              <div><h3>{stage.name}</h3><p>{stage.detail}</p></div>
-            </li>
-          ))}
-        </ol>
-      </div>
+        <div class="signal-flow" data-motion-layer="pipeline-flow" data-motion-behavior="scrub" data-motion-scope="pipeline">
+          <div class="signal-flow__rail" aria-hidden="true"><span class="signal-flow__progress" /></div>
+          <ol class="signal-flow__list" aria-label="多模态交互处理流程">
+            {stages.map((stage, index) => (
+              <li class="signal-flow__stage" data-stage={index}>
+                <div class="signal-flow__node"><span>{String(index + 1).padStart(2, "0")}</span></div>
+                <div><h3>{stage.name}</h3><p>{stage.detail}</p></div>
+              </li>
+            ))}
+          </ol>
+        </div>
 
-      <div class="pipeline__statement" data-reveal>
-        <span>不是把云端能力简单搬上开发板。</span>
-        <strong>而是围绕端侧约束重新设计对话链路。</strong>
+        <div class="pipeline__statement" data-motion="pipeline-statement">
+          <span>不是把云端能力简单搬上开发板。</span>
+          <strong>而是围绕端侧约束重新设计对话链路。</strong>
+        </div>
       </div>
     </section>
   );
