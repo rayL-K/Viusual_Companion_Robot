@@ -22,6 +22,7 @@ def test_uvicorn_transport_limits_bound_pre_application_websocket_memory() -> No
 
     options = _server_options(settings)  # type: ignore[arg-type]
 
+    assert options["ws"] == "websockets-sansio"
     assert options["ws_max_size"] == WS_MAX_MESSAGE_BYTES == 1_600_000
     assert options["ws_max_queue"] == 2
     assert options["ws_per_message_deflate"] is False

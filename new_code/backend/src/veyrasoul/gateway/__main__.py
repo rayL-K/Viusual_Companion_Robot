@@ -49,7 +49,9 @@ def _server_options(settings: RuntimeSettings) -> dict[str, object]:
         "host": settings.host,
         "port": settings.port,
         "log_level": settings.log_level,
-        "ws": "websockets",
+        # Uvicorn's SansIO integration supports current websockets releases;
+        # the legacy implementation imports websockets.legacy, removed in 16.x.
+        "ws": "websockets-sansio",
         "ws_max_size": WS_MAX_MESSAGE_BYTES,
         "ws_max_queue": WS_MAX_QUEUE,
         "ws_ping_interval": 20.0,
