@@ -2,8 +2,20 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AudioSegmentQueue, type PlayableAudio } from "../audio/AudioSegmentQueue";
 import { connectionPhase } from "../state/session";
-import { BINARY_KIND_AUDIO, createBinaryFrame, type ServerEvent } from "./protocol";
-import { RealtimeClient, realtimeUrl } from "./RealtimeClient";
+import {
+  BINARY_KIND_AUDIO,
+  BINARY_KIND_JPEG,
+  BINARY_KIND_PCM16,
+  createBinaryFrame,
+  parseBinaryFrame,
+  type ServerEvent,
+} from "./protocol";
+import { DEFAULT_REALTIME_BACKPRESSURE, type RealtimeBackpressureConfig } from "./backpressure";
+import {
+  RealtimeClient,
+  realtimeUrl,
+  type OutboundTransportStatus,
+} from "./RealtimeClient";
 
 class FakeWebSocket {
   static readonly CONNECTING = 0;
@@ -14,14 +26,18 @@ class FakeWebSocket {
 
   readyState = FakeWebSocket.CONNECTING;
   binaryType = "blob";
+  bufferedAmount = 0;
   sent: unknown[] = [];
-  private listeners = new Map<string, Array<(event: { data?: unknown }) => void>>();
+  private listeners = new Map<string, Array<(event: { data?: unknown; code?: number }) => void>>();
 
   constructor(readonly url: string) {
     FakeWebSocket.instances.push(this);
   }
 
-  addEventListener(type: string, handler: (event: { data?: unknown }) => void): void {
+  addEventListener(
+    type: string,
+    handler: (event: { data?: unknown; code?: number }) => void,
+  ): void {
     const handlers = this.listeners.get(type) ?? [];
     handlers.push(handler);
     this.listeners.set(type, handlers);
@@ -31,14 +47,14 @@ class FakeWebSocket {
     this.sent.push(data);
   }
 
-  close(_code?: number, _reason?: string): void {
+  close(code = 1000, _reason?: string): void {
     this.readyState = FakeWebSocket.CLOSED;
-    this.dispatch("close");
+    this.dispatch("close", { code });
   }
 
-  serverClose(): void {
+  serverClose(code = 1006): void {
     this.readyState = FakeWebSocket.CLOSED;
-    this.dispatch("close");
+    this.dispatch("close", { code });
   }
 
   open(): void {
@@ -47,11 +63,14 @@ class FakeWebSocket {
   }
 
   message(data: unknown): void {
-    this.dispatch("message", data);
+    this.dispatch("message", { data });
   }
 
-  private dispatch(type: string, data?: unknown): void {
-    for (const handler of this.listeners.get(type) ?? []) handler({ data });
+  private dispatch(
+    type: string,
+    event: { data?: unknown; code?: number } = {},
+  ): void {
+    for (const handler of this.listeners.get(type) ?? []) handler(event);
   }
 }
 
@@ -142,6 +161,27 @@ describe("RealtimeClient reply generations", () => {
 });
 
 describe("RealtimeClient reconnect lifecycle", () => {
+  it("sends a heartbeat every 25 seconds only while the socket is open", async () => {
+    vi.useFakeTimers();
+    const { client, socket } = connectedClient();
+    expect(controlEvents(socket).map((event) => event.type)).toEqual(["session.hello"]);
+
+    await vi.advanceTimersByTimeAsync(24_999);
+    expect(controlEvents(socket).map((event) => event.type)).toEqual(["session.hello"]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(controlEvents(socket).at(-1)).toEqual(expect.objectContaining({
+      v: 2,
+      type: "session.heartbeat",
+      payload: {},
+    }));
+
+    socket.serverClose();
+    const countAfterClose = socket.sent.length;
+    await vi.advanceTimersByTimeAsync(24_999);
+    expect(socket.sent).toHaveLength(countAfterClose);
+    client.disconnect();
+  });
+
   it("reconnects with exponential backoff and resets it after open", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("WebSocket", FakeWebSocket);
@@ -187,32 +227,150 @@ describe("RealtimeClient reconnect lifecycle", () => {
     expect(connectionPhase.value).toBe("offline");
     expect(FakeWebSocket.instances).toHaveLength(2);
   });
+
+  it("refreshes admission before reconnecting after a 4401 close", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const refreshAdmission = vi.fn(async () => undefined);
+    const client = new RealtimeClient(
+      "ws://test/v2/realtime",
+      undefined,
+      undefined,
+      refreshAdmission,
+    );
+    client.connect();
+    const first = requireSocket(0);
+
+    first.serverClose(4401);
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(refreshAdmission).toHaveBeenCalledTimes(1);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    client.disconnect();
+  });
+});
+
+describe("RealtimeClient outbound backpressure", () => {
+  it("keeps control sends immediate and retains only the latest delayed video frame", async () => {
+    vi.useFakeTimers();
+    const config = testBackpressure();
+    const { client, socket } = connectedClient(undefined, config);
+    socket.bufferedAmount = 8_000;
+
+    expect(client.sendBinary(BINARY_KIND_JPEG, Uint8Array.of(1).buffer)).toBe(true);
+    expect(client.sendBinary(BINARY_KIND_JPEG, Uint8Array.of(2).buffer)).toBe(true);
+    expect(binaryFrames(socket)).toHaveLength(0);
+
+    expect(client.send("turn.cancel", {})).toBe(true);
+    expect(JSON.parse(String(socket.sent.at(-1))).type).toBe("turn.cancel");
+
+    socket.bufferedAmount = 0;
+    await vi.advanceTimersByTimeAsync(config.drainPollIntervalMs);
+    const frames = binaryFrames(socket);
+    expect(frames).toHaveLength(1);
+    expect(frames[0]?.kind).toBe(BINARY_KIND_JPEG);
+    expect([...new Uint8Array(frames[0]!.payload)]).toEqual([2]);
+    client.disconnect();
+  });
+
+  it("caps PCM backlog and emits one congestion transition per episode", async () => {
+    vi.useFakeTimers();
+    const config = testBackpressure();
+    const { client, socket } = connectedClient(undefined, config);
+    const statuses: OutboundTransportStatus[] = [];
+    client.onTransportStatus((status) => statuses.push(status));
+    socket.bufferedAmount = 5_000;
+    const pcm = new ArrayBuffer(640);
+
+    expect(client.sendBinary(BINARY_KIND_PCM16, pcm)).toBe(false);
+    expect(client.sendBinary(BINARY_KIND_PCM16, pcm)).toBe(false);
+    expect(client.sendBinary(BINARY_KIND_PCM16, pcm)).toBe(false);
+    expect(statuses).toEqual([expect.objectContaining({
+      congested: true,
+      reason: "pcm-backlog",
+      droppedPcmFrames: 1,
+    })]);
+    expect(client.send("turn.cancel", {})).toBe(true);
+    expect(JSON.parse(String(socket.sent.at(-1))).type).toBe("turn.cancel");
+
+    socket.bufferedAmount = 0;
+    await vi.advanceTimersByTimeAsync(config.drainPollIntervalMs);
+    expect(statuses).toHaveLength(2);
+    expect(statuses[1]).toEqual(expect.objectContaining({
+      congested: false,
+      droppedPcmFrames: 3,
+    }));
+    expect(client.sendBinary(BINARY_KIND_PCM16, pcm)).toBe(true);
+    expect(binaryFrames(socket).at(-1)?.kind).toBe(BINARY_KIND_PCM16);
+    client.disconnect();
+  });
+
+  it("drops pending media and clears congestion across reconnects", async () => {
+    vi.useFakeTimers();
+    const config = testBackpressure();
+    const { client, socket } = connectedClient(undefined, config);
+    const statuses: OutboundTransportStatus[] = [];
+    client.onTransportStatus((status) => statuses.push(status));
+    socket.bufferedAmount = 8_000;
+    client.sendBinary(BINARY_KIND_JPEG, Uint8Array.of(7).buffer);
+    client.sendBinary(BINARY_KIND_PCM16, new ArrayBuffer(640));
+    socket.serverClose();
+
+    await vi.advanceTimersByTimeAsync(500);
+    const replacement = requireSocket(1);
+    replacement.open();
+    await vi.advanceTimersByTimeAsync(config.videoPendingMaxAgeMs + 100);
+    expect(binaryFrames(replacement)).toHaveLength(0);
+
+    replacement.bufferedAmount = 8_000;
+    client.sendBinary(BINARY_KIND_PCM16, new ArrayBuffer(640));
+    expect(statuses.filter((status) => status.congested)).toHaveLength(2);
+    client.disconnect();
+  });
 });
 
 describe("realtimeUrl", () => {
-  it("selects secure WebSocket and includes the persistent session id", () => {
-    expect(realtimeUrl(
-      { protocol: "https:", host: "anima.veyralux.org" },
-      "anon_12345678123412341234123456789abc",
-    )).toBe(
-      "wss://anima.veyralux.org/v2/realtime?session=anon_12345678123412341234123456789abc",
-    );
+  it("selects secure WebSocket without client-controlled identity parameters", () => {
+    expect(realtimeUrl({ protocol: "https:", host: "anima.veyralux.org" }))
+      .toBe("wss://anima.veyralux.org/v2/realtime");
   });
 
-  it("encodes the session query value at the URL boundary", () => {
-    expect(realtimeUrl({ protocol: "http:", host: "localhost:5174" }, "id:one/two"))
-      .toBe("ws://localhost:5174/v2/realtime?session=id%3Aone%2Ftwo");
+  it("uses plain WebSocket for a local HTTP origin", () => {
+    expect(realtimeUrl({ protocol: "http:", host: "localhost:5174" }))
+      .toBe("ws://localhost:5174/v2/realtime");
   });
 });
 
-function connectedClient(queue: AudioSegmentQueue): { client: RealtimeClient; socket: FakeWebSocket } {
+function connectedClient(
+  queue = new AudioSegmentQueue(() => playable(Promise.resolve())),
+  backpressure: RealtimeBackpressureConfig = DEFAULT_REALTIME_BACKPRESSURE,
+): { client: RealtimeClient; socket: FakeWebSocket } {
   vi.stubGlobal("WebSocket", FakeWebSocket);
-  const client = new RealtimeClient("ws://test/v2/realtime", queue);
+  const client = new RealtimeClient("ws://test/v2/realtime", queue, backpressure);
   client.connect();
   const socket = FakeWebSocket.instances[0];
   if (!socket) throw new Error("测试 WebSocket 未创建");
   socket.open();
   return { client, socket };
+}
+
+function binaryFrames(socket: FakeWebSocket) {
+  return socket.sent
+    .filter((value): value is ArrayBuffer => value instanceof ArrayBuffer)
+    .map((value) => parseBinaryFrame(value));
+}
+
+function controlEvents(socket: FakeWebSocket): Array<Record<string, unknown>> {
+  return socket.sent
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => JSON.parse(value) as Record<string, unknown>);
+}
+
+function testBackpressure(): RealtimeBackpressureConfig {
+  return {
+    ...DEFAULT_REALTIME_BACKPRESSURE,
+    drainPollIntervalMs: 10,
+  };
 }
 
 function requireSocket(index: number): FakeWebSocket {

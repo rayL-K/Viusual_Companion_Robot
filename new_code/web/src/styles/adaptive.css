@@ -17,6 +17,30 @@
   .composer { grid-template-columns: 48px minmax(0, 1fr) 66px; }
 }
 
+/* 竖屏平板的可视高度足够放下通话界面；改为上下叙事以避免角色被窄左栏压缩。 */
+@media (min-width: 700px) and (max-width: 1100px) and (orientation: portrait) {
+  .experience {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(330px, 52%) minmax(0, 48%);
+    gap: 0;
+  }
+  .stage-region { border-radius: 26px; }
+  .presence {
+    width: min(82%, 620px);
+    height: 110%;
+    top: 54%;
+  }
+  .conversation-rail {
+    gap: 10px;
+    padding: 10px 2px 0;
+  }
+  .dialogue {
+    align-self: stretch;
+    max-height: none;
+  }
+  .start-call { width: min(320px, 100%); }
+}
+
 /* 手机竖屏：角色与交互上下分区，长回复只在气泡内部滚动。 */
 @media (max-width: 699px) and (orientation: portrait) {
   .topbar {

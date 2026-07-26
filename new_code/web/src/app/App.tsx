@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 
 import { MediaSession } from "../core/media/MediaSession";
+import { ensureRealtimeAdmission } from "../core/realtime/admission";
 import { RealtimeClient, realtimeUrl } from "../core/realtime/RealtimeClient";
 import { parseAvatarIntentPayload } from "../core/realtime/protocol";
 import {
@@ -21,6 +22,9 @@ import { AnimaSettingsPanel } from "../features/settings/AnimaSettingsPanel";
 
 type DrawerView = "overview" | "settings";
 
+export const PRODUCT_NAME = "Anima";
+export const PRODUCT_VERSION = "v0.0.1";
+
 export function App() {
   const [draft, setDraft] = useState("");
   const [callActive, setCallActive] = useState(false);
@@ -32,7 +36,10 @@ export function App() {
   const [drawerView, setDrawerView] = useState<DrawerView>("overview");
   const videoRef = useRef<HTMLVideoElement>(null);
   const callStartedAtRef = useRef(0);
-  const client = useMemo(() => new RealtimeClient(realtimeUrl()), []);
+  const client = useMemo(
+    () => new RealtimeClient(realtimeUrl(), undefined, undefined, ensureRealtimeAdmission),
+    [],
+  );
   const media = useMemo(() => new MediaSession(client), [client]);
 
   useEffect(() => {
@@ -57,8 +64,18 @@ export function App() {
       if (event.type === "asr.final") transcript.value = String(event.payload.text ?? "");
       if (event.type === "perception.snapshot") visualSummary.value = String(event.payload.summary ?? "");
     });
-    client.connect();
+    let active = true;
+    void ensureRealtimeAdmission()
+      .then(() => {
+        if (active) client.connect();
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        connectionPhase.value = "error";
+        setMediaError(error instanceof Error ? error.message : "连接校验暂时失败，请刷新重试");
+      });
     return () => {
+      active = false;
       removeHandler();
       media.stop(videoRef.current);
       client.disconnect();
@@ -125,8 +142,8 @@ export function App() {
     <main class={`shell ${callActive ? "shell--in-call" : "shell--idle"}`}>
       <header class="topbar">
         <div class="brand">
-          <span class="brand__mark">V</span>
-          <div><strong>草莓兔兔</strong><small>VeyraSoul · living companion</small></div>
+          <span class="brand__mark">A</span>
+          <div><strong>{PRODUCT_NAME}</strong><small>{PRODUCT_VERSION} · multimodal companion</small></div>
         </div>
         <div class="topbar__actions">
           {callActive && <span class="call-duration"><i />{formatDuration(callSeconds)}</span>}
@@ -147,7 +164,7 @@ export function App() {
 
         <section class="conversation-rail" aria-label="陪伴对话">
           <section class="dialogue" aria-live="polite">
-            <div class="dialogue__identity"><span>草莓兔兔</span><small>与你同在</small></div>
+            <div class="dialogue__identity"><span>{PRODUCT_NAME}</span><small>{PRODUCT_VERSION} · 与你同在</small></div>
             <p>{assistantText.value}</p>
           </section>
 
@@ -204,7 +221,7 @@ export function App() {
           ) : (
             <>
               <article class="sense-card"><span>视觉上下文</span><p>{visualSummary.value}</p></article>
-              <article class="sense-card"><span>数据边界</span><p>当前是匿名隔离空间；它提供数据分区，不等同于账号认证。V2 仍未部署。</p></article>
+              <article class="sense-card"><span>数据边界</span><p>当前是匿名隔离空间，用于区分本次会话数据；账号体系与持久身份认证将在启用后单独标示。</p></article>
               <div class="drawer__controls">
                 <button type="button" onClick={toggleCamera} disabled={!callActive}>{cameraEnabled ? "关闭摄像头" : "打开摄像头"}</button>
                 <button type="button" onClick={toggleMicrophone} disabled={!callActive}>{microphoneEnabled ? "关闭麦克风" : "打开麦克风"}</button>
@@ -223,11 +240,11 @@ function parseReplyPhase(value: unknown): typeof replyPhase.value {
   return value === "listening" || value === "thinking" || value === "speaking" ? value : "idle";
 }
 
-function connectionLabel(phase: typeof connectionPhase.value): string {
-  if (phase === "online") return "ELF2 在线";
-  if (phase === "offline") return "ELF2 离线";
-  if (phase === "error") return "连接异常";
-  return "正在连接";
+export function connectionLabel(phase: typeof connectionPhase.value): string {
+  if (phase === "online") return "服务节点已连接";
+  if (phase === "offline") return "服务节点暂不可用";
+  if (phase === "error") return "服务节点连接异常";
+  return "正在接入服务节点";
 }
 
 function formatDuration(seconds: number): string {

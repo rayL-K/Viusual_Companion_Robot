@@ -46,7 +46,7 @@ export function AvatarStage({ phase, intent }: AvatarStageProps) {
   useEffect(() => effect(() => controllerRef.current?.setAudioRms(speechAudioRms.value)), []);
 
   return (
-    <section class="avatar-stage" aria-label="Live2D 角色舞台">
+    <section class="avatar-stage" aria-label="Anima 角色舞台">
       <div class="stage-light stage-light--one" />
       <div class="stage-light stage-light--two" />
       <div
@@ -54,7 +54,7 @@ export function AvatarStage({ phase, intent }: AvatarStageProps) {
         class={`presence presence--${stageState}`}
         data-phase={phase.value}
         tabIndex={0}
-        aria-label="与草莓兔兔互动：可用鼠标或触摸轻触、按住或抚摸角色身体"
+        aria-label="与 Anima 互动：可用鼠标或触摸轻触、按住或抚摸角色身体"
         onKeyDown={(event) => {
           if (event.key !== "Enter" && event.key !== " ") return;
           event.preventDefault();

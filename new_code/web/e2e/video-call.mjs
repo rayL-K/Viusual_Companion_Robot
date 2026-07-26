@@ -6,13 +6,13 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const v2Root = resolve(webRoot, "..");
-const backendRoot = resolve(v2Root, "backend");
+const productRoot = resolve(webRoot, "..");
+const backendRoot = resolve(productRoot, "backend");
 const origin = "http://127.0.0.1:8875";
 const python = process.env.PYTHON || (process.platform === "win32" ? "python" : "python3");
 const server = spawn(python, ["-m", "veyrasoul.gateway.demo"], {
   cwd: backendRoot,
-  env: { ...process.env, VEYRASOUL_E2E_PORT: "8875" },
+  env: { ...process.env, ANIMA_E2E_PORT: "8875" },
   stdio: ["ignore", "pipe", "pipe"],
 });
 let serverLog = "";
@@ -45,13 +45,13 @@ try {
   for (const viewport of viewportCases) {
     results[viewport.label] = await verifyViewport(browser, viewport);
   }
-  const artifact = resolve(v2Root, "artifacts", "e2e-local.json");
+  const artifact = resolve(productRoot, "artifacts", "e2e-local.json");
   mkdirSync(dirname(artifact), { recursive: true });
   writeFileSync(
     artifact,
     `${JSON.stringify({ checkedAt: new Date().toISOString(), viewports: results }, null, 2)}\n`,
   );
-  process.stdout.write(`VeyraSoul local browser E2E passed: ${artifact}\n`);
+  process.stdout.write(`Anima local browser E2E passed: ${artifact}\n`);
 } catch (error) {
   process.stderr.write(`${error?.stack || error}\n--- demo gateway ---\n${serverLog}\n`);
   process.exitCode = 1;
@@ -73,7 +73,7 @@ async function verifyViewport(browserInstance, options) {
   const pageErrors = [];
   let activePageSocket = null;
   let websocketConnections = 0;
-  await page.routeWebSocket(/\/v2\/realtime\?/, (socket) => {
+  await page.routeWebSocket(/\/v2\/realtime(?:\?|$)/, (socket) => {
     websocketConnections += 1;
     activePageSocket = socket;
     socket.connectToServer();
