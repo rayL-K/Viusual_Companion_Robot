@@ -24,7 +24,7 @@ require_root() {
 
 require_commands() {
   local name
-  for name in chown chmod cp find getent groupadd id install python3 readlink rm systemctl useradd; do
+  for name in chown chmod cp find getent groupadd id install python3 readlink rm runuser stat systemctl useradd; do
     command -v "${name}" >/dev/null 2>&1 || fail "缺少命令：${name}"
   done
 }
@@ -59,6 +59,34 @@ verify_root_owned_tree() {
   # check to non-symlinks while still requiring every entry to be root-owned.
   violation="$(find "${path}" -xdev \( ! -user root -o \( ! -type l -a -perm /022 \) \) -print -quit)"
   [[ -z "${violation}" ]] || fail "目录必须为 root 所有且不可 group/other 写：${violation}"
+}
+
+verify_runtime_imports() {
+  runuser -u anima-candidate -- "${RUNTIME_ROOT}/bin/python" -I - <<'PY'
+import importlib
+import pathlib
+import sys
+
+prefix = pathlib.Path(sys.prefix).resolve()
+for name in (
+    "fastapi",
+    "httpx",
+    "numpy",
+    "sherpa_onnx",
+    "uvicorn",
+    "websockets",
+    "websockets.exceptions",
+):
+    module = importlib.import_module(name)
+    module_file = pathlib.Path(module.__file__).resolve()
+    if prefix != module_file and prefix not in module_file.parents:
+        raise SystemExit(f"{name} loaded outside shared runtime: {module_file}")
+
+from uvicorn.config import WS_PROTOCOLS
+
+if "websockets-sansio" not in WS_PROTOCOLS:
+    raise SystemExit("uvicorn runtime does not expose websockets-sansio")
+PY
 }
 
 install_control_plane() {
@@ -104,8 +132,8 @@ prepare_layout() {
 
   [[ -d "${MODELS_ROOT}" ]] || fail "缺少模型目录：${MODELS_ROOT}"
   require_regular_tree "${MODELS_ROOT}"
-  chown -R root:root "${MODELS_ROOT}"
-  chmod -R go-w "${MODELS_ROOT}"
+  find "${MODELS_ROOT}" -xdev -type d -exec chown root:root {} + -exec chmod 0755 {} +
+  find "${MODELS_ROOT}" -xdev -type f -exec chown root:root {} + -exec chmod 0644 {} +
 
   if [[ ! -d "${RUNTIME_ROOT}" ]]; then
     python3 -m venv "${RUNTIME_ROOT}"
@@ -116,6 +144,7 @@ prepare_layout() {
   find "${RUNTIME_ROOT}" -xdev -type l -exec chown -h root:root {} +
   verify_root_owned_tree "${RUNTIME_ROOT}"
   [[ -x "${RUNTIME_ROOT}/bin/python" ]] || fail "共享 Python 不可执行"
+  verify_runtime_imports
 
   install -d -m 755 -o root -g root /opt/anima /opt/anima/current /opt/anima/candidate /opt/anima/runtime /opt/anima/models
   install -d -m 700 -o root -g root "${CONFIG_ROOT}" "${DEPLOY_STATE}"

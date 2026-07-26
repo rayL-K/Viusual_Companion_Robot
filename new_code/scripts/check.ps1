@@ -11,6 +11,31 @@ $ControlInstaller = Join-Path $Root "deploy\install-control-plane.sh"
 $ControlInstallerText = Get-Content -LiteralPath $ControlInstaller -Raw -Encoding UTF8
 $SystemdRoot = Join-Path $Root "deploy\systemd"
 
+$PythonCandidates = @()
+foreach ($CommandName in @("python", "python3")) {
+    $Command = Get-Command $CommandName -ErrorAction SilentlyContinue |
+        Where-Object CommandType -eq "Application" |
+        Select-Object -First 1
+    if ($Command) { $PythonCandidates += $Command.Source }
+}
+if ($env:LOCALAPPDATA) {
+    $PythonCandidates += Join-Path $env:LOCALAPPDATA "Programs\Python\Python312\python.exe"
+    $PythonCandidates += Join-Path $env:LOCALAPPDATA "Programs\Python\Python311\python.exe"
+    $PythonCandidates += Join-Path $env:LOCALAPPDATA "Programs\Python\Python310\python.exe"
+}
+$Python = $null
+foreach ($Candidate in ($PythonCandidates | Select-Object -Unique)) {
+    if (-not (Test-Path -LiteralPath $Candidate)) { continue }
+    & $Candidate -c "import sys; raise SystemExit(0 if (3, 10) <= sys.version_info[:2] < (3, 13) else 1)" 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        $Python = $Candidate
+        break
+    }
+}
+if (-not $Python) {
+    throw "A working Python 3.10-3.12 interpreter is required; Windows Store aliases are not accepted."
+}
+
 function Assert-Match {
     param(
         [Parameter(Mandatory = $true)][string]$Text,
@@ -56,6 +81,12 @@ Assert-Match -Text $DeployText -Pattern '(?s)activate_candidate\(\).*?HEALTHY_RE
 Assert-Match -Text $DeployText -Pattern 'restore_after_failed_activation' -Message "Activation failure must have an automatic restore path."
 Assert-Match -Text $DeployText -Pattern 'assert_release_path' -Message "Release and rollback paths must be confined to /home/wenkang/anima/releases."
 Assert-Match -Text $DeployText -Pattern 'verify_shared_runtime' -Message "Deployment must validate the shared ELF2 runtime."
+Assert-Match -Text $DeployText -Pattern 'verify_runtime_imports' -Message "Deployment must import-check the shared ELF2 runtime before candidate startup."
+Assert-Match -Text $DeployText -Pattern 'websockets\.exceptions' -Message "Deployment must detect an incomplete websockets installation."
+Assert-Match -Text $DeployText -Pattern '"websockets-sansio" not in WS_PROTOCOLS' -Message "Deployment must require Uvicorn SansIO WebSocket support."
+Assert-Match -Text $DeployText -Pattern 'verify_model_assets' -Message "Deployment must validate service-readable model assets."
+Assert-Match -Text $DeployText -Pattern 'resolve_release_link' -Message "Deployment must distinguish an absent release pointer from a canonical non-existent path."
+Assert-NoMatch -Text $DeployText -Pattern 'readlink -f "\$\{(?:CURRENT_LINK|CANDIDATE_LINK)\}"' -Message "Release pointers must always pass through resolve_release_link."
 Assert-Match -Text $DeployText -Pattern 'verify_control_plane' -Message "Every privileged action must validate the root-owned control plane."
 Assert-Match -Text $DeployText -Pattern 'SOURCE_ROOT="/home/wenkang/anima/source"' -Message "The deployer must use the fixed non-privileged source input."
 Assert-Match -Text $DeployText -Pattern 'CONTROL_ROOT="/opt/anima-control"' -Message "The deployer must use the fixed root-owned control bundle."
@@ -98,12 +129,19 @@ Assert-Match -Text $CandidateUnit -Pattern 'ANIMA_DATA_ROOT=/var/lib/anima-candi
 
 $TunnelUnit = Get-Content -LiteralPath (Join-Path $SystemdRoot "anima-cloudflared.service") -Raw -Encoding UTF8
 Assert-Match -Text $TunnelUnit -Pattern 'LoadCredential=anima-token:/etc/anima/tunnel-token' -Message "Tunnel token must be passed through a systemd credential."
-Assert-Match -Text $TunnelUnit -Pattern 'run --token-file \$\{CREDENTIALS_DIRECTORY\}/anima-token' -Message "Tunnel must read only the credential materialized by systemd."
+Assert-Match -Text $TunnelUnit -Pattern 'run --token-file /run/credentials/anima-cloudflared\.service/anima-token' -Message "Tunnel must read the credential from the systemd 249-compatible private credential directory."
 Assert-NoMatch -Text $TunnelUnit -Pattern '(?:^|\s)--url(?:\s|=)' -Message "Remote-config Tunnel must not override ingress with --url."
+Assert-Match -Text $DeployText -Pattern 'tunnel_ready' -Message "Deployment must wait for a stable Tunnel process instead of accepting a transient active state."
+Assert-Match -Text $DeployText -Pattern 'main_pid.*stable_pid' -Message "Tunnel stability checks must not span different cloudflared processes."
+Assert-Match -Text $DeployText -Pattern '\[\[ -s "\$\{path\}" \]\]' -Message "Private credential files must not be empty."
 
 Assert-Match -Text $ControlInstallerText -Pattern 'install -m 700 -o root -g root.*start-elf2\.sh' -Message "The one-time installer must create a root-only deployer."
 Assert-Match -Text $ControlInstallerText -Pattern '"/etc/systemd/system/\$\{unit\}"' -Message "Only the explicit one-time installer may write systemd units."
 Assert-Match -Text $ControlInstallerText -Pattern 'systemctl daemon-reload' -Message "The one-time installer must reload systemd after installing trusted units."
+Assert-Match -Text $ControlInstallerText -Pattern 'verify_runtime_imports' -Message "The one-time installer must reject an incomplete shared runtime."
+Assert-Match -Text $ControlInstallerText -Pattern 'runuser -u anima-candidate -- "\$\{RUNTIME_ROOT\}/bin/python" -I' -Message "Runtime imports must be verified with the isolated candidate UID."
+Assert-Match -Text $ControlInstallerText -Pattern 'chmod 0755' -Message "The installer must make model directories traversable by isolated service users."
+Assert-Match -Text $ControlInstallerText -Pattern 'chmod 0644' -Message "The installer must make model files readable by isolated service users."
 Assert-Match -Text $DeployText -Pattern 'releaseDigest' -Message "Health acceptance must bind the running process to the release digest."
 Assert-Match -Text $DeployText -Pattern 'payload\.get\("service"\) == "anima-gateway"' -Message "Health acceptance must require the Anima gateway identity."
 
@@ -120,9 +158,9 @@ Assert-NoMatch -Text $EnvTemplate -Pattern '(?m)^\s*(ANIMA_HOST|ANIMA_PORT|ANIMA
 
 Push-Location (Join-Path $Root "backend")
 try {
-    python -m pytest -q
+    & $Python -m pytest -q
     if ($LASTEXITCODE -ne 0) { throw "Backend tests failed." }
-    python scripts/benchmark_memory.py --output ..\artifacts\memory-benchmark.json
+    & $Python scripts/benchmark_memory.py --output ..\artifacts\memory-benchmark.json
     if ($LASTEXITCODE -ne 0) { throw "Memory benchmark failed." }
 }
 finally {

@@ -43,12 +43,15 @@ ELF2（Ubuntu 22.04 aarch64 / RK3588）目前作为 Anima 的边缘实时服务�
 ```bash
 sudo python3 -m venv /home/wenkang/anima/.venv
 sudo /home/wenkang/anima/.venv/bin/python -m pip install --upgrade pip
-sudo /home/wenkang/anima/.venv/bin/python -m pip install '.[gateway,models]'
+sudo /home/wenkang/anima/.venv/bin/python -m pip install \
+  '/home/wenkang/anima/source/backend[gateway,models]'
 sudo chown -R root:root /home/wenkang/anima/.venv
 sudo chmod -R go-w /home/wenkang/anima/.venv
 ```
 
-依赖升级是单独维护动作：先用 candidate 验证新旧 release 兼容，再更新共享 venv；代码 rollback 不会自动回滚依赖。
+不要使用裸 `sudo pip`：它可能写入系统 Python，而 systemd 实际运行的是上述共享 venv。安装器和日常发布器都会显式导入 `fastapi`、`httpx`、`numpy`、`sherpa_onnx`、`uvicorn`、`websockets.exceptions`，并确认模块来自共享 venv、Uvicorn 含 `websockets-sansio`，残缺运行时会在启动 candidate 前 fail-closed。
+
+依赖升级是单独维护动作：先用 candidate 验证新旧 release 兼容，再更新共享 venv；代码 rollback 不会自动回滚依赖。生产打包应固定已验收的 aarch64 wheelhouse 与 SHA-256 清单，不能在日常发布时联网解析宽范围依赖。
 
 ## 3. 构建并上传日常发布输入
 
@@ -86,7 +89,7 @@ rsync -a --delete \
 ssh -t anima-elf2 'sudo bash /home/wenkang/anima/source/deploy/install-control-plane.sh'
 ```
 
-安装器会：创建 `anima-gateway`、`anima-candidate`、`anima-tunnel` 三个无登录服务用户；建立 root-owned 控制面与目录；将共享模型/venv 收紧为 root-owned、group/other 不可写；安装空配置模板；执行 `systemctl daemon-reload`。它不会启动公网服务、不会填写密钥、不会迁移或删除用户数据。
+安装器会：创建 `anima-gateway`、`anima-candidate`、`anima-tunnel` 三个无登录服务用户；建立 root-owned 控制面与目录；将共享 venv 收紧为 root-owned、group/other 不可写；将模型目录/文件规范化为 root-owned 的 `0755/0644`，使隔离 UID 只能读取和遍历；执行运行时导入预检；安装空配置模板；执行 `systemctl daemon-reload`。它不会启动公网服务、不会填写密钥、不会迁移或删除用户数据。
 
 如果以后需要修改 systemd hardening 或发布器本身，重复这一**受信安装**步骤；不要通过 release 更新 unit。
 
@@ -113,7 +116,7 @@ sudoedit /etc/anima/tunnel-token
 
 candidate env 不放任何生产 API key、Turnstile key/secret、admission/HMAC secret 或生产路径。候选单元强制 `ANIMA_ADMISSION_REQUIRED=false`，因为它只在 loopback 上用于运行时/模型健康门。
 
-Tunnel token 只写入 `/etc/anima/tunnel-token`（root:root，0600）。`anima-cloudflared.service` 使用 systemd `LoadCredential=` 将其临时投递给独立的 `anima-tunnel` 进程，并以 `cloudflared tunnel … run --token-file …` 启动；token 不在进程参数、日志或 release 中。remote-config Tunnel 已配置 ingress 时不要添加 `--url` 覆盖控制面规则。
+Tunnel token 只写入 `/etc/anima/tunnel-token`（root:root，0600）。`anima-cloudflared.service` 使用 systemd `LoadCredential=` 将其临时投递到 `/run/credentials/anima-cloudflared.service/anima-token`，再由独立的 `anima-tunnel` 进程通过 `--token-file` 读取；兼容 ELF2 的 systemd 249，token 不在进程参数、日志或 release 中。发布器要求 Tunnel 连续通过多次进程存活检查，不会把短暂的 `activating` 状态误判为已上线。remote-config Tunnel 已配置 ingress 时不要添加 `--url` 覆盖控制面规则。
 
 ### 5.2 旧数据迁移
 

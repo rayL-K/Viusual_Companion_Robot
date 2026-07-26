@@ -25,6 +25,7 @@ readonly TUNNEL_UNIT="anima-cloudflared.service"
 readonly ACTIVE_URL="http://127.0.0.1:8875/v2/health"
 readonly CANDIDATE_URL="http://127.0.0.1:8876/v2/health"
 readonly HEALTH_ATTEMPTS="${ANIMA_HEALTH_ATTEMPTS:-90}"
+readonly TUNNEL_HEALTH_ATTEMPTS="${ANIMA_TUNNEL_HEALTH_ATTEMPTS:-30}"
 readonly MIN_AVAILABLE_MB="${ANIMA_MIN_AVAILABLE_MB:-1800}"
 
 INCOMING_PATH=""
@@ -70,7 +71,7 @@ require_root() {
 require_commands() {
   local command_name
   for command_name in awk basename chmod chown cmp cp curl date dirname find flock getent grep groupadd head id \
-    install journalctl ln mv readlink rm sed sha256sum sleep sort ss stat systemctl useradd wc xargs; do
+    install journalctl ln mv readlink rm runuser sed sha256sum sleep sort ss stat systemctl useradd wc xargs; do
     command -v "${command_name}" >/dev/null 2>&1 || fail "缺少命令：${command_name}"
   done
 }
@@ -131,6 +132,19 @@ assert_release_path() {
   esac
 }
 
+resolve_release_link() {
+  local link_path="$1"
+  if [[ ! -e "${link_path}" && ! -L "${link_path}" ]]; then
+    return 0
+  fi
+  [[ -L "${link_path}" ]] || fail "release 指针不是符号链接：${link_path}"
+  local target
+  target="$(readlink -f -- "${link_path}" 2>/dev/null || true)"
+  [[ -n "${target}" && -d "${target}" ]] || fail "release 指针已损坏：${link_path}"
+  assert_release_path "${target}"
+  printf '%s' "${target}"
+}
+
 require_service_accounts() {
   getent group anima-gateway >/dev/null 2>&1 || groupadd --system anima-gateway
   id -u anima-gateway >/dev/null 2>&1 || \
@@ -149,6 +163,7 @@ prepare_directories() {
   verify_secure_directory "${INSTALL_ROOT}" root
   verify_secure_directory "${RELEASES_ROOT}" root
   verify_secure_directory "${MODELS_ROOT}" root
+  verify_model_assets
   install -d -m 700 -o root -g root /etc/anima "${DEPLOY_STATE}"
   install -d -m 700 -o anima-gateway -g anima-gateway /var/lib/anima/memory /var/cache/anima /run/anima
   install -d -m 700 -o anima-candidate -g anima-candidate \
@@ -159,6 +174,7 @@ prepare_host() {
   require_commands
   verify_control_plane
   validate_positive_integer ANIMA_HEALTH_ATTEMPTS "${HEALTH_ATTEMPTS}"
+  validate_positive_integer ANIMA_TUNNEL_HEALTH_ATTEMPTS "${TUNNEL_HEALTH_ATTEMPTS}"
   validate_positive_integer ANIMA_MIN_AVAILABLE_MB "${MIN_AVAILABLE_MB}"
   require_service_accounts
   prepare_directories
@@ -168,6 +184,7 @@ require_private_file() {
   local path="$1"
   local label="$2"
   [[ -f "${path}" ]] || fail "缺少 ${label}：${path}"
+  [[ -s "${path}" ]] || fail "${label} 不能为空：${path}"
   [[ ! -L "${path}" ]] || fail "${label} 不能是符号链接"
   local mode
   mode="$(stat -c '%a' "${path}")"
@@ -270,6 +287,45 @@ verify_shared_runtime() {
   [[ -z "${violation}" ]] || fail "共享 Linux 运行时必须完整归 root 所有：${violation}"
   violation="$(find "${runtime_root}" -xdev ! -type l -perm /022 -print -quit)"
   [[ -z "${violation}" ]] || fail "共享 Linux 运行时含 group/other 可写项：${violation}"
+  verify_runtime_imports
+}
+
+verify_runtime_imports() {
+  runuser -u anima-candidate -- "${SHARED_PYTHON}" -I - <<'PY'
+import importlib
+import pathlib
+import sys
+
+prefix = pathlib.Path(sys.prefix).resolve()
+for name in (
+    "fastapi",
+    "httpx",
+    "numpy",
+    "sherpa_onnx",
+    "uvicorn",
+    "websockets",
+    "websockets.exceptions",
+):
+    module = importlib.import_module(name)
+    module_file = pathlib.Path(module.__file__).resolve()
+    if prefix != module_file and prefix not in module_file.parents:
+        raise SystemExit(f"{name} loaded outside shared runtime: {module_file}")
+
+from uvicorn.config import WS_PROTOCOLS
+
+if "websockets-sansio" not in WS_PROTOCOLS:
+    raise SystemExit("uvicorn runtime does not expose websockets-sansio")
+PY
+}
+
+verify_model_assets() {
+  local violation
+  violation="$(find "${MODELS_ROOT}" -xdev \( ! -user root -o -perm /022 \) -print -quit)"
+  [[ -z "${violation}" ]] || fail "模型资产必须为 root 所有且不可 group/other 写：${violation}"
+  violation="$(find "${MODELS_ROOT}" -xdev -type d ! -perm -005 -print -quit)"
+  [[ -z "${violation}" ]] || fail "模型目录必须允许隔离服务只读遍历：${violation}"
+  violation="$(find "${MODELS_ROOT}" -xdev -type f ! -perm -004 -print -quit)"
+  [[ -z "${violation}" ]] || fail "模型文件必须允许隔离服务只读加载：${violation}"
 }
 
 verify_secure_directory() {
@@ -472,9 +528,36 @@ raise SystemExit(0 if valid else 1)
   return 1
 }
 
+tunnel_ready() {
+  local stable_checks=0
+  local main_pid=""
+  local stable_pid=""
+  local attempt
+  for ((attempt = 1; attempt <= TUNNEL_HEALTH_ATTEMPTS; attempt++)); do
+    main_pid="$(systemctl show --property MainPID --value "${TUNNEL_UNIT}" 2>/dev/null || true)"
+    if systemctl is-active --quiet "${TUNNEL_UNIT}" && [[ "${main_pid}" =~ ^[1-9][0-9]*$ ]]; then
+      if [[ "${main_pid}" == "${stable_pid}" ]]; then
+        ((stable_checks += 1))
+      else
+        stable_pid="${main_pid}"
+        stable_checks=1
+      fi
+      if (( stable_checks >= 3 )); then
+        return 0
+      fi
+    else
+      stable_checks=0
+      stable_pid=""
+    fi
+    sleep 1
+  done
+  journalctl -u "${TUNNEL_UNIT}" -n 40 --no-pager || true
+  return 1
+}
+
 health_candidate() {
   local candidate_path
-  candidate_path="$(readlink -f "${CANDIDATE_LINK}" 2>/dev/null || true)"
+  candidate_path="$(resolve_release_link "${CANDIDATE_LINK}")"
   [[ -n "${candidate_path}" ]] || fail "没有 staged candidate"
   verify_release "${candidate_path}"
   require_runtime_config
@@ -502,8 +585,9 @@ restore_after_failed_activation() {
     atomic_symlink "${previous_path}" "${CURRENT_LINK}"
     systemctl start "${ACTIVE_UNIT}"
     if health_ready "${ACTIVE_UNIT}" "${ACTIVE_URL}" 8875 "${previous_path}"; then
-      systemctl start "${TUNNEL_UNIT}" || \
+      if ! systemctl start "${TUNNEL_UNIT}" || ! tunnel_ready; then
         log "严重：原 release 已恢复，但 Tunnel 未启动" >&2
+      fi
     else
       log "严重：原 release 也未恢复健康，请查看 journalctl -u ${ACTIVE_UNIT}" >&2
     fi
@@ -514,7 +598,7 @@ restore_after_failed_activation() {
 
 activate_candidate() {
   local candidate_path healthy_path previous_path
-  candidate_path="$(readlink -f "${CANDIDATE_LINK}" 2>/dev/null || true)"
+  candidate_path="$(resolve_release_link "${CANDIDATE_LINK}")"
   healthy_path="$(read_state_record "${HEALTHY_RECORD}")"
   [[ -n "${candidate_path}" && "${healthy_path}" == "${candidate_path}" ]] || \
     fail "候选版本没有通过当前健康门，请先执行 health"
@@ -522,7 +606,7 @@ activate_candidate() {
   systemctl is-active --quiet "${CANDIDATE_UNIT}" || fail "候选服务已停止，请重新执行 health"
   health_ready "${CANDIDATE_UNIT}" "${CANDIDATE_URL}" 8876 "${candidate_path}" || fail "候选服务已不健康，拒绝激活"
 
-  previous_path="$(readlink -f "${CURRENT_LINK}" 2>/dev/null || true)"
+  previous_path="$(resolve_release_link "${CURRENT_LINK}")"
   [[ -z "${previous_path}" ]] || verify_release "${previous_path}"
   write_state_record "${PREVIOUS_RECORD}" "${previous_path}"
   prepare_tunnel_token
@@ -537,7 +621,7 @@ activate_candidate() {
     restore_after_failed_activation "${previous_path}"
     fail "新 release 激活失败，已恢复上一版"
   fi
-  if ! systemctl restart "${TUNNEL_UNIT}" || ! systemctl is-active --quiet "${TUNNEL_UNIT}"; then
+  if ! systemctl restart "${TUNNEL_UNIT}" || ! tunnel_ready; then
     restore_after_failed_activation "${previous_path}"
     fail "Anima Tunnel 启动失败，已恢复上一版"
   fi
@@ -547,7 +631,7 @@ activate_candidate() {
 
 start_active() {
   local current_path
-  current_path="$(readlink -f "${CURRENT_LINK}" 2>/dev/null || true)"
+  current_path="$(resolve_release_link "${CURRENT_LINK}")"
   [[ -n "${current_path}" ]] || fail "没有已激活 release，请先执行 deploy"
   verify_release "${current_path}"
   require_runtime_config
@@ -559,7 +643,7 @@ start_active() {
   systemctl restart "${ACTIVE_UNIT}"
   health_ready "${ACTIVE_UNIT}" "${ACTIVE_URL}" 8875 "${current_path}" || fail "Anima Gateway 未通过健康检查"
   systemctl restart "${TUNNEL_UNIT}"
-  systemctl is-active --quiet "${TUNNEL_UNIT}" || fail "Anima Tunnel 未运行"
+  tunnel_ready || fail "Anima Tunnel 未稳定运行"
   log "Anima 已启动：https://anima.veyralux.org"
 }
 
@@ -568,7 +652,7 @@ rollback_release() {
   target="$(read_state_record "${PREVIOUS_RECORD}")"
   [[ -n "${target}" ]] || fail "没有可回滚的上一个 release"
   verify_release "${target}"
-  current_before="$(readlink -f "${CURRENT_LINK}" 2>/dev/null || true)"
+  current_before="$(resolve_release_link "${CURRENT_LINK}")"
   prepare_tunnel_token
 
   systemctl stop "${CANDIDATE_UNIT}" "${TUNNEL_UNIT}" 2>/dev/null || true
@@ -581,19 +665,23 @@ rollback_release() {
       systemctl restart "${ACTIVE_UNIT}" || true
       if health_ready "${ACTIVE_UNIT}" "${ACTIVE_URL}" 8875 "${current_before}"; then
         systemctl start "${TUNNEL_UNIT}" || true
+        tunnel_ready || true
       fi
     fi
     fail "回滚目标未通过健康检查，已尝试恢复切换前 release"
   fi
   systemctl restart "${TUNNEL_UNIT}"
-  systemctl is-active --quiet "${TUNNEL_UNIT}" || fail "回滚后 Tunnel 未运行"
+  tunnel_ready || fail "回滚后 Tunnel 未稳定运行"
   write_state_record "${PREVIOUS_RECORD}" "${current_before}"
   log "已回滚到 $(basename "${target}")"
 }
 
 show_status() {
-  printf 'current=%s\n' "$(readlink -f "${CURRENT_LINK}" 2>/dev/null || printf 'none')"
-  printf 'candidate=%s\n' "$(readlink -f "${CANDIDATE_LINK}" 2>/dev/null || printf 'none')"
+  local current_path candidate_path
+  current_path="$(resolve_release_link "${CURRENT_LINK}")"
+  candidate_path="$(resolve_release_link "${CANDIDATE_LINK}")"
+  printf 'current=%s\n' "${current_path:-none}"
+  printf 'candidate=%s\n' "${candidate_path:-none}"
   systemctl --no-pager --full status "${ACTIVE_UNIT}" "${CANDIDATE_UNIT}" "${TUNNEL_UNIT}" 2>/dev/null |
     sed -n -E '/^\u25cf|Active:|Main PID:/p' || true
 }
