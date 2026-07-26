@@ -21,16 +21,23 @@ class DataLayout:
         object.__setattr__(self, "legacy_memory_path", legacy)
 
     def anima_directory(self, user_id: UserId, anima_id: AnimaId) -> Path:
-        user_key = storage_key("user", user_id.value)
+        user_root = self.user_directory(user_id)
         anima_key = storage_key("anima", anima_id.value)
-        candidate = self.root / "users" / user_key / "animas" / anima_key
+        candidate = user_root / "animas" / anima_key
         return self._contained(candidate)
+
+    def user_directory(self, user_id: UserId) -> Path:
+        user_key = storage_key("user", user_id.value)
+        return self._contained(self.root / "users" / user_key)
 
     def state_database(self, user_id: UserId, anima_id: AnimaId) -> Path:
         return self.anima_directory(user_id, anima_id) / "state.sqlite3"
 
     def persona_file(self, user_id: UserId, anima_id: AnimaId) -> Path:
         return self.anima_directory(user_id, anima_id) / "Anima.md"
+
+    def identity_database(self) -> Path:
+        return self._contained(self.root / "catalog.sqlite3")
 
     def _contained(self, candidate: Path) -> Path:
         resolved = candidate.resolve()

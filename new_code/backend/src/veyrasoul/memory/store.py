@@ -117,21 +117,43 @@ class MemoryStore:
         return inserted
 
     def add_turn(self, session_id: str, turn_id: str, user_text: str, assistant_text: str) -> int:
+        normalized_session = _required_text(session_id, "session_id", 100)
+        normalized_turn = _required_text(turn_id, "turn_id", 100)
+        normalized_user = _required_text(user_text, "user_text", 8_000)
+        normalized_assistant = _required_text(assistant_text, "assistant_text", 12_000)
         with self.connection(immediate=True) as connection:
             cursor = connection.execute(
                 """
-                INSERT INTO turns(session_id, turn_id, user_text, assistant_text, created_at_ms)
+                INSERT OR IGNORE INTO turns(
+                    session_id, turn_id, user_text, assistant_text, created_at_ms
+                )
                 VALUES(?, ?, ?, ?, ?)
                 """,
                 (
-                    _required_text(session_id, "session_id", 100),
-                    _required_text(turn_id, "turn_id", 100),
-                    _required_text(user_text, "user_text", 8_000),
-                    _required_text(assistant_text, "assistant_text", 12_000),
+                    normalized_session,
+                    normalized_turn,
+                    normalized_user,
+                    normalized_assistant,
                     int(time.time() * 1000),
                 ),
             )
-            return int(cursor.lastrowid)
+            if cursor.rowcount:
+                return int(cursor.lastrowid)
+            row = connection.execute(
+                """
+                SELECT id, user_text, assistant_text FROM turns
+                WHERE session_id=? AND turn_id=?
+                """,
+                (normalized_session, normalized_turn),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("idempotent turn lookup failed")
+            if (
+                str(row["user_text"]) != normalized_user
+                or str(row["assistant_text"]) != normalized_assistant
+            ):
+                raise ValueError("turn_id already exists with different content")
+            return int(row["id"])
 
     def recent_turns(self, session_id: str, limit: int = 8) -> list[dict[str, object]]:
         safe_limit = max(1, min(int(limit), 30))
