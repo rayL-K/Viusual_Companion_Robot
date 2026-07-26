@@ -51,7 +51,7 @@ class TurnService:
             history=history,
             user_text=user_text,
             visual_context=context.visual.prompt_summary() if context.visual else "",
-            memory_context=[item.entry.body for item in context.memories],
+            rag_context=context.rag_context,
             affect_context=(
                 f"valence={affect.valence:.2f}, arousal={affect.arousal:.2f}, "
                 f"affinity={affect.affinity:.2f}, trust={affect.trust:.2f}"

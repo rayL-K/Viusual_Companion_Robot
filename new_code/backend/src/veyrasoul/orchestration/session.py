@@ -9,6 +9,7 @@ from collections.abc import Callable
 
 from veyrasoul.affect import AffectCue, AffectEngine, AffectState, infer_affect_cue
 from veyrasoul.domain.perception import VisualSnapshot
+from veyrasoul.memory.service import MemoryPipeline
 from veyrasoul.memory.store import MemoryStore
 from veyrasoul.runtime.latest_value import LatestValue
 
@@ -22,6 +23,7 @@ class SessionKernel:
         memory: MemoryStore,
         context: ContextAssembler,
         *,
+        memory_pipeline: MemoryPipeline | None = None,
         monotonic_clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if not session_id.strip():
@@ -29,6 +31,7 @@ class SessionKernel:
         self.session_id = session_id
         self.memory = memory
         self.context = context
+        self.memory_pipeline = memory_pipeline
         self.visual: LatestValue[VisualSnapshot] = context.visual_slot
         self.affect = AffectEngine()
         self._monotonic_clock = monotonic_clock
@@ -37,6 +40,9 @@ class SessionKernel:
         self._lock = asyncio.Lock()
         self._recent_turns: deque[dict[str, object]] = deque(maxlen=8)
         self._recent_turns.extend(memory.recent_turns(session_id, limit=8))
+        self._committed_turn_ids = {
+            str(turn.get("turn_id") or "") for turn in self._recent_turns
+        }
 
     @property
     def generation(self) -> int:
@@ -86,10 +92,20 @@ class SessionKernel:
         async with self._lock:
             if generation != self._generation:
                 return False
-            self.memory.add_turn(self.session_id, turn_id, user_text, assistant_text)
-            self._recent_turns.append(
-                {"turn_id": turn_id, "user": user_text, "assistant": assistant_text}
-            )
+            if self.memory_pipeline is None:
+                self.memory.add_turn(self.session_id, turn_id, user_text, assistant_text)
+            else:
+                self.memory_pipeline.process_turn(
+                    session_id=self.session_id,
+                    turn_id=turn_id,
+                    user_text=user_text,
+                    assistant_text=assistant_text,
+                )
+            if turn_id not in self._committed_turn_ids:
+                self._recent_turns.append(
+                    {"turn_id": turn_id, "user": user_text, "assistant": assistant_text}
+                )
+                self._committed_turn_ids.add(turn_id)
             self._advance_affect(cue)
             return True
 

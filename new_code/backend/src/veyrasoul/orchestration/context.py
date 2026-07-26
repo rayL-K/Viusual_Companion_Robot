@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from veyrasoul.affect.engine import AffectState
 from veyrasoul.domain.perception import VisualSnapshot
+from veyrasoul.memory.prompt_boundary import RagPromptContext, build_rag_prompt_context
 from veyrasoul.memory.retrieval import HybridRetriever, RetrievedMemory
 from veyrasoul.runtime.latest_value import LatestValue
 
@@ -17,6 +18,7 @@ class ContextBundle:
     generated_at_ms: int
     visual: VisualSnapshot | None
     memories: tuple[RetrievedMemory, ...]
+    rag_context: RagPromptContext | None
     recent_turns: tuple[dict[str, object], ...]
     affect: AffectState
     retrieval_timed_out: bool = False
@@ -60,6 +62,11 @@ class ContextAssembler:
             generated_at_ms=generated_at,
             visual=visual,
             memories=tuple(memories),
+            rag_context=(
+                build_rag_prompt_context(memories, max_chars=8_000)
+                if memories
+                else None
+            ),
             recent_turns=tuple(recent_turns[-8:]),
             affect=affect,
             retrieval_timed_out=timed_out,

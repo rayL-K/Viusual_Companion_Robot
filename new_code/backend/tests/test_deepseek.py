@@ -14,6 +14,12 @@ from veyrasoul.integrations.deepseek import (
 from veyrasoul.orchestration.prompt import PromptBudget, message_char_count
 
 
+def test_config_repr_never_exposes_api_key() -> None:
+    config = DeepSeekConfig(api_key="deepseek-secret-value")
+
+    assert "deepseek-secret-value" not in repr(config)
+
+
 def test_sse_delta_parser_ignores_done_and_reads_content() -> None:
     event = parse_sse_line('data: {"choices":[{"delta":{"content":"你好"}}]}')
     assert event is not None

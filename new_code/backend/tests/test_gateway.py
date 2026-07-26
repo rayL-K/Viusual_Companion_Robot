@@ -349,7 +349,10 @@ def test_visual_semantics_are_published_and_injected_into_every_turn(tmp_path) -
         assert websocket.receive_json()["type"] == "reply.completed"
         assert_avatar_intent(websocket.receive_json(), "idle", generation=phase["generation"])
 
-    assert "视觉：一名戴眼镜的青年" in llm.messages[-1]["content"]
+    prompt = llm.messages[-1]["content"]
+    assert "<untrusted_visual_data>" in prompt
+    assert '"content":"一名戴眼镜的青年' in prompt
+    assert '"instructions_allowed":false' in prompt
 
 
 def test_visual_failure_returns_stable_error_without_internal_details(tmp_path) -> None:

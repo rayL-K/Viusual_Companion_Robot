@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Mapping
 
 import httpx
@@ -13,7 +13,7 @@ from veyrasoul.orchestration.prompt import build_messages
 
 @dataclass(frozen=True, slots=True)
 class DeepSeekConfig:
-    api_key: str
+    api_key: str = field(repr=False)
     model: str = "deepseek-v4-flash"
     base_url: str = "https://api.deepseek.com"
     connect_timeout_seconds: float = 5.0

@@ -67,6 +67,10 @@ def _server_options(settings: RuntimeSettings) -> dict[str, object]:
 
 def build_app(settings: RuntimeSettings | None = None):
     config = settings or RuntimeSettings.from_environment()
+    llm_selection = config.provider_snapshot.resolve("llm")
+    tts_selection = config.provider_snapshot.resolve("tts")
+    asr_selection = config.provider_snapshot.resolve("asr")
+    vision_selection = config.provider_snapshot.resolve("vision")
     # Reuse Uvicorn's production logger; its logging config is applied after build_app().
     trace_logger = logging.getLogger("uvicorn.error")
     llm = DeepSeekStreamClient(
@@ -88,7 +92,7 @@ def build_app(settings: RuntimeSettings | None = None):
         )
     )
     asr = None
-    if config.asr_provider == "sherpa":
+    if asr_selection.name == "sherpa":
         if config.asr_model_dir is None:
             raise RuntimeError("selected ASR provider has no model directory")
         asr = SherpaStreamingAsr(
@@ -103,7 +107,7 @@ def build_app(settings: RuntimeSettings | None = None):
             )
         )
     vlm = None
-    if config.vision_provider == "local-vlm":
+    if vision_selection.name == "local-vlm":
         vlm = LocalVlmClient(
             LocalVlmConfig(
                 base_url=config.vision_url,
@@ -135,18 +139,19 @@ def build_app(settings: RuntimeSettings | None = None):
             ),
             providers=TraceProviders(
                 asr=ProviderModel(
-                    config.asr_provider or "disabled",
+                    asr_selection.name,
                     config.asr_model_dir.name if config.asr_model_dir else "disabled",
                 ),
-                llm=ProviderModel(config.llm_provider, config.llm_model),
+                llm=ProviderModel(llm_selection.name, config.llm_model),
                 tts=ProviderModel(
-                    config.tts_provider,
+                    tts_selection.name,
                     config.tts_model_dir.name,
                 ),
             ),
         ),
         admission=config.admission,
         release_digest=_release_digest(config.root),
+        provider_snapshot=config.provider_snapshot,
     )
     return create_app(services)
 

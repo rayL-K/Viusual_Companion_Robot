@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from veyrasoul.providers import ProviderSnapshot, default_provider_registry
+
 from .admission import AdmissionPolicy
 
 
@@ -26,6 +28,7 @@ class RuntimeSettings:
     web_dist: Path | None
     llm_provider: str
     llm_api_key: str = field(repr=False)
+    provider_snapshot: ProviderSnapshot
     telemetry_hmac_key: str = field(default="", repr=False)
     admission: AdmissionPolicy = field(default_factory=AdmissionPolicy, repr=False)
     llm_model: str = "deepseek-v4-flash"
@@ -48,6 +51,16 @@ class RuntimeSettings:
     vision_url: str = "http://127.0.0.1:8767"
     vision_timeout_seconds: float = 20.0
     vision_refresh_seconds: float = 5.0
+
+    def __post_init__(self) -> None:
+        legacy = {
+            "llm": self.llm_provider,
+            "tts": self.tts_provider,
+            "asr": self.asr_provider or "disabled",
+            "vision": self.vision_provider or "disabled",
+        }
+        if self.provider_snapshot.capabilities() != legacy:
+            raise ValueError("provider snapshot does not match legacy provider settings")
 
     @classmethod
     def from_environment(
@@ -172,6 +185,15 @@ class RuntimeSettings:
             ),
         )
 
+        provider_snapshot = default_provider_registry().parse_snapshot(
+            {
+                "llm": llm_provider,
+                "tts": tts_provider,
+                "asr": asr_provider,
+                "vision": vision_provider,
+            }
+        )
+
         return cls(
             root=product_root,
             host=read.get("ANIMA_HOST", "VEYRASOUL_HOST", default="127.0.0.1"),
@@ -186,6 +208,7 @@ class RuntimeSettings:
             web_dist=Path(web_value).expanduser() if web_value else None,
             llm_provider=llm_provider,
             llm_api_key=llm_api_key,
+            provider_snapshot=provider_snapshot,
             telemetry_hmac_key=telemetry_hmac_key,
             admission=admission,
             llm_model=read.get("ANIMA_LLM_MODEL", "DEEPSEEK_MODEL", default="deepseek-v4-flash"),
@@ -238,12 +261,7 @@ class RuntimeSettings:
         )
 
     def capabilities(self) -> dict[str, str]:
-        return {
-            "llm": self.llm_provider,
-            "tts": self.tts_provider,
-            "asr": self.asr_provider or "disabled",
-            "vision": self.vision_provider or "disabled",
-        }
+        return self.provider_snapshot.capabilities()
 
 
 class _Environment:
