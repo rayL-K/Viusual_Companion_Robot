@@ -6,7 +6,7 @@
 chmod +x deploy/portable/portable-preflight.sh
 deploy/portable/portable-preflight.sh \
   --source /srv/anima/release-input \
-  --tts-model /srv/anima/models/tts/kokoro-zh-en \
+  --tts-model /srv/anima/models/tts/matcha-zh-baker \
   --profile speech
 ```
 

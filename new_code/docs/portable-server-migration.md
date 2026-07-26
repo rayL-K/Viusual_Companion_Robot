@@ -103,14 +103,14 @@ sudo install -m 755 /path/to/new_code/deploy/portable/portable-preflight.sh /usr
 # 推荐的最小实际组合：DeepSeek + 本地 sherpa TTS，ASR/VLM 先禁用。
 anima-portable-preflight \
   --source /srv/anima/release-input \
-  --tts-model /srv/anima/models/tts/kokoro-zh-en \
+  --tts-model /srv/anima/models/tts/matcha-zh-baker \
   --profile speech
 
 # 只有在模型已完成 ABI 验证时再打开：
 anima-portable-preflight \
   --source /srv/anima/release-input \
-  --tts-model /srv/anima/models/tts/kokoro-zh-en \
-  --asr-model /srv/anima/models/asr/zipformer-zh-en-int8 \
+  --tts-model /srv/anima/models/tts/matcha-zh-baker \
+  --asr-model /srv/anima/models/asr/sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23 \
   --profile asr
 ```
 
@@ -125,7 +125,7 @@ anima-portable-preflight \
    ```dotenv
    ANIMA_LLM_PROVIDER=deepseek
    ANIMA_TTS_PROVIDER=sherpa
-   ANIMA_TTS_MODEL_DIR=/srv/anima/models/tts/kokoro-zh-en
+   ANIMA_TTS_MODEL_DIR=/srv/anima/models/tts/matcha-zh-baker
    ANIMA_ASR_PROVIDER=disabled
    ANIMA_VISION_PROVIDER=disabled
    ```
