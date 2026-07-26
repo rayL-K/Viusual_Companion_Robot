@@ -66,6 +66,14 @@ npm run check
 npm run build
 ```
 
+需要生成可审计的离线发布包时，再在仓库根目录执行：
+
+```powershell
+.\new_code\scripts\package-board-release.ps1
+```
+
+脚本以日期和当前 Git SHA 命名输出目录，拒绝覆盖已有包，只收录部署白名单中的控制面、Python 源码、生产 Web 构建和默认人设；自动排除 `__pycache__`、`.pyc`、`*.egg-info`、真实环境文件和凭据，并生成逐文件 manifest、`tar.gz` 与 SHA-256。发布包不会替代上述测试。
+
 上传时只同步白名单输入到板端的 `source`，不要上传 `.venv`、模型、密钥、数据、`node_modules`、Git 元数据或任意 release：
 
 ```bash

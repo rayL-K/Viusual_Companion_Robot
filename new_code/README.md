@@ -117,6 +117,7 @@ ELF2 不是客户端协议的一部分。迁移到低端服务器时只移动 Ga
 - [延迟 SLO](docs/latency-slo.md)
 - [ELF2 部署](docs/deployment-elf2.md)
 - [迁移到低配 Linux Server](docs/portable-server-migration.md)
+- [2026 推理节点选型与采购门槛](docs/server-sizing-2026.md)
 - [Live2D 身体交互](docs/live2d-interaction.md)
 - [视频通话式 UX](docs/video-call-ux.md)
 - [用户数据隔离](docs/user-data-isolation.md)
