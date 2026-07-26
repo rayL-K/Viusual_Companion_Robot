@@ -98,7 +98,7 @@ Assert-Match -Text $CandidateUnit -Pattern 'ANIMA_DATA_ROOT=/var/lib/anima-candi
 
 $TunnelUnit = Get-Content -LiteralPath (Join-Path $SystemdRoot "anima-cloudflared.service") -Raw -Encoding UTF8
 Assert-Match -Text $TunnelUnit -Pattern 'LoadCredential=anima-token:/etc/anima/tunnel-token' -Message "Tunnel token must be passed through a systemd credential."
-Assert-Match -Text $TunnelUnit -Pattern 'run --token-file %d/anima-token' -Message "Tunnel must read only the credential materialized by systemd."
+Assert-Match -Text $TunnelUnit -Pattern 'run --token-file \$\{CREDENTIALS_DIRECTORY\}/anima-token' -Message "Tunnel must read only the credential materialized by systemd."
 Assert-NoMatch -Text $TunnelUnit -Pattern '(?:^|\s)--url(?:\s|=)' -Message "Remote-config Tunnel must not override ingress with --url."
 
 Assert-Match -Text $ControlInstallerText -Pattern 'install -m 700 -o root -g root.*start-elf2\.sh' -Message "The one-time installer must create a root-only deployer."
