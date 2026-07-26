@@ -12,7 +12,7 @@
 | SoulX-Podcast | 中英 TTS、zero-shot 声音克隆、长文本/多说话人、副语言标签 | 当前无流式推理；CUDA/vLLM 依赖；没有 RK3588/RKNN 路径 | **否决进入默认实时主链路**；仅允许在独立 x86_64 NVIDIA 主机上做隔离的高质量 GPU sidecar 试验 |
 | Neuro | VTube Studio 动作队列、能力枚举、人工动作控制台的交互模式 | VTube Studio、Steam、虚拟音频线、Windows/NVIDIA 桌面运行时、全局共享 Signals | **不引入其运行时或代码架构**；离散动作思想已 clean-room 落为浏览器 `AvatarActionScheduler` 最小纵切片，仍需真机性能与全资产验收 |
 
-这两个结论不改变 V2 的当前边界：V1 继续在 ELF2 和评审站点运行；V2 仍处于开发阶段，不部署到开发板，不替换评审入口。
+这两个结论不改变 Anima v0.0.1 的当前边界：ELF2 可作为受控测试服务器，但 SoulX 仍不进入默认链路；所有公网能力必须经过独立发布门禁。
 
 ## 2. 证据等级
 
@@ -122,7 +122,7 @@
 
 [Issue #26](https://github.com/Soul-AILab/SoulX-Podcast/issues/26) 的第三方日志记录了 vLLM 权重约 3.24 GiB、峰值激活约 1.49 GiB，以及默认 0.9 utilization 下的大量 KV cache 预留。该日志只能证明某个 NVIDIA 环境的行为，不能证明 RK3588 可运行。
 
-**架构结论：**不在当前 V2 阶段把 SoulX 移植 RKNN/NPU；不允许它与 ELF2 上的 V1 或 V2 轻量模型争抢内存。真正完成量化、算子替换、ARM/NPU 导出和流式改造属于数周级高风险研发，而不是安装适配。
+**架构结论：**不在 Anima v0.0.1 当前阶段把 SoulX 移植 RKNN/NPU；不允许它与 ELF2 上的默认轻量模型争抢内存。真正完成量化、算子替换、ARM/NPU 导出和流式改造属于数周级高风险研发，而不是安装适配。
 
 ### 3.6 可选 GPU sidecar 试验
 
@@ -139,7 +139,7 @@ flowchart LR
 试验必须满足以下隔离条件：
 
 - 独立进程、独立虚拟环境或容器；
-- 不把 SoulX 的 Torch/Transformers/Triton/vLLM 版本带入 V2 Gateway；
+- 不把 SoulX 的 Torch/Transformers/Triton/vLLM 版本带入 Anima Gateway；
 - 不部署到 ELF2；
 - 只通过稳定的 `SpeechSynthesizer` adapter 或本地 IPC/HTTP 边界接入；
 - 默认音色仍是轻量实时后端，SoulX 只能由用户主动选择；
@@ -158,7 +158,7 @@ flowchart LR
 3. 用户打断后 ≤150 ms 停止下发旧音频，且旧 generation 不再播放；
 4. 连续 100 次生成/取消无任务泄漏，GPU reserved memory 相对稳定基线增长不超过 5%；
 5. 30 条中英/副语言固定集全部生成成功，无空音频、NaN 或协议错误；
-6. 不降低 V2 ASR、VLM、Gateway 的时延和稳定性。
+6. 不降低 Anima ASR、VLM、Gateway 的时延和稳定性。
 
 上游当前整段 WAV 实现尚不满足第 1 条，所以当前否决结论是确定的，而不是等待主观试听。
 
@@ -202,7 +202,7 @@ Neuro 不是浏览器内 Live2D renderer。其角色层是 Windows 桌面编排�
 作者完整环境是 Windows 11、Python 3.11.9、RTX 4070 12 GB、CUDA 11.8，并依赖 VTube Studio/Steam、虚拟音频线，OBS 为展示层：
 [README L92-L105](https://github.com/kimjammer/Neuro/blob/5e4b4241c41bb40983aee2cb60d65d6bb481842b/README.md#L92-L105)。
 
-这套运行时无法满足 V2 的任意浏览器、移动端/平板端和 ELF2 服务端边界。
+这套运行时无法满足 Anima 的任意浏览器、移动端/平板端和 ELF2 服务端边界。
 
 ### 4.3 表情、动作与口型事实
 
@@ -225,9 +225,9 @@ Neuro 没有自动的“情绪 → 表情/动作”映射：
 此外，Neuro 虽以 SSE 获取 LLM token，但代码在完整 SSE 结束后才调用 `tts.play(AI_message)`，因此不能把“LLM token 与 TTS 同时流水”视为其已实现能力：
 [abstractLLMWrapper.py L116-L148](https://github.com/kimjammer/Neuro/blob/5e4b4241c41bb40983aee2cb60d65d6bb481842b/llmWrappers/abstractLLMWrapper.py#L116-L148)。
 
-### 4.4 与 V2 当前能力的差距
+### 4.4 与 Anima 当前能力的差距
 
-V2 当前已有：
+Anima 当前已有：
 
 - 连续 valence/arousal/dominance/affinity/trust；
 - listening/thinking/speaking/idle `AvatarIntent`；
@@ -245,7 +245,7 @@ V2 当前已有：
 
 Neuro 在这些方面不是可替换的升级方案。
 
-但 V2 当前还有一个独立缺口：Strawberry Rabbit 已携带约 25 个 `.exp3.json` 和 4 个 `.motion3.json`，现有 Stage Controller 主要直接写 Cubism 参数，尚未建立经过验收的“语义意图 → 模型离散 expression/motion”的动作调度层。该缺口不能描述为已经解决。
+但 Anima 当前还有一个独立缺口：Strawberry Rabbit 已携带约 25 个 `.exp3.json` 和 4 个 `.motion3.json`，现有 Stage Controller 主要直接写 Cubism 参数，尚未建立经过验收的“语义意图 → 模型离散 expression/motion”的动作调度层。该缺口不能描述为已经解决。
 
 ### 4.5 架构决策
 

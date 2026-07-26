@@ -1,0 +1,45 @@
+[Unit]
+Description=Anima v0.0.1 realtime multimodal gateway
+After=network-online.target
+Wants=network-online.target
+ConditionPathIsDirectory=/home/wenkang/anima/current/backend
+
+[Service]
+Type=simple
+User=anima-gateway
+Group=anima-gateway
+WorkingDirectory=/opt/anima/current/backend
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/etc/anima/anima.env
+ExecStart=/usr/bin/env ANIMA_HOST=127.0.0.1 ANIMA_PORT=8875 ANIMA_WEB_DIST=/opt/anima/current/web/dist ANIMA_DATA_ROOT=/var/lib/anima ANIMA_MEMORY_PATH=/var/lib/anima/memory/anima.db ANIMA_PERSONA_PATH=/opt/anima/current/config/persona.md ANIMA_ADMISSION_REQUIRED=true ANIMA_ALLOWED_ORIGINS=https://anima.veyralux.org PYTHONPATH=/opt/anima/current/backend/src /opt/anima/runtime/.venv/bin/python -m veyrasoul.gateway
+Restart=on-failure
+RestartSec=2
+TimeoutStartSec=90
+TimeoutStopSec=20
+KillSignal=SIGINT
+MemoryHigh=3G
+MemoryMax=4G
+LimitNOFILE=65536
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true
+CapabilityBoundingSet=
+ReadWritePaths=/var/lib/anima /var/cache/anima /run/anima
+ReadOnlyPaths=/opt/anima/current /opt/anima/runtime/.venv /opt/anima/models
+BindReadOnlyPaths=/home/wenkang/anima/current:/opt/anima/current
+BindReadOnlyPaths=/home/wenkang/anima/.venv:/opt/anima/runtime/.venv
+BindReadOnlyPaths=/home/wenkang/anima/models:/opt/anima/models
+StateDirectory=anima
+CacheDirectory=anima
+RuntimeDirectory=anima
+
+[Install]
+WantedBy=multi-user.target

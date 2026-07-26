@@ -1,202 +1,165 @@
-# ELF2（RK3588）部署说明
+# Anima v0.0.1：ELF2 / Linux Server 安全部署
 
-> **当前禁止部署 V2 到 ELF2。** 评委可能随时访问 V1 专用入口 `robot.veyralux.org`，开发板和 V1 Tunnel 必须持续运行。`anima.veyralux.org` 只保留给 V2，当前不得回源到 V1。本文只保存未来启用 V2 所需的设计与命令，不是当前操作手册；`start-elf2.sh` 默认拒绝激活。
+ELF2（Ubuntu 22.04 aarch64 / RK3588）目前作为 Anima 的边缘实时服务器：浏览器只承担 Live2D、摄像头预览和音频采集；语音、视觉语义、对话、记忆、TTS 与同源 Web 入口都运行在板端。公网入口固定为 `https://anima.veyralux.org`，由专用 Cloudflare Tunnel 回源到 `127.0.0.1:8875`。
 
-## 1. 运行环境
+本文将**一次性的 root 控制面安装**与**日常 release 发布**分开。日常发布绝不会从 release、`source` 或用户可写目录安装/替换 systemd unit。
 
-- Ubuntu 22.04 aarch64（ELF2 当前系统）；
-- Python 3.10–3.12；
-- Node.js 仅用于构建前端，生产板可只部署 `web/dist`；
-- sherpa-onnx 的 aarch64/Python wheel 及其模型资产；
-- 可访问 DeepSeek API 的网络；
-- HTTPS/WSS 反向代理用于手机和公网媒体权限。
+`/v2/health`、`/v2/realtime` 中的 `v2` 仅为 wire protocol 版本；产品名为 **Anima v0.0.1**。
 
-## 2. 安装后端
+## 1. 不变量与目录边界
 
-```bash
-cd ~/Visual_Companion_Robot/new_code/backend
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e '.[gateway,models]'
-```
+| 路径 / 单元 | 所有者与用途 | 可写者 |
+| --- | --- | --- |
+| `/home/wenkang/anima/source` | 日常发布输入；只允许白名单运行时制品 | `wenkang` |
+| `/home/wenkang/anima/releases/<id>` | root 创建、SHA-256 清单校验后的不可变 release | root |
+| `/home/wenkang/anima/current`、`candidate` | root 原子切换的符号链接 | root |
+| `/home/wenkang/anima/.venv`、`models` | 共享运行时/模型，只读 bind mount 到服务沙箱 | root |
+| `/opt/anima-control`、`/usr/local/sbin/anima-deploy` | root 受信控制面 | root |
+| `/etc/anima` | 生产密钥、candidate 空密钥配置、Tunnel token | root |
+| `/var/lib/anima` | active 用户数据和记忆库 | `anima-gateway` |
+| `/var/lib/anima-candidate` | candidate 独立临时数据 | `anima-candidate` |
+| `/var/lib/anima-deploy` | root-only 健康/回滚状态 | root |
 
-开发/测试环境再安装：
+系统仅管理 `anima.service`、`anima-candidate.service` 与 `anima-cloudflared.service`，不会停止或改写旧项目服务。
 
-```bash
-python -m pip install -e '.[gateway,models,test]'
-python -m pytest -q
-```
+安全门：
 
-## 3. 模型目录约定
+1. 日常发布以 `flock` 串行化；同一时间仅允许一个 stage/health/activate/rollback。
+2. stage 只复制 `backend/src`、`backend/pyproject.toml`、`web/dist`、`config/persona.md`；拒绝链接、设备、FIFO、socket 和权限/所有者异常的 release。
+3. candidate 只绑定 `127.0.0.1:8876`，使用独立 UID、数据根和空的 LLM/Turnstile/HMAC 值；它不读取生产密钥或 `/var/lib/anima`。
+4. health 除了检查 unit 的 `MainPID` 实际监听 loopback 端口，还验证 `/v2/health.releaseDigest` 等于候选 release 的 `.release.sha256` 哈希，防止被另一进程伪造健康结果。
+5. active 仅在 candidate 通过后原子替换 `current`；active 健康后才启动 Tunnel。失败会恢复上一已验证 release。
+6. systemd 的 `EnvironmentFile` 不得定义 host、端口、路径、准入、origin 或 `PYTHONPATH` 等保留键；这些安全不变量由 `ExecStart=/usr/bin/env …` 最后强制设置。
 
-### TTS（当前 Gateway 启动必需）
+## 2. 板端前置条件
 
-`VEYRASOUL_TTS_MODEL_DIR` 指向 sherpa-onnx Kokoro、Matcha 或 VITS 目录。适配器按资产布局自动判断类型。
+- Ubuntu 22.04 / systemd、Python 3.10–3.12、`curl`、`sha256sum`、`flock`、`cloudflared`。
+- `/home/wenkang/anima/models` 已有匹配 aarch64 的 Sherpa ASR/TTS 模型。
+- 可访问所选 LLM API；公网使用 Cloudflare remote-config Tunnel。
+- 候选健康门默认要求 `MemAvailable >= 1800 MiB`。空间或内存不足时 fail-closed，不会为发布自动停掉其他服务。
 
-```text
-tts-model/
-├── model.int8.onnx 或 model.onnx
-├── tokens.txt
-├── voices.bin              # 存在时按 Kokoro 加载
-├── lexicon.txt             # 可选
-├── dict/                   # 可选
-├── espeak-ng-data/         # 可选
-└── phone/date/number.fst   # 可选
-```
-
-中英混合能力取决于所选模型和语言资产，适配器本身不能让单语模型自动支持英文。VoxCPM 不会自动加载。
-
-仓库旧模型目录中的 Matcha Baker 布局也可直接加载：`model-steps-3.onnx`、`vocos-22khz-univ.onnx`、`tokens.txt`、`lexicon.txt`。CLI 在开放端口前预加载 ASR/TTS，共享模型冷启动不会落到第一位用户身上。
-
-### Streaming ASR
-
-现有适配器期望：
-
-```text
-asr-model/
-├── tokens.txt
-├── encoder*.onnx
-├── decoder*.onnx
-├── joiner*.onnx
-├── itn_zh_number.fst       # 可选
-└── rule.fst                # 可选
-```
-
-若同前缀同时存在普通和 int8 ONNX，适配器优先选择文件名包含 `int8` 的版本。
-
-`gateway/__main__.py` 已把该目录构造成 `AppServices.asr`，因此命令行启动时 ASR 目录是必需配置。模型会在建立 WebSocket 并创建 ASR session 时加载；仍需在 ELF2 上验证 wheel、模型文件和实时率。
-
-### 板内语义 VLM 服务
-
-Gateway 当前不直接加载 Qwen 模型，而是请求同机 HTTP 服务：
-
-```text
-GET  /health
-POST /analyze
-body: {"image": "<base64-jpeg>"}
-response: {"ok": true, "semantic_caption": "自然语言画面描述"}
-```
-
-默认地址为 `http://127.0.0.1:8767`。latest-value 调度器保证同一会话只保留最新 JPEG，并默认每 5 秒最多启动一次分析；共享 `LocalVlmClient` 再用单实例锁串行访问板端 worker。仓库当前只有客户端适配器，不包含 `/analyze` 服务实现，因此仍需部署现有板端 VLM worker 才能形成真实视觉闭环。
-
-## 4. 环境变量
-
-| 变量 | 必需 | 默认值 | 当前用途 |
-| --- | :---: | --- | --- |
-| `DEEPSEEK_API_KEY` | 是 | 无 | DeepSeek Authorization；禁止提交仓库 |
-| `DEEPSEEK_MODEL` | 否 | `deepseek-v4-flash` | API model 名称，需与账户实际可用模型一致 |
-| `DEEPSEEK_MAX_TOKENS` | 否 | `256` | 单轮最大输出 token；代码限制在 32–2048 |
-| `VEYRASOUL_ASR_MODEL_DIR` | 是 | 无 | streaming Zipformer 模型目录 |
-| `VEYRASOUL_ASR_THREADS` | 否 | `4` | ASR CPU 线程 |
-| `VEYRASOUL_ASR_DECODING_METHOD` | 否 | `greedy_search` | sherpa 解码方式 |
-| `VEYRASOUL_ASR_RULE1_SILENCE` | 否 | `1.6` | endpoint rule 1 trailing silence |
-| `VEYRASOUL_ASR_RULE2_SILENCE` | 否 | `0.55` | endpoint rule 2 trailing silence |
-| `VEYRASOUL_ASR_RULE3_LENGTH` | 否 | `20.0` | endpoint rule 3 最短句长 |
-| `VEYRASOUL_ASR_QUEUE_FRAMES` | 否 | `50` | ASR PCM 有界队列帧数 |
-| `VEYRASOUL_TTS_MODEL_DIR` | 是 | 无 | Kokoro/Matcha/VITS 模型目录 |
-| `VEYRASOUL_TTS_SID` | 否 | `0` | speaker id |
-| `VEYRASOUL_TTS_SPEED` | 否 | `1.0` | 0.5–2.0 内使用 |
-| `VEYRASOUL_TTS_THREADS` | 否 | `4` | TTS CPU 线程 |
-| `VEYRASOUL_PERSONA_PATH` | 否 | `new_code/config/persona.md` | 稳定角色提示词 |
-| `VEYRASOUL_MEMORY_PATH` | 否 | `new_code/data/memory/veyrasoul.db` | SQLite 文件；父目录需可写 |
-| `VEYRASOUL_VLM_URL` | 否 | `http://127.0.0.1:8767` | 板内 VLM HTTP 服务 |
-| `VEYRASOUL_VLM_TIMEOUT` | 否 | `20` | 单次 VLM HTTP 超时秒数 |
-| `VEYRASOUL_VISION_REFRESH_SECONDS` | 否 | `5.0` | 语义推理最短启动间隔 |
-| `VEYRASOUL_WEB_DIST` | 否 | `new_code/web/dist` | Gateway 同源静态前端目录；空值表示不挂载 |
-| `VEYRASOUL_HOST` | 否 | `127.0.0.1` | Gateway 监听地址 |
-| `VEYRASOUL_PORT` | 否 | `8875` | Gateway 端口 |
-| `VEYRASOUL_LOG_LEVEL` | 否 | `info` | uvicorn 日志级别 |
-
-## 5. 当前启动方式
+运行时虚拟环境固定为 `/home/wenkang/anima/.venv`，必须在板端构建并归 root 所有：
 
 ```bash
-cd ~/Visual_Companion_Robot/new_code/backend
-source .venv/bin/activate
-
-export DEEPSEEK_API_KEY='从安全的环境文件或密钥服务读取'
-export VEYRASOUL_ASR_MODEL_DIR="$HOME/models/asr/zipformer-zh-en-int8"
-export VEYRASOUL_TTS_MODEL_DIR="$HOME/models/tts/kokoro-zh-en"
-export VEYRASOUL_MEMORY_PATH="$HOME/.local/share/veyrasoul/veyrasoul.db"
-export VEYRASOUL_VLM_URL="http://127.0.0.1:8767"
-export VEYRASOUL_VISION_REFRESH_SECONDS=5
-export VEYRASOUL_HOST=127.0.0.1
-export VEYRASOUL_PORT=8875
-
-python -m veyrasoul.gateway
+sudo python3 -m venv /home/wenkang/anima/.venv
+sudo /home/wenkang/anima/.venv/bin/python -m pip install --upgrade pip
+sudo /home/wenkang/anima/.venv/bin/python -m pip install '.[gateway,models]'
+sudo chown -R root:root /home/wenkang/anima/.venv
+sudo chmod -R go-w /home/wenkang/anima/.venv
 ```
 
-若只做同一局域网临时调试，可设 `VEYRASOUL_HOST=0.0.0.0`，但前端手机媒体权限仍需要 HTTPS，且不能把未鉴权端口直接暴露公网。
+依赖升级是单独维护动作：先用 candidate 验证新旧 release 兼容，再更新共享 venv；代码 rollback 不会自动回滚依赖。
 
-检查：
+## 3. 构建并上传日常发布输入
 
-```bash
-curl -fsS http://127.0.0.1:8875/v2/health
-```
+本机先通过完整检查并构建前端：
 
-当前 CLI 强制配置 ASR，所以正常启动后的 `streaming_asr` 应为 `true`。health 只说明 ASGI 服务可响应、协议版本和 factory 已配置，不代表 ASR/TTS/VLM 已完成推理自检；当前 health 也不查询 VLM。
-
-## 6. 前端构建与同源路由
-
-```bash
-cd ~/Visual_Companion_Robot/new_code/web
+```powershell
+cd E:\CODE\Visual_Companion_Robot\new_code
+./scripts/check.ps1
+cd web
 npm ci
 npm run check
 npm run build
 ```
 
-生产静态文件位于 `web/dist/`。Gateway 会把 `VEYRASOUL_WEB_DIST` 以 `/` 挂载在 API/WS 路由之后，因此 Cloudflare Tunnel 可以直接回源 `127.0.0.1:8875`。若在 Gateway 前增加独立反向代理，它必须：
-
-- 以 HTTPS 提供静态文件；
-- 将 `/v2/realtime` 升级并转发为 WebSocket 到 `127.0.0.1:8875`；
-- 将 `/v2/health` 转发到 Gateway；
-- 保持同源，当前前端没有独立的 Gateway URL 配置；
-- 设置合理的连接超时、上传大小、速率限制和鉴权。
-
-当前项目使用 WebSocket 传 PCM/JPEG，不是 WebRTC。它便于控制和调试，但公网抖动、拥塞控制和回声体验仍需用真实网络验证。
-
-## 7. systemd、一键启动与公网切换
-
-仓库已提供：
-
-- `deploy/systemd/veyrasoul-v2.service`：Gateway、ASR/TTS 预热、同源前端；
-- `deploy/systemd/veyrasoul-v2-cloudflared.service`：把正式 Tunnel 回源切换到 `127.0.0.1:8875`；
-- `deploy/veyrasoul.env.example`：不含真实密钥的环境模板；
-- `scripts/start-elf2.sh`：安装单元、启动、健康检查、状态、停止和回滚。
-
-未来确认评审结束并批准切换后，才准备环境文件：
+上传时只同步白名单输入到板端的 `source`，不要上传 `.venv`、模型、密钥、数据、`node_modules`、Git 元数据或任意 release：
 
 ```bash
-sudo install -d -m 700 /etc/veyrasoul
-sudo install -m 600 deploy/veyrasoul.env.example /etc/veyrasoul/veyrasoul.env
-sudoedit /etc/veyrasoul/veyrasoul.env
-chmod +x scripts/start-elf2.sh
+# 在本机执行；按实际 SSH alias 调整。
+rsync -a --delete \
+  --include='/backend/' --include='/backend/src/***' --include='/backend/pyproject.toml' \
+  --include='/web/' --include='/web/dist/***' \
+  --include='/config/' --include='/config/persona.md' \
+  --exclude='*' \
+  /path/to/Visual_Companion_Robot/new_code/ anima-elf2:/home/wenkang/anima/source/
 ```
 
-获准切换时必须显式确认会替换 V1：
+发布器会再次校验类型、链接、权限、SHA-256 与 release 所有者；上面的 `rsync` 只是方便，不是安全边界。
+
+## 4. 仅首次或控制面升级时：受信安装
+
+从已审阅的工作树/签名制品执行一次。这个命令**显式**安装 root-owned 控制脚本和三个 systemd unit；后续普通 deploy 不会做此事：
 
 ```bash
-VEYRASOUL_ALLOW_V2_BOARD_ACTIVATION=I_UNDERSTAND_V1_WILL_BE_REPLACED ./scripts/start-elf2.sh
+# 首次可先上传完整 new_code 到 source，且 models 已放在 /home/wenkang/anima/models。
+ssh -t anima-elf2 'sudo bash /home/wenkang/anima/source/deploy/install-control-plane.sh'
 ```
 
-脚本会在 V2 Gateway 健康后才启动正式 Tunnel，并停止使用同一 token 的 V1 Tunnel，因此比赛评审期间严禁运行。未来需要回滚时执行：
+安装器会：创建 `anima-gateway`、`anima-candidate`、`anima-tunnel` 三个无登录服务用户；建立 root-owned 控制面与目录；将共享模型/venv 收紧为 root-owned、group/other 不可写；安装空配置模板；执行 `systemctl daemon-reload`。它不会启动公网服务、不会填写密钥、不会迁移或删除用户数据。
+
+如果以后需要修改 systemd hardening 或发布器本身，重复这一**受信安装**步骤；不要通过 release 更新 unit。
+
+## 5. 生产配置、Tunnel 与数据
+
+### 5.1 配置
 
 ```bash
-./scripts/start-elf2.sh rollback
+sudoedit /etc/anima/anima.env
+sudoedit /etc/anima/anima-candidate.env
+sudo install -m 600 -o root -g root /dev/null /etc/anima/tunnel-token
+sudoedit /etc/anima/tunnel-token
 ```
 
-这些单元仍属于“已实现、待 ELF2 验证”，不能在实机和 `anima.veyralux.org` 验收前视为生产就绪。
+`/etc/anima/anima.env` 以仓库 `deploy/anima.env.example` 为模板。至少填写：
 
-## 8. 板端验收
+- `ANIMA_LLM_API_KEY`
+- `ANIMA_ADMISSION_SECRET`（独立、至少 32 字节随机 ASCII）
+- `ANIMA_TELEMETRY_HMAC_KEY`（独立、至少 32 字节随机 ASCII）
+- `ANIMA_TURNSTILE_SITE_KEY` 与 `ANIMA_TURNSTILE_SECRET`
+- 实际的 `ANIMA_ASR_MODEL_DIR`、`ANIMA_TTS_MODEL_DIR`（服务内均应为 `/opt/anima/models/...`）
 
-部署不能只验证 `/health`。必须逐项取得证据：
+生产 env 不得定义 `ANIMA_HOST`、`ANIMA_PORT`、`ANIMA_WEB_DIST`、`ANIMA_DATA_ROOT`、`ANIMA_MEMORY_PATH`、`ANIMA_PERSONA_PATH`、`ANIMA_ADMISSION_REQUIRED`、`ANIMA_ALLOWED_ORIGINS` 或 `PYTHONPATH`。发布器会拒绝此类覆盖。
 
-1. ASR 模型加载、partial、endpoint final 和连续语音；
-2. DeepSeek 首 token/首句，thinking 确认关闭；
-3. Kokoro/Matcha/VITS 中英混合、冷/热 TTS 时延和自然度；
-4. 浏览器首音频播放且文字同步；
-5. 新发言打断旧 generation，旧回复不写入记忆；
-6. 摄像头本地预览实际 FPS，2 Hz JPEG 不拖慢预览；
-7. 已接入的 5 秒语义调度在真实 VLM worker 上验证准确性、新鲜度和队列有界；
-8. 8 小时 RSS、温度、CPU/NPU 频率和重连测试；
-9. V2 专用入口 `anima.veyralux.org` 在 PC/移动端使用 HTTPS/WSS、媒体权限和鉴权通过，同时确认 V1 专用入口 `robot.veyralux.org` 未被 V2 路由接管。
+candidate env 不放任何生产 API key、Turnstile key/secret、admission/HMAC secret 或生产路径。候选单元强制 `ANIMA_ADMISSION_REQUIRED=false`，因为它只在 loopback 上用于运行时/模型健康门。
+
+Tunnel token 只写入 `/etc/anima/tunnel-token`（root:root，0600）。`anima-cloudflared.service` 使用 systemd `LoadCredential=` 将其临时投递给独立的 `anima-tunnel` 进程，并以 `cloudflared tunnel … run --token-file …` 启动；token 不在进程参数、日志或 release 中。remote-config Tunnel 已配置 ingress 时不要添加 `--url` 覆盖控制面规则。
+
+### 5.2 旧数据迁移
+
+发布器不会静默复制、删除或降级旧数据。首次迁移前：停止明确的旧写入进程；对 SQLite 执行 WAL checkpoint 和 `PRAGMA quick_check`；先做一致性备份；再把目标数据库恢复到 `/var/lib/anima/memory/anima.db`，并执行：
+
+```bash
+sudo chown -R anima-gateway:anima-gateway /var/lib/anima
+sudo chmod -R go-rwx /var/lib/anima
+```
+
+在 candidate 的独立数据根做抽样恢复验证后，再开放 active。保留原始只读备份直到长时运行验收完成。
+
+## 6. 日常一键发布、启动与回滚
+
+控制面安装并完成配置后，唯一日常入口是 root-owned launcher：
+
+```bash
+# 一条命令：stage -> candidate:8876 health -> atomic activate -> active:8875 -> Tunnel
+ssh -t anima-elf2 'sudo /usr/local/sbin/anima-deploy deploy 20260724T120000Z'
+
+# 已激活版本的一键启动/重启
+ssh -t anima-elf2 'sudo /usr/local/sbin/anima-deploy start'
+
+# 状态、分步发布、回滚
+ssh -t anima-elf2 'sudo /usr/local/sbin/anima-deploy status'
+ssh -t anima-elf2 'sudo /usr/local/sbin/anima-deploy stage 20260724T120000Z'
+ssh -t anima-elf2 'sudo /usr/local/sbin/anima-deploy health'
+ssh -t anima-elf2 'sudo /usr/local/sbin/anima-deploy activate'
+ssh -t anima-elf2 'sudo /usr/local/sbin/anima-deploy rollback'
+```
+
+release id 只能是最长 64 位的字母、数字、`.`、`_`、`-`。同名 release 绝不覆盖。不要直接运行 `/home/wenkang/anima/source/scripts/start-elf2.sh`：它不是 root 受信入口，设计上会拒绝。
+
+如果管理员选择配置无密码 sudo，只允许固定命令 `/usr/local/sbin/anima-deploy`，不要授予 source 目录、shell、`systemctl` 或通配编辑权限。
+
+## 7. 验收与故障定位
+
+```bash
+sudo /usr/local/sbin/anima-deploy status
+sudo systemctl status anima.service anima-candidate.service anima-cloudflared.service --no-pager
+curl -fsS http://127.0.0.1:8875/v2/health
+sudo journalctl -u anima.service -u anima-cloudflared.service -n 120 --no-pager
+```
+
+`/v2/health` 是启动/路由/release 身份门，不替代真人验收。每次模型或依赖变更后至少验证：连续 ASR partial/final 与打断；LLM 首段与取消；中英混合 TTS 首音频；视觉预览 60 FPS 与 5 秒语义刷新解耦；视觉语义真实进入每轮上下文；真实 Live2D 模型、口型与身体交互；PC、平板、移动浏览器的 HTTPS/WSS、摄像头和麦克风权限；以及 8 小时 CPU/NPU/RSS/温度/断网重连。
+
+## 8. 迁移到低端 Linux Server
+
+该边界可直接迁移：新主机按目标 ABI 重建 root-owned `.venv` 和模型，恢复独立的 `/var/lib/anima` 一致快照，用 candidate 健康门和模态验收后，将同一个 `anima.veyralux.org` 专用 Tunnel 切换到新主机。客户端、Live2D 协议和用户数据布局无需感知底层是 RK3588 还是 x86_64。

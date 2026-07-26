@@ -1,10 +1,12 @@
-# VeyraSoul V2 用户数据隔离与 Anima 多实例设计
+# Anima v0.0.1 用户数据隔离与多实例设计
 
-> **文档状态：匿名隔离与个性化纵切片已落地，可信多用户设计仍未完成、未部署。** 本文依据 `new_code` 当前代码进行审查，明确区分“匿名数据分区”“账号认证”和“待实现能力”。V1 继续独立运行；V2 在完成本文验收门槛前不得作为可信多用户服务上线。
+> **文档状态：匿名隔离与个性化纵切片已落地，可信多用户设计仍未完成。** ELF2 可承载受控单机测试；在完成本文验收门槛前，Anima 不得宣称已经具备可信多租户公网能力。
+
+> 本文中 `/v2/*` 与 `schema: v1` 分别是网络协议和文件 schema 版本，不是产品代号。
 
 ## 1. 设计目标与安全不变量
 
-V2 需要从“一个浏览器会话对应一份共享记忆”的开发原型，演进为可承载多个用户、每个用户多个 Anima 的隔离系统。以下不变量必须同时成立：
+Anima 需要从“一个浏览器会话对应一份共享记忆”的开发原型，演进为可承载多个用户、每个用户多个 Anima 的隔离系统。以下不变量必须同时成立：
 
 1. **认证身份不能由客户端声明。** `UserId` 只能来自服务端验证后的身份上下文；URL、JSON、WebSocket payload 和 `localStorage` 中的值均不能充当身份凭据。
 2. **所有持久化访问先确定所有权，再打开存储。** 不能先按客户端提供的路径或 ID 打开文件，再在查询里补鉴权。
@@ -46,7 +48,7 @@ V2 需要从“一个浏览器会话对应一份共享记忆”的开发原型�
 | C-09 | `perception.error` 与设置读写失败已改为稳定错误码和固定用户消息，日志只记录异常类型。 | 其他新增 adapter 仍需遵守相同规则，禁止把异常正文直传客户端。 | **当前切片已修复** |
 | C-10 | systemd 目前以 `wenkang` 运行，数据路径也落在其 home。 | 程序、个人 home 与服务数据权限边界不清晰。 | **目标部署需重做** |
 
-结论：当前 V2 已实现“不同稳定匿名 session 默认使用不同物理 Store”的开发态隔离，并通过匿名/显式用户交叉测试；它**不是可信账号认证，也不能宣称已支持安全多用户公网服务**。正式多用户仍受 Auth Resolver、对象授权、Origin/限流、数据生命周期和备份门槛阻断。
+结论：Anima 当前已实现“不同稳定匿名 session 默认使用不同物理 Store”的开发态隔离，并通过匿名/显式用户交叉测试；它**不是可信账号认证，也不能宣称已支持安全多用户公网服务**。正式多用户仍受 Auth Resolver、对象授权、Origin/限流、数据生命周期和备份门槛阻断。
 
 ## 3. Threat model
 
@@ -85,7 +87,7 @@ flowchart LR
   S --> K["加密备份\n独立密钥域"]
 ```
 
-- V2 应防止普通远程用户、其他租户、受限服务账号和误配置造成的数据串用。
+- Anima 应防止普通远程用户、其他租户、受限服务账号和误配置造成的数据串用。
 - 若攻击者已经取得 root、运行中数据库解密密钥和进程内存，则应用层不能提供绝对保密；应由磁盘加密、系统补丁、物理管控和密钥轮换降低影响。
 - 模型本身的“绝不幻觉”不属于隔离保证；但模型输出绝不能绕过对象授权、Port 出境策略或数据库边界。
 
@@ -129,17 +131,17 @@ RequestScope {
 目标 Linux/ELF2 布局如下；Windows 开发机使用等价 ACL 和独立 data root，但生产边界以 Linux 为准。
 
 ```text
-/opt/veyrasoul/
+/opt/anima/
 ├── releases/<version>/           # 只读程序
 ├── current -> releases/<version> # 原子切换
 └── models/<model-id>/            # 只读共享模型，不含用户数据
 
-/etc/veyrasoul/
+/etc/anima/
 ├── service.env                   # 非秘密运行配置，root 管理
 ├── policies/egress.yaml          # 数据出境策略
 └── secrets.d/                    # 0600；服务 key/KEK，禁止进入导出和仓库
 
-/var/lib/veyrasoul/
+/var/lib/anima/
 ├── control/identity.sqlite       # 最小账号/认证/所有权目录
 ├── users/<shard>/<UserStorageKey>/
 │   ├── account.sqlite
@@ -152,15 +154,15 @@ RequestScope {
 │   └── libraries/                # 可选的用户级知识库；禁止跨用户去重
 └── audit/                        # 独立、追加式、安全事件
 
-/var/cache/veyrasoul/             # 可删除的模型/推理缓存，不含长期事实
-/run/veyrasoul/                   # socket、锁、临时会话，重启可丢弃
-/var/backups/veyrasoul/           # 加密快照或上传前暂存，不与在线 DB 混用
+/var/cache/anima/             # 可删除的模型/推理缓存，不含长期事实
+/run/anima/                   # socket、锁、临时会话，重启可丢弃
+/var/backups/anima/           # 加密快照或上传前暂存，不与在线 DB 混用
 ```
 
 要求：
 
 - 目录使用 `0700`，数据库/Anima.md/文档使用 `0600`，服务 `UMask=0077`。
-- 目标服务账号为专用 `veyrasoul`，不能继续依赖个人 `wenkang` home；程序只读、数据 root 可写。
+- 目标服务账号为专用 `anima`，不能继续依赖个人 `wenkang` home；程序只读、数据 root 可写。
 - 路径解析只接受内部 `StorageKey`；拒绝 `..`、绝对路径、分隔符、符号链接、junction 和 hard-link 越界。
 - 打开关键文件应使用等价于 `O_NOFOLLOW` 的安全方式，并验证解析后的父目录仍位于 data root。
 - 共享模型目录不得含个人训练样本；由用户上传或克隆得到的音色属于用户数据，存入对应 Anima 目录。
@@ -280,7 +282,7 @@ PRAGMA wal_autocheckpoint=1000;
 ```markdown
 ---
 schema: v1
-display_name: 草莓兔兔
+display_name: Anima
 language: zh-CN
 ---
 
@@ -382,7 +384,7 @@ Adapter 不得接收 `MemoryStore`、数据库连接、用户根路径或 API �
 
 ### 11.1 密钥类别
 
-- **服务级 Provider key**：位于 `/etc/veyrasoul/secrets.d` 或系统凭据服务，仅 Adapter Broker 可读。
+- **服务级 Provider key**：位于 `/etc/anima/secrets.d` 或系统凭据服务，仅 Adapter Broker 可读。
 - **路径派生 HMAC key**：只用于生成 StorageKey，独立于数据库加密 key。
 - **用户数据密钥 DEK**：每用户独立；由设备 KEK 包装，控制库只保存 `key_ref/wrapped_key`。
 - **备份密钥**：与在线数据 key 分离；备份包用随机 DEK 加密，再由离线/远端接收方公钥包装。
@@ -392,7 +394,7 @@ SQLite 社区版不提供透明加密。目标生产至少需要磁盘加密 + �
 
 ### 11.2 服务最小权限
 
-目标 systemd 单元应使用专用用户并收紧：`ProtectSystem=strict`、`ProtectHome=true`、`ReadWritePaths=/var/lib/veyrasoul /var/cache/veyrasoul /run/veyrasoul`、`NoNewPrivileges=true`、`PrivateTmp=true`、`UMask=0077`、`RestrictSUIDSGID=true`。是否启用 `PrivateDevices` 取决于模型进程是否直接访问 NPU/摄像头；Gateway 浏览器采集模式本身不需要设备节点。
+目标 systemd 单元应使用专用用户并收紧：`ProtectSystem=strict`、`ProtectHome=true`、`ReadWritePaths=/var/lib/anima /var/cache/anima /run/anima`、`NoNewPrivileges=true`、`PrivateTmp=true`、`UMask=0077`、`RestrictSUIDSGID=true`。是否启用 `PrivateDevices` 取决于模型进程是否直接访问 NPU/摄像头；Gateway 浏览器采集模式本身不需要设备节点。
 
 模型 worker、Gateway、Backup Agent 和 Auth/Key Broker 应使用不同服务身份：
 
@@ -460,7 +462,7 @@ schema_migrations(version INTEGER PRIMARY KEY, name TEXT, sha256 TEXT,
 
 不依赖 down migration 回滚用户数据。回滚程序必须使用迁移前快照或明确支持 N/N-1 schema 的版本。测试必须注入“迁移中断电”和重复执行。
 
-当前共享 `veyrasoul.db` 没有可信 UserId/AnimaId，**不能自动按 session 字符串推断所有者并拆分**。若其中仅为开发测试数据，应归档后从空的分区存储启动；若确有需要保留的单用户数据，必须由管理员明确指定一个 legacy User/Anima，在离线迁移中整体导入并生成审计报告。任何归属不明的数据都进入隔离 quarantine，不能被任意新账号继承。
+当前共享的旧开发数据库 没有可信 UserId/AnimaId，**不能自动按 session 字符串推断所有者并拆分**。若其中仅为开发测试数据，应归档后从空的分区存储启动；若确有需要保留的单用户数据，必须由管理员明确指定一个 legacy User/Anima，在离线迁移中整体导入并生成审计报告。任何归属不明的数据都进入隔离 quarantine，不能被任意新账号继承。
 
 ## 14. 备份、恢复与灾备
 
@@ -487,7 +489,7 @@ schema_migrations(version INTEGER PRIMARY KEY, name TEXT, sha256 TEXT,
 6. 重新生成 StorageKey/DEK、撤销旧 Session，重建派生索引；
 7. 运行最小读写/RAG smoke test 后才标记成功。
 
-灾备恢复时，程序 release、模型和用户数据分别恢复；恢复用户数据不应要求恢复旧仓库工作树，也不能把 V1 覆盖为 V2。
+灾备恢复时，程序 release、模型和用户数据分别恢复；恢复用户数据不应要求恢复旧仓库工作树，也不能覆盖当前已激活 release。
 
 ## 15. 审计与隐私可观测性
 
@@ -571,9 +573,9 @@ schema_migrations(version INTEGER PRIMARY KEY, name TEXT, sha256 TEXT,
 ### 17.6 日志、秘密与系统权限
 
 - 自动扫描日志/trace/审计/错误响应，注入的金丝雀 prompt、API key、Cookie、图像 hash 和文档正文不得出现。
-- 服务账号无法写 `/opt/veyrasoul`、读取无关 home 或访问其他 User store；Backup/Model/Web 进程权限按矩阵验证。
+- 服务账号无法写 `/opt/anima`、读取无关 home 或访问其他 User store；Backup/Model/Web 进程权限按矩阵验证。
 - 备份文件和遗失 data root 在没有 KEK/接收方私钥时不能解密；密钥轮换后新旧版本恢复符合策略。
 
 ### 17.7 发布结论
 
-只有当以上测试在 Windows 开发环境、ELF2 本地文件系统和真实 HTTPS/WSS 入口均有可复现报告，并且 P0 全部通过，才允许将 V2 标记为“支持多用户”。P1/P2 对正式公开服务同样是发布门槛；在此之前 V1 继续运行，V2 不部署到开发板或评委站点。
+只有当以上测试在 Windows 开发环境、ELF2/目标 Linux 本地文件系统和真实 HTTPS/WSS 入口均有可复现报告，并且 P0 全部通过，才允许将 Anima 标记为“支持多用户”。P1/P2 对正式公开服务同样是发布门槛；此前 ELF2 只作为受控测试服务器。

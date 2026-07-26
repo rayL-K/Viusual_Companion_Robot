@@ -1,12 +1,14 @@
-# Realtime Protocol v2
+# Anima Realtime Protocol（wire v2）
+
+> `v2` 是网络协议版本，不是产品代号；当前产品版本为 Anima v0.0.1。
 
 ## 1. 连接
 
-WebSocket 路径：`/v2/realtime?session=<stable-session-id>&anima=<optional-anima-id>`
+WebSocket 路径：`/v2/realtime`。
 
-连接建立后客户端发送 `session.hello`。控制事件使用 JSON text frame，PCM、JPEG 和回复音频使用 binary frame，避免 Base64 体积和主线程编码开销。前端默认连接当前页面的同源 `ws(s)://<host>/v2/realtime`。
+公网入口先通过 `/v2/admission/status` 与 Turnstile 完成准入，Gateway 以 Secure、HttpOnly、SameSite=Strict 的签名 admission/device cookie 建立匿名设备身份；WebSocket URL 不携带 session、user、anima 或 token。连接建立后客户端发送 `session.hello`，并每 25 秒发送一次 `session.heartbeat`。控制事件使用 JSON text frame，PCM、JPEG 和回复音频使用 binary frame，避免 Base64 体积和主线程编码开销。前端默认连接当前页面的同源 `ws(s)://<host>/v2/realtime`。
 
-缺省 `user` 时，Gateway 将严格校验后的稳定 session hint 哈希为匿名 UserId，使不同浏览器默认落入不同物理分库。默认组合根会**拒绝所有显式 `user` query**；正式账号必须由服务端 IdentityResolver/token 产生可信 UserId，不能把 query、JSON 或 localStorage 当作身份凭据。测试可注入 `client_asserted` resolver 验证分库，但该 resolver 不进入默认运行组合。
+公网 Gateway 从签名 device cookie 派生稳定匿名 UserId 与 SessionId，使不同设备落入不同物理分库，并忽略客户端 session hint。正式账号必须由服务端 IdentityResolver/token 产生可信 UserId，不能把 query、JSON 或 localStorage 当作身份凭据。关闭公网准入的 loopback 开发模式仍保留 session query 测试能力，但它不属于生产协议。
 
 ## 2. JSON envelope
 
@@ -75,7 +77,7 @@ WebSocket 路径：`/v2/realtime?session=<stable-session-id>&anima=<optional-ani
 
 ```json
 {"v":2,"type":"settings.get","payload":{}}
-{"v":2,"type":"settings.update","payload":{"expectedRevision":3,"personaMarkdown":"# 草莓兔兔\n自然、真诚。","maxReplyChars":160,"replyDelayMs":0,"voiceId":"default"}}
+{"v":2,"type":"settings.update","payload":{"expectedRevision":3,"personaMarkdown":"# Anima\n自然、真诚。","maxReplyChars":160,"replyDelayMs":0,"voiceId":"default"}}
 ```
 
 - `personaMarkdown`：1–20000 字符；写入该 User/Anima 的 `Anima.md` 和 SQLite revision；

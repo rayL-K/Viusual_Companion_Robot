@@ -1,0 +1,32 @@
+[Unit]
+Description=Anima v0.0.1 Cloudflare Tunnel
+After=network-online.target anima.service
+Wants=network-online.target
+Requires=anima.service
+ConditionPathExists=/etc/anima/tunnel-token
+
+[Service]
+Type=simple
+User=anima-tunnel
+Group=anima-tunnel
+LoadCredential=anima-token:/etc/anima/tunnel-token
+ExecStart=/usr/bin/cloudflared tunnel --no-autoupdate --protocol auto --edge-ip-version 4 run --token-file %d/anima-token
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=90
+TimeoutStopSec=20
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_INET AF_INET6
+LockPersonality=true
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

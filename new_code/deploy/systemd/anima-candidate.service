@@ -1,0 +1,43 @@
+[Unit]
+Description=Anima v0.0.1 candidate health-check instance
+After=network-online.target
+Wants=network-online.target
+ConditionPathIsDirectory=/home/wenkang/anima/candidate/backend
+
+[Service]
+Type=simple
+User=anima-candidate
+Group=anima-candidate
+WorkingDirectory=/opt/anima/candidate/backend
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/etc/anima/anima-candidate.env
+ExecStart=/usr/bin/env ANIMA_HOST=127.0.0.1 ANIMA_PORT=8876 ANIMA_WEB_DIST=/opt/anima/candidate/web/dist ANIMA_DATA_ROOT=/var/lib/anima-candidate ANIMA_MEMORY_PATH=/var/lib/anima-candidate/memory/anima.db ANIMA_PERSONA_PATH=/opt/anima/candidate/config/persona.md ANIMA_LLM_API_KEY=candidate ANIMA_ADMISSION_REQUIRED=false ANIMA_ADMISSION_SECRET= ANIMA_ALLOWED_ORIGINS= ANIMA_TELEMETRY_HMAC_KEY= ANIMA_TURNSTILE_SECRET= ANIMA_TURNSTILE_SITE_KEY= PYTHONPATH=/opt/anima/candidate/backend/src /opt/anima/runtime/.venv/bin/python -m veyrasoul.gateway
+Restart=on-failure
+RestartSec=2
+TimeoutStartSec=90
+TimeoutStopSec=20
+KillSignal=SIGINT
+MemoryHigh=3G
+MemoryMax=4G
+LimitNOFILE=65536
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true
+CapabilityBoundingSet=
+ReadWritePaths=/var/lib/anima-candidate /var/cache/anima-candidate /run/anima-candidate
+ReadOnlyPaths=/opt/anima/candidate /opt/anima/runtime/.venv /opt/anima/models
+InaccessiblePaths=/var/lib/anima /var/cache/anima /run/anima
+BindReadOnlyPaths=/home/wenkang/anima/candidate:/opt/anima/candidate
+BindReadOnlyPaths=/home/wenkang/anima/.venv:/opt/anima/runtime/.venv
+BindReadOnlyPaths=/home/wenkang/anima/models:/opt/anima/models
+StateDirectory=anima-candidate
+CacheDirectory=anima-candidate
+RuntimeDirectory=anima-candidate

@@ -1,127 +1,76 @@
-# VeyraSoul V2 实施路线
+# Anima v0.0.1 实施路线
 
-状态基于当前 `new_code/` 源码，不把设计文档中的目标视为已实现。
+> 状态以 `new_code/` 源码和可复现测试为准。设计目标、自动化浏览器结果和 ELF2 真机指标分开记录。
 
-## Phase 0：冻结与证据 — 已完成
+## P0：可用的单机产品链路
 
-- 旧代码源码 ZIP；
-- 全 Git 历史 bundle；
-- 未跟踪比赛材料 ZIP；
-- SHA-256 manifest 与工作区状态。
+### 已有基础
 
-## Phase 1：会话与数据内核 — 基本完成，待扩展
+- FastAPI/ASGI Gateway、binary WebSocket、generation/cancellation；
+- 浏览器 AudioWorklet PCM16、本地摄像头预览和 latest-only JPEG；
+- sherpa-onnx streaming ASR 与 Kokoro/Matcha/VITS TTS Adapter；
+- DeepSeek Flash SSE 与非思考对话配置；
+- SQLite WAL、FTS/RAG、记忆 provenance、User/Anima 分区和 `Anima.md`；
+- 真实 Cubism/Pixi Live2D、口型、视线、表情/动作调度和本地身体交互；
+- PC/手机/平板的响应式结构与本机自动化验证。
 
-已完成：
+### 当前最高优先级
 
-- 事件契约、latest-value、generation/cancellation；
-- SQLite WAL、事实 revision、FTS5 RAG、向量候选融合；
-- Memory Curator、来源可靠度、弱冲突保护、revision 与 provenance；
-- 连续 AffectState、真实时间衰减和 AvatarIntent/SignalMixer 闭环；
-- 单元测试与 2,000 条记忆基准脚本。
-- 匿名 session 派生 UserId、每 User/Anima 哈希目录和物理 SQLite 分库；
-- `Anima.md`、回复上限/延迟/音色 revision 与前后端设置闭环；
-- 旧共享库只按相同 session 安全迁移 turns，不自动归属全局 facts。
+1. **TurnTrace**：完整打点 ASR final -> context -> LLM first delta/clause -> TTS -> first reply frame -> playback/cancel，每次优化都用 p50/p95 证明。
+2. **真流式语音输出**：去掉“LLM 一句 -> 等整段 WAV -> 再继续 LLM”的串行空洞，改为可取消的 TTS 流和 AudioWorklet 排队。
+3. **打断与背压**：控制帧最高优先级，PCM 只允许 120–200 ms 积压，JPEG latest-only；新 `speech_started` 快速静音旧音频。
+4. **ContextPlanner**：为 persona、近期对话、记忆/RAG、视觉和用户输入设定总 token 预算；稳定前缀保持可缓存。
+5. **ELF2 真机闭环**：在不影响主机其他服务的前提下，按 candidate health 流程部署到 `anima.veyralux.org`。
 
-待完成：
+## P1：感知准确性与连续上下文
 
-- 本地 embedding 模型与文档 RAG 导入；
-- 事实抽取器、自动情节摘要和长期 evidence 压缩；
-- 跨进程/重启后的 session actor 恢复策略。
-- Auth Resolver/token、匿名数据升级/导出/删除与加密备份恢复实现。
+- 保持摄像头本地预览 60 FPS 目标，语义推理默认每 5 秒一次，两者不共用渲染关键路径；
+- 为视觉快照增加 server-observed time、`frame_id`、置信度和来源，一轮对话只冻结一份快照；
+- 新鲜视觉语义无条件进入上下文，但不向用户照读检测器原始列表；
+- 引入人/物/姿态结构化快路，语义 VLM 负责自然描述和环境关系；
+- 用固定真人、动作、表情、室内/户外和负例图集计算准确率，不以单张演示替代。
 
-## Phase 2：实时纵向链路 — 进行中
+## P1：关系记忆与多轮一致性
 
-已完成：
+- 最近对话必须按 Conversation 连续携带，“为什么？”等省略问句可回溯上一轮；
+- 增加事实抽取、情节摘要、时间上下文和 evidence 压缩；
+- 检索 query 同时使用当前发言、最近对话意图和视觉语义，不只搜当前一句；
+- 同一 Anima 多会话写入使用单 writer/actor，generation 仍属于各 Session；
+- 被取消、低置信或未完整的回复不进入长期记忆。
 
-- FastAPI/ASGI Gateway 与 VSR2 binary WebSocket；
-- 浏览器 AudioWorklet PCM16、视频关键帧采样和本地预览；
-- sherpa-onnx streaming ASR 适配器；
-- DeepSeek 非思考 SSE 输出；
-- sherpa-onnx Kokoro/Matcha/VITS TTS 适配器；
-- Matcha Baker + Vocos TTS 资产布局适配；
-- ASR/TTS 启动期预热，首轮不再承担模型加载；
-- 服务端音频先于配对文本、前端播放时显字；
-- 新轮取消旧 generation 的单元测试。
+## P1：ToC 身份与数据边界
 
-待完成及验收门槛：
+1. Secure/HttpOnly/SameSite 登录态或等价短期 token；WebSocket query 不承担身份凭据。
+2. Auth Resolver + 所有权校验，每个 User/Anima 物理 Store 与 RAG scope。
+3. 每用户/每 IP 连接数、媒体速率和供应商成本预算；Origin 白名单。
+4. 匿名数据升级、导出、删除、保留期、加密备份和抽样恢复。
+5. 日志、metrics 和 trace 不含 prompt/回复、原始音视频、API key 或高基数主体 ID。
 
-- 修复/确认 Gateway 的真实 ASR 模型启动配置并完成 ELF2 麦克风闭环；
-- DeepSeek HTTP client 已复用；待验证连接缓存命中、超时和断流取消；
-- TTS 分块或下一句预取，避免逐句串行空隙；
-- VAD `speech_started` 级 barge-in，而非等待 final；
-- 公网条件下测量停止说话到首音频 p50/p95。
+在这些门槛完成前，ELF2 部署定位为受控测试服务，不宣称已具备可信多租户生产能力。
 
-## Phase 3：感知 — 语义骨架已接通，模型与快路径未完成
+## P2：供应商和容量解耦
 
-- 已完成：JPEG → 容量 1 latest-value 帧槽；
-- 已完成：固定最短 5 秒语义调度、旧帧覆盖；
-- 已完成：板内 `/analyze` HTTP 适配器、`VisualSnapshot` 发布、前端事件和每轮上下文注入；
-- 待完成：仓库内实际 RK3588 Qwen/VLM worker、模型加载和板端准确度/延迟验证；
-- RKNN 人物/物体/姿态快路径；
-- YuNet/SFace 人脸身份与 FER+ 情绪证据；
-- 场景变化触发（固定 5 秒节流已实现）；
-- 多人说话人时间窗；
-- `frame_id`、观察时间、完成时间一致性；
-- 每轮无条件注入仍然新鲜的视觉快照。
+- 完成 `ProviderRegistry`：ASR、Vision、LLM、TTS 及可选 RealtimeConversation 各有 capability/data-policy/health；
+- 默认模式为模块化低延迟链路，原始音视频上云的实时通话仅在用户主动选择后启用；
+- 设置供应商超时、并发上限、circuit breaker 和实际成本指标；
+- 在 ELF2 上固定 ASR/TTS/VLM 模型、线程数、RSS 和温度基线；
+- 未来迁移到低端 Linux Server 时，仅替换 Adapter 和容量配置，客户端协议不变。
 
-验收要求：本地预览保持流畅时，机器视觉不能形成帧队列；语义准确度和新鲜度需使用真实人物/室内场景数据集测量。
+## P2：发布与真实环境验收
 
-## Phase 4：拟人表现与视频通话 UX — 连续情感与真实 Live2D 纵切片完成
+- 已提供 `stage -> health -> activate -> rollback` 发布器、独立 candidate 端口、专用 systemd 用户与 Tunnel token；
+- 候选版本不接管公网；失败不改当前 release；脚本不管理主机上其他服务；
+- 完成 `anima.veyralux.org` 的 PC/手机真实 HTTPS/WSS、媒体权限、旋转、后台恢复和弱网矩阵；
+- 进行 8 小时 soak、断网/重连/打断压力、内存增长、温度/降频和 OOM 验收；
+- 对每次部署执行回滚演练和数据抽样恢复，不只测 `/v2/health`。
 
-已完成：
+## 发布硬门槛
 
-- PC 主舞台、摄像头画中画、通话计时、麦克风/摄像头/挂断控制；
-- 移动端安全区和响应式布局；
-- 本地预览与视觉上传频率解耦；
-- 本地 Cubism/Pixi runtime 与真实 Strawberry_Rabbit 模型；
-- 桌面 4096/移动 1024 纹理自适应、ResizeObserver fit、60 FPS ticker 与失败回退；
-- 连续参数 SignalMixer、指针视线、呼吸、眨眼、头眼和微笑；
-- 实际 WAV 20 ms RMS 包络按播放时间驱动口型；
-- 用户/视觉弱情感证据、真实时间衰减、renderer-neutral AvatarIntent；
-- listening/thinking/speaking/idle 与 generation/segmentIndex 同步；
-- 前端按 sessionId + generation + seq 拒绝旧代/乱序意图；
-- 浏览器原生 AvatarActionScheduler：真实 expression/motion、能力过滤、优先级/持续时间/冷却/抢占、代际门控与 RMS 最终混合顺序；
-- 面向用户的动作盘已移除；角色 expression/motion 由自主导演和浏览器能力表选择；
-- `@use-gesture/vanilla`、model3 HitArea、舞台视觉左右语义、tap/press/stroke、接触反馈和本地 InteractionDirector 已进入实现与单元测试阶段；
-- 1440×900、320×568、390×844、768×1024、1024×768、844×390 Chromium 模型加载与无溢出验证。
-
-待完成：
-
-- viseme、语义重音与动作时间轴；
-- 自动生成/校验 AvatarCapabilityManifest、HitArea 叠图与全资产视觉回归；开发调试能力必须默认隐藏，不能重新成为用户动作盘；
-- 真实手机的触控命中率、误触、无障碍、帧耗 P95 和反复挂载资源回收验收；
-- 更成熟的端侧情绪分类器替换当前可解释弱证据词典；
-- 真机摄像头、麦克风、方向切换、后台恢复和弱网矩阵；
-- 视觉回归/E2E 自动化，不只依赖静态截图。
-
-## Phase 5：板端与公网发布 — 部署骨架冻结，评审期间禁止执行
-
-- 已完成：Gateway 同源托管 `web/dist`；
-- 已完成：V2 Gateway/Cloudflare systemd 单元、环境模板、一键启动、健康等待与 V1 Tunnel 回滚；
-- 已完成：启动脚本加入显式激活锁，默认保护正在评审使用的 V1；
-- 当前约束：V2 仅做本机与自动化验证，不部署 ELF2；`robot.veyralux.org` 只运行 V1，`anima.veyralux.org` 只保留给 V2 且当前不接管 V1；
-- 当前约束：Strawberry Rabbit 模型、美术、纹理与动作的公网再分发授权尚未闭环；运行库许可不能替代模型作者许可；
-- 待完成：ELF2 上固定 ASR/TTS/VLM 模型与线程数；
-- 待完成：Cloudflare HTTPS/WSS 真实入口、鉴权和限流；
-
-## Phase 6：本机拟真验证 — 进行中
-
-- 已完成：真实 ASGI Gateway、WebSocket binary media、确定性 LLM/VLM/TTS 桩和 Chrome E2E；
-- 已完成：六种桌面/手机/平板横竖屏下真实 Live2D、fake camera/mic、音频播放后显字、视觉语义、设置面板、按钮裁切与整页溢出检查；
-- 已完成：慢回复被新一轮打断后，旧 generation 文字与声音不会复活；
-- 已完成：桌面浏览器强制关闭真实 WebSocket 后指数退避重建连接，并可继续对话；本次本机恢复约 0.8 秒，只是确定性基准，不代表公网 SLO；
-- 已完成：E2E 不接触 ELF2、不使用正式 Tunnel，保证 V1 评审链路不变；
-- 待完成：丢包/高延迟/限带宽注入、连续多次重连、长会话和内存增长。
-- 断网、重连、打断、内存峰值、温度降频和 8 小时 soak；
-- 仅在 V2 门禁通过后启用 `anima.veyralux.org`；`robot.veyralux.org` 始终保持 V1 独立入口与一键回滚能力。
-
-## 发布前硬门槛
-
-1. `python -m pytest -q`、`npm run check`、`npm run build` 全部通过；
-2. 真实 ELF2 上 ASR → LLM → TTS → 浏览器播放闭环通过；
-3. 停止说话到角色开口、打断、视觉新鲜度、Live2D FPS 有 p50/p95 数据；
-4. 摄像头本地预览与 5 秒语义更新互不拖慢；
-5. PC 和至少两种移动端浏览器完成权限、旋转、重连和安全区测试；
-6. 密钥不进入仓库，公网入口有 TLS、鉴权、限流和回滚；
-7. 长时间运行无持续内存增长、过热降频导致的不可接受退化或 OOM；
-8. 公开制品中的 Live2D 模型资源具有可审计且覆盖 Web 托管/再分发用途的授权证据。
+1. Backend test、Web check/build、Live2D browser smoke 全部通过；
+2. Live2D 模型在桌面和 390 px 移动视口真实加载，无未预期 console/page error；
+3. ELF2 真模型 ASR -> context -> LLM -> TTS -> 同步播放闭环通过；
+4. 停止说话到首个有意义音频、打断、视觉新鲜度和预览 FPS 都有 p50/p95；
+5. 本地预览与 5 秒语义更新互不拖慢；
+6. `anima.veyralux.org` 有 TLS、鉴权、Origin/限流、成本预算和可验证回滚；
+7. 密钥不进仓库/日志/命令行，发布制品无用户数据；
+8. 公开制品中的 Live2D 模型具有覆盖 Web 托管和再分发的可审计授权。
