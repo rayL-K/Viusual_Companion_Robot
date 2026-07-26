@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import shutil
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
 
 from veyrasoul.identity import AnimaId, UserId
 
@@ -63,12 +65,34 @@ class IdentityService:
     def profile_store(
         self, actor_id: UserId, anima_id: AnimaId
     ) -> SqliteAnimaProfileStore:
-        anima = self.repository.get_anima(actor_id, anima_id)
-        if anima.state != ACTIVE:
-            raise LifecycleConflictError("Anima 不处于 active 状态")
+        self.require_active_anima(actor_id, anima_id)
         return SqliteAnimaProfileStore(
             self.layout, actor_id, anima_id, self.default_persona
         )
+
+    def require_active_anima(self, actor_id: UserId, anima_id: AnimaId) -> Anima:
+        """Authorize ownership and reject data access after deletion starts."""
+
+        anima = self.repository.get_anima(actor_id, anima_id)
+        if anima.state != ACTIVE:
+            raise LifecycleConflictError("Anima 不处于 active 状态")
+        return anima
+
+    @contextmanager
+    def active_anima_lease(
+        self, actor_id: UserId, anima_id: AnimaId
+    ) -> Iterator[Anima]:
+        """Keep destructive lifecycle transitions behind a durable I/O lease."""
+
+        anima, lease_id = self.repository.acquire_active_anima_lease(
+            actor_id, anima_id
+        )
+        try:
+            yield anima
+        finally:
+            self.repository.release_active_anima_lease(
+                actor_id, anima_id, lease_id
+            )
 
     def request_anima_deletion(
         self, actor_id: UserId, anima_id: AnimaId, expected_revision: int

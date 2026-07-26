@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import shutil
 import sqlite3
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -50,7 +52,7 @@ def test_schema_migration_is_versioned_and_reopenable(tmp_path) -> None:
     reopened = SqliteIdentityRepository(repo.database_path)
     assert reopened.get_user(UserId.parse("alice")).display_name == "Alice"
     with sqlite3.connect(repo.database_path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
         tables = {
             row[0]
             for row in connection.execute(
@@ -83,6 +85,61 @@ def test_user_and_multiple_anima_crud_is_owner_scoped(tmp_path) -> None:
     assert renamed.display_name == "月兔二号"
     assert renamed.revision == 2
     assert repo.rename_user(alice, "Alice C.", 1).revision == 2
+
+
+def test_active_io_lease_prevents_deletion_transition_until_release(tmp_path) -> None:
+    identity = service(tmp_path)
+    alice = UserId.parse("alice")
+    rabbit = AnimaId.parse("rabbit")
+    identity.create_user(alice, "Alice")
+    identity.create_anima(alice, rabbit, "月兔")
+    lease_entered = threading.Event()
+    release_io = threading.Event()
+
+    def active_io() -> None:
+        with identity.active_anima_lease(alice, rabbit):
+            lease_entered.set()
+            assert release_io.wait(2)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        io_future = executor.submit(active_io)
+        assert lease_entered.wait(2)
+        deletion = executor.submit(
+            identity.request_anima_deletion, alice, rabbit, 1
+        )
+        with pytest.raises(LifecycleConflictError, match="正在处理数据"):
+            deletion.result(timeout=2)
+        assert identity.get_anima(alice, rabbit).state == ACTIVE
+        release_io.set()
+        io_future.result(timeout=2)
+
+    deleting = identity.request_anima_deletion(alice, rabbit, 1)
+    assert deleting.state == DELETING
+
+
+def test_finalize_rejects_unexpired_cross_process_lease(tmp_path) -> None:
+    identity = service(tmp_path)
+    alice = UserId.parse("alice")
+    rabbit = AnimaId.parse("rabbit")
+    identity.create_user(alice, "Alice")
+    identity.create_anima(alice, rabbit, "月兔")
+    deleting = identity.request_anima_deletion(alice, rabbit, 1)
+
+    # Simulate a lease persisted by another process immediately before its
+    # lifecycle observation. The finalizer must fail closed until it expires.
+    now = int(time.time() * 1000)
+    with sqlite3.connect(identity.repository.database_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO active_anima_leases(
+                lease_id, owner_user_id, anima_id, expires_at_ms, created_at_ms
+            ) VALUES(?, ?, ?, ?, ?)
+            """,
+            ("other-process", alice.value, rabbit.value, now + 60_000, now),
+        )
+    with pytest.raises(LifecycleConflictError, match="正在处理数据"):
+        identity.finalize_anima_deletion(alice, rabbit, deleting.revision)
+    assert identity.get_anima(alice, rabbit).state == DELETING
 
 
 @pytest.mark.parametrize(

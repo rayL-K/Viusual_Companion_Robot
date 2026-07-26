@@ -7,7 +7,7 @@ import sqlite3
 from .catalog_model import CatalogError
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def migrate(connection: sqlite3.Connection) -> None:
@@ -16,7 +16,11 @@ def migrate(connection: sqlite3.Connection) -> None:
         raise CatalogError(f"目录数据库版本 {version} 高于程序支持的 {SCHEMA_VERSION}")
     if version == 0:
         _migration_1(connection)
-        connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+        connection.execute("PRAGMA user_version=1")
+        version = 1
+    if version == 1:
+        _migration_2(connection)
+        connection.execute("PRAGMA user_version=2")
 
 
 def _migration_1(connection: sqlite3.Connection) -> None:
@@ -42,5 +46,23 @@ def _migration_1(connection: sqlite3.Connection) -> None:
         );
         CREATE INDEX idx_animas_owner_state
         ON animas(owner_user_id, state, created_at_ms);
+        """
+    )
+
+
+def _migration_2(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE active_anima_leases (
+            lease_id TEXT PRIMARY KEY,
+            owner_user_id TEXT NOT NULL,
+            anima_id TEXT NOT NULL,
+            expires_at_ms INTEGER NOT NULL,
+            created_at_ms INTEGER NOT NULL,
+            FOREIGN KEY(owner_user_id, anima_id)
+                REFERENCES animas(owner_user_id, anima_id)
+        );
+        CREATE INDEX idx_active_anima_leases_target
+        ON active_anima_leases(owner_user_id, anima_id, expires_at_ms);
         """
     )

@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 import threading
 import time
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Iterator
@@ -132,6 +133,48 @@ class SqliteIdentityRepository:
             actor_id, anima_id, expected_revision, next_state=DELETING
         )
 
+    def acquire_active_anima_lease(
+        self,
+        actor_id: UserId,
+        anima_id: AnimaId,
+        *,
+        ttl_ms: int = 300_000,
+    ) -> tuple[Anima, str]:
+        """Atomically prove ACTIVE and persist a cross-process I/O lease."""
+
+        if isinstance(ttl_ms, bool) or not 1_000 <= ttl_ms <= 3_600_000:
+            raise ValueError("lease ttl_ms 必须在 1000-3600000 之间")
+        now = _now_ms()
+        lease_id = uuid.uuid4().hex
+        with self._write() as connection:
+            _purge_expired_leases(connection, now)
+            row = _owned_anima(connection, actor_id, anima_id, include_deleted=True)
+            if row is None:
+                raise ObjectNotFoundError("Anima 不存在")
+            if row["state"] != ACTIVE:
+                raise LifecycleConflictError("Anima 不处于 active 状态")
+            connection.execute(
+                """
+                INSERT INTO active_anima_leases(
+                    lease_id, owner_user_id, anima_id, expires_at_ms, created_at_ms
+                ) VALUES(?, ?, ?, ?, ?)
+                """,
+                (lease_id, actor_id.value, anima_id.value, now + ttl_ms, now),
+            )
+        return row_to_anima(row), lease_id
+
+    def release_active_anima_lease(
+        self, actor_id: UserId, anima_id: AnimaId, lease_id: str
+    ) -> None:
+        with self._write() as connection:
+            connection.execute(
+                """
+                DELETE FROM active_anima_leases
+                WHERE lease_id=? AND owner_user_id=? AND anima_id=?
+                """,
+                (lease_id, actor_id.value, anima_id.value),
+            )
+
     def cancel_anima_deletion(
         self, actor_id: UserId, anima_id: AnimaId, expected_revision: int
     ) -> Anima:
@@ -166,6 +209,15 @@ class SqliteIdentityRepository:
             current = _require_user_revision(connection, actor_id, expected_revision)
             if current["state"] != ACTIVE:
                 raise LifecycleConflictError("用户不处于 active 状态")
+            _purge_expired_leases(connection, now)
+            if connection.execute(
+                """
+                SELECT 1 FROM active_anima_leases
+                WHERE owner_user_id=? AND expires_at_ms>? LIMIT 1
+                """,
+                (actor_id.value, now),
+            ).fetchone():
+                raise LifecycleConflictError("Anima 正在处理数据，请稍后重试删除")
             connection.execute(
                 """
                 UPDATE users SET state='deleting', revision=revision+1, updated_at_ms=?
@@ -197,6 +249,15 @@ class SqliteIdentityRepository:
             current = _require_user_revision(connection, actor_id, expected_revision)
             if current["state"] != DELETING:
                 raise LifecycleConflictError("用户删除尚未进入 deleting 状态")
+            _purge_expired_leases(connection, now)
+            if connection.execute(
+                """
+                SELECT 1 FROM active_anima_leases
+                WHERE owner_user_id=? AND expires_at_ms>? LIMIT 1
+                """,
+                (actor_id.value, now),
+            ).fetchone():
+                raise LifecycleConflictError("Anima 正在处理数据，请稍后重试删除")
             if before_finalize is not None:
                 before_finalize()
             connection.execute(
@@ -259,6 +320,18 @@ class SqliteIdentityRepository:
                 raise RevisionConflictError("Anima 已被其他请求更新")
             if row["state"] != required_state:
                 raise LifecycleConflictError(f"Anima 不处于 {required_state} 状态")
+            if next_state in {DELETING, DELETED}:
+                _purge_expired_leases(connection, now)
+                if connection.execute(
+                    """
+                    SELECT 1 FROM active_anima_leases
+                    WHERE owner_user_id=? AND anima_id=? AND expires_at_ms>? LIMIT 1
+                    """,
+                    (actor_id.value, anima_id.value, now),
+                ).fetchone():
+                    raise LifecycleConflictError(
+                        "Anima 正在处理数据，请稍后重试删除"
+                    )
             name = display_name if display_name is not None else str(row["display_name"])
             state = next_state if next_state is not None else str(row["state"])
             if state not in LIFECYCLE_STATES:
@@ -315,6 +388,12 @@ def _require_active_user(connection: sqlite3.Connection, actor_id: UserId) -> sq
     if row is None:
         raise ObjectNotFoundError("用户不存在")
     return row
+
+
+def _purge_expired_leases(connection: sqlite3.Connection, now_ms: int) -> None:
+    connection.execute(
+        "DELETE FROM active_anima_leases WHERE expires_at_ms<=?", (now_ms,)
+    )
 
 
 def _require_user_revision(
