@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,6 +30,7 @@ class SherpaStreamingAsr:
         self._recognizer = None
         self._load_lock = threading.Lock()
         self._decode_lock = threading.Lock()
+        self._async_decode_lock = asyncio.Lock()
 
     def create_session(self) -> "SherpaAsrSession":
         recognizer = self._load()
@@ -59,6 +61,30 @@ class SherpaStreamingAsr:
             if endpoint:
                 self._recognizer.reset(stream)
             return text, endpoint
+
+    async def decode(self, stream, pcm16: bytes) -> tuple[str, bool]:
+        """Serialize native decoding without occupying waiting executor workers.
+
+        sherpa-onnx exposes mutable recognizer state shared by all sessions.  The
+        async gate is deliberately acquired *before* entering ``to_thread`` so a
+        burst of browser sessions cannot fill asyncio's shared executor with
+        workers blocked on ``_decode_lock``.  Native inference itself cannot be
+        cancelled safely; cancellation therefore keeps the gate until the worker
+        has actually left the recognizer.
+        """
+
+        async with self._async_decode_lock:
+            worker = asyncio.create_task(
+                asyncio.to_thread(self._decode, stream, pcm16),
+                name="sherpa-asr-native",
+            )
+            try:
+                return await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                while not worker.done():
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await asyncio.shield(worker)
+                raise
 
     def _load(self):
         if self._recognizer is not None:
@@ -145,7 +171,7 @@ class SherpaAsrSession:
                     stop_after_batch = True
                     break
                 frames.append(value)
-            text, endpoint = await asyncio.to_thread(self.owner._decode, self.stream, b"".join(frames))
+            text, endpoint = await self.owner.decode(self.stream, b"".join(frames))
             if text and text != self.last_partial:
                 self.last_partial = text
                 await self._emit(AsrUpdate(text=text, final=False))

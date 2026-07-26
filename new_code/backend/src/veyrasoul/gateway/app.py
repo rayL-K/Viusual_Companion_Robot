@@ -1,9 +1,10 @@
-"""ASGI gateway for cancellable V2 realtime sessions."""
+"""ASGI gateway for cancellable Anima realtime sessions."""
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import time
 import uuid
@@ -11,7 +12,8 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from veyrasoul.affect import AffectState
@@ -27,12 +29,24 @@ from veyrasoul.identity import (
 from veyrasoul.orchestration.ports import AsrUpdate, StreamingAsrSession
 from veyrasoul.personalization import ProfileConflictError, ProfileValidationError
 from veyrasoul.perception import VisualSemanticScheduler
+from veyrasoul.telemetry import (
+    TraceAttributes,
+    TracePoint,
+    TraceStage,
+    TurnTrace,
+    TurnTraceDimensions,
+)
 from veyrasoul.transport import BinaryKind, build_binary_frame, parse_binary_frame
 
+from .admission import AdmissionGate, ConnectionLease, TurnLease, client_key
 from .runtime import AppServices, RuntimeSession, SessionRegistry
 
 
 _LOGGER = logging.getLogger(__name__)
+_MAX_CONTROL_EVENT_CHARS = 64 * 1024
+_MAX_USER_TEXT_CHARS = 2_000
+_MAX_PCM_FRAME_BYTES = 12_800
+_MAX_ADMISSION_BODY_BYTES = 4_096
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,7 +103,7 @@ class ConnectionWriter:
         text: str,
         audio: bytes,
         content_type: str,
-    ) -> None:
+    ) -> int:
         """Send audio first, then expose its text; WebSocket ordering keeps them synchronized."""
 
         async with self._lock:
@@ -102,6 +116,7 @@ class ConnectionWriter:
                     audio,
                 )
             )
+            first_frame_sent_ns = time.monotonic_ns()
             await self.websocket.send_json(
                 {
                     "v": 2,
@@ -119,13 +134,23 @@ class ConnectionWriter:
                     },
                 }
             )
+            return first_frame_sent_ns
 
 
 class TurnController:
-    def __init__(self, runtime: RuntimeSession, writer: ConnectionWriter) -> None:
+    def __init__(
+        self,
+        runtime: RuntimeSession,
+        writer: ConnectionWriter,
+        admission: AdmissionGate,
+        connection: ConnectionLease,
+    ) -> None:
         self.runtime = runtime
         self.writer = writer
+        self.admission = admission
+        self.connection = connection
         self.current: asyncio.Task[None] | None = None
+        self.current_trace: TurnTrace | None = None
         self.current_turn_id = ""
         self.pending_listening: ListeningTurn | None = None
         self._lock = asyncio.Lock()
@@ -139,15 +164,18 @@ class TurnController:
         async with self._lock:
             return await self._listen_locked()
 
-    async def start_from_asr(self, user_text: str) -> None:
+    async def start_from_asr(self, user_text: str, *, final_monotonic_ns: int) -> None:
         async with self._lock:
             listening = await self._listen_locked()
-            await self._start_locked(user_text, listening.turn_id)
+            await self._start_locked(
+                user_text,
+                listening.turn_id,
+                asr_final_monotonic_ns=final_monotonic_ns,
+            )
 
     async def cancel(self) -> CancelledTurn:
         async with self._lock:
-            await _cancel_task(self.current)
-            self.current = None
+            await self._close_current_task_locked()
             generation = await self.runtime.kernel.cancel_current_turn()
             cancelled = CancelledTurn(generation, self.current_turn_id)
             self.current_turn_id = ""
@@ -157,8 +185,7 @@ class TurnController:
     async def _listen_locked(self) -> ListeningTurn:
         if self.pending_listening is not None:
             return self.pending_listening
-        await _cancel_task(self.current)
-        self.current = None
+        await self._close_current_task_locked()
         generation = await self.runtime.kernel.cancel_current_turn()
         turn_id = uuid.uuid4().hex
         listening = ListeningTurn(generation, turn_id)
@@ -173,15 +200,81 @@ class TurnController:
         )
         return listening
 
-    async def _start_locked(self, user_text: str, turn_id: str) -> None:
-        await _cancel_task(self.current)
-        await self.runtime.kernel.cancel_current_turn()
+    async def _start_locked(
+        self,
+        user_text: str,
+        turn_id: str,
+        *,
+        asr_final_monotonic_ns: int | None = None,
+    ) -> None:
+        await self._close_current_task_locked()
+        cancelled_generation = await self.runtime.kernel.cancel_current_turn()
+        turn_lease, admission_failure = await self.admission.try_turn(self.connection)
+        if turn_lease is None:
+            self.current_turn_id = ""
+            self.pending_listening = None
+            await self.writer.event(
+                "error",
+                turn_id=turn_id,
+                generation=cancelled_generation,
+                payload={
+                    "code": admission_failure.code if admission_failure else "server_busy",
+                    "message": (
+                        admission_failure.reason
+                        if admission_failure
+                        else "Anima 正在忙，请稍后再试"
+                    ),
+                },
+            )
+            await _emit_avatar_intent(
+                self.runtime,
+                self.writer,
+                turn_id,
+                cancelled_generation,
+                "idle",
+            )
+            return
         self.current_turn_id = turn_id
         self.pending_listening = None
-        self.current = asyncio.create_task(
-            _run_turn(self.runtime, self.writer, turn_id, user_text),
-            name=f"reply:{self.writer.session_id}:{turn_id}",
+        trace = self.runtime.trace.start(
+            TurnTraceDimensions(
+                session_id=self.writer.session_id,
+                turn_id=turn_id,
+                generation=cancelled_generation + 1,
+                user_id=self.runtime.identity.user_id.value,
+                anima_id=self.runtime.identity.anima_id.value,
+            )
         )
+        if asr_final_monotonic_ns is not None:
+            trace.mark_at(
+                TracePoint.ASR_FINAL,
+                asr_final_monotonic_ns,
+                stage=TraceStage.ASR,
+            )
+        self.current_trace = trace
+        try:
+            self.current = asyncio.create_task(
+                _run_turn(
+                    self.runtime,
+                    self.writer,
+                    turn_id,
+                    user_text,
+                    trace,
+                    turn_lease,
+                ),
+                name=f"reply:{self.writer.session_id}:{turn_id}",
+            )
+        except BaseException:
+            await turn_lease.release()
+            raise
+
+    async def _close_current_task_locked(self) -> None:
+        trace = self.current_trace
+        await _cancel_task(self.current)
+        if trace is not None:
+            trace.cancel()
+        self.current = None
+        self.current_trace = None
 
 
 def create_app(services: AppServices) -> FastAPI:
@@ -194,28 +287,120 @@ def create_app(services: AppServices) -> FastAPI:
         finally:
             for close in reversed(services.shutdown):
                 await close()
+            await admission.aclose()
 
-    app = FastAPI(title="VeyraSoul Realtime Gateway", version="2.0", lifespan=lifespan)
+    app = FastAPI(title="Anima Realtime Gateway", version="0.0.1", lifespan=lifespan)
     registry = SessionRegistry(services)
+    admission = AdmissionGate(services.admission)
     app.state.registry = registry
+    app.state.admission_gate = admission
 
     @app.get("/v2/health")
     async def health() -> dict[str, Any]:
         return {
             "ok": True,
             "protocol": 2,
-            "service": "veyrasoul-gateway",
+            "service": "anima-gateway",
+            "version": "0.0.1",
+            "releaseDigest": services.release_digest,
             "streaming_asr": services.asr is not None,
         }
 
+    @app.get("/v2/admission/status")
+    async def admission_status(request: Request) -> JSONResponse:
+        ready = (
+            not services.admission.required
+            or (
+                admission.verify_token(request.cookies.get(AdmissionGate.COOKIE_NAME))
+                and admission.verify_device_token(
+                    request.cookies.get(AdmissionGate.DEVICE_COOKIE_NAME)
+                )
+            )
+        )
+        response = JSONResponse(
+            {
+                "required": services.admission.required,
+                "ready": ready,
+                "siteKey": services.admission.turnstile_site_key if not ready else "",
+            }
+        )
+        response.headers["Cache-Control"] = "private, no-store"
+        return response
+
+    @app.post("/v2/admission/verify")
+    async def verify_admission(request: Request) -> JSONResponse:
+        if not services.admission.required:
+            return JSONResponse({"ok": True})
+        try:
+            payload = await _read_bounded_json(request, _MAX_ADMISSION_BODY_BYTES)
+        except ValueError:
+            return JSONResponse({"ok": False, "code": "invalid_challenge"}, status_code=400)
+        token = str(payload.get("token") or "") if isinstance(payload, dict) else ""
+        if not await admission.verify_challenge(token, client_key(request)):
+            return JSONResponse({"ok": False, "code": "challenge_failed"}, status_code=403)
+
+        existing_device = request.cookies.get(AdmissionGate.DEVICE_COOKIE_NAME)
+        device_token = (
+            existing_device
+            if admission.verify_device_token(existing_device)
+            else admission.issue_device_token()
+        )
+        response = JSONResponse({"ok": True})
+        _set_secure_cookie(
+            response,
+            AdmissionGate.COOKIE_NAME,
+            admission.issue_token(),
+            services.admission.token_ttl_seconds,
+        )
+        _set_secure_cookie(
+            response,
+            AdmissionGate.DEVICE_COOKIE_NAME,
+            device_token,
+            services.admission.device_ttl_seconds,
+        )
+        response.headers["Cache-Control"] = "private, no-store"
+        return response
+
     @app.websocket("/v2/realtime")
     async def realtime(websocket: WebSocket) -> None:
+        handshake_failure = admission.validate_handshake(websocket)
+        if handshake_failure is not None:
+            await websocket.close(
+                code=handshake_failure.close_code,
+                reason=handshake_failure.reason,
+            )
+            return
+        connection, connection_failure = await admission.try_connect(client_key(websocket))
+        if connection is None:
+            await websocket.close(
+                code=connection_failure.close_code if connection_failure else 1013,
+                reason=(
+                    connection_failure.reason
+                    if connection_failure
+                    else "实时连接已满，请稍后重试"
+                ),
+            )
+            return
         await websocket.accept()
         raw_session = websocket.query_params.get("session")
         try:
-            session_id = (
-                validate_session_hint(raw_session) if raw_session is not None else uuid.uuid4().hex
-            )
+            if services.admission.required:
+                device_user = admission.device_identity(
+                    websocket.cookies.get(AdmissionGate.DEVICE_COOKIE_NAME)
+                )
+                if device_user is None:
+                    raise InvalidIdentity("设备会话无效")
+                if websocket.query_params.get("user") is not None:
+                    raise InvalidIdentity("公网匿名会话的 user 身份由服务端签发")
+                if websocket.query_params.get("anima") not in {None, "default"}:
+                    raise InvalidIdentity("公网匿名会话只能使用默认 Anima")
+                session_id = f"session_{device_user.removeprefix('device_')}"
+            else:
+                session_id = (
+                    validate_session_hint(raw_session)
+                    if raw_session is not None
+                    else uuid.uuid4().hex
+                )
         except InvalidIdentity as exc:
             writer = ConnectionWriter(websocket, uuid.uuid4().hex)
             await writer.event(
@@ -223,61 +408,118 @@ def create_app(services: AppServices) -> FastAPI:
                 payload={"code": "invalid_session", "message": str(exc)},
             )
             await websocket.close(code=1008, reason="invalid session")
+            await connection.release()
             return
         writer = ConnectionWriter(websocket, session_id)
         try:
-            resolver = services.identity_resolver or _parse_session_identity
-            identity = resolver(
-                websocket.query_params.get("user"),
-                websocket.query_params.get("anima"),
-                session_id,
-            )
+            if services.admission.required:
+                identity = SessionIdentity(
+                    user_id=UserId.parse(device_user),
+                    anima_id=AnimaId.default(),
+                    anonymous=True,
+                    assurance="admission_device",
+                )
+            else:
+                resolver = services.identity_resolver or _parse_session_identity
+                identity = resolver(
+                    websocket.query_params.get("user"),
+                    websocket.query_params.get("anima"),
+                    session_id,
+                )
         except InvalidIdentity as exc:
             await writer.event(
                 "error",
                 payload={"code": "invalid_identity", "message": str(exc)},
             )
             await websocket.close(code=1008, reason="invalid identity")
+            await connection.release()
             return
-        runtime = await registry.get(session_id, identity)
-        turns = TurnController(runtime, writer)
-        asr_session = services.asr.create_session() if services.asr else None
-        vision_scheduler = (
-            VisualSemanticScheduler(
-                services.vision,
-                refresh_seconds=services.vision_refresh_seconds,
+        turns: TurnController | None = None
+        asr_session: StreamingAsrSession | None = None
+        vision_scheduler: VisualSemanticScheduler | None = None
+        try:
+            runtime = await registry.get(session_id, identity)
+            turns = TurnController(runtime, writer, admission, connection)
+            asr_session = services.asr.create_session() if services.asr else None
+            vision_scheduler = (
+                VisualSemanticScheduler(
+                    services.vision,
+                    refresh_seconds=services.vision_refresh_seconds,
+                )
+                if services.vision
+                else None
             )
-            if services.vision
-            else None
-        )
-        if asr_session:
-            await asr_session.start(lambda update: _handle_asr_update(update, writer, turns))
-        if vision_scheduler:
-            await vision_scheduler.start(
-                lambda snapshot: _handle_visual_snapshot(snapshot, runtime, writer),
-                lambda error: _handle_perception_error(error, writer),
+            if asr_session:
+                await asr_session.start(lambda update: _handle_asr_update(update, writer, turns))
+            if vision_scheduler:
+                await vision_scheduler.start(
+                    lambda snapshot: _handle_visual_snapshot(snapshot, runtime, writer),
+                    lambda error: _handle_perception_error(error, writer),
+                )
+            await writer.event(
+                "session.ready",
+                payload={
+                    "protocol": 2,
+                    "userId": identity.user_id.value,
+                    "animaId": identity.anima_id.value,
+                    "anonymous": identity.anonymous,
+                    "identityAssurance": identity.assurance,
+                },
             )
-        await writer.event(
-            "session.ready",
-            payload={
-                "protocol": 2,
-                "userId": identity.user_id.value,
-                "animaId": identity.anima_id.value,
-                "anonymous": identity.anonymous,
-                "identityAssurance": identity.assurance,
-            },
-        )
+        except Exception:
+            if vision_scheduler:
+                await vision_scheduler.close()
+            if asr_session:
+                await asr_session.close()
+            if turns:
+                await turns.cancel()
+            await connection.release()
+            raise
+        connected_at = time.monotonic()
+        last_client_activity = connected_at
         try:
             while True:
-                message = await websocket.receive()
+                now = time.monotonic()
+                idle_remaining = (
+                    services.admission.idle_timeout_seconds
+                    - (now - last_client_activity)
+                )
+                session_remaining = (
+                    services.admission.max_session_seconds - (now - connected_at)
+                )
+                receive_timeout = min(idle_remaining, session_remaining)
+                if receive_timeout <= 0:
+                    await websocket.close(code=1001, reason="session expired")
+                    break
+                try:
+                    message = await asyncio.wait_for(
+                        websocket.receive(),
+                        timeout=receive_timeout,
+                    )
+                except asyncio.TimeoutError:
+                    await websocket.close(code=1001, reason="session expired")
+                    break
+                last_client_activity = time.monotonic()
                 if message.get("type") == "websocket.disconnect":
                     break
                 if raw_bytes := message.get("bytes"):
+                    if not connection.budget.accept_binary(len(raw_bytes)):
+                        await writer.event(
+                            "error",
+                            payload={
+                                "code": "media_rate_limited",
+                                "message": "媒体上传过快，已丢弃当前帧",
+                            },
+                        )
+                        continue
                     await _handle_binary(raw_bytes, writer, asr_session, vision_scheduler)
                     continue
                 raw_text = message.get("text")
                 if raw_text is None:
                     continue
+                if not connection.budget.accept_control():
+                    await websocket.close(code=1008, reason="control rate exceeded")
+                    break
                 try:
                     event = _parse_client_event(raw_text)
                 except ValueError as exc:
@@ -287,6 +529,9 @@ def create_app(services: AppServices) -> FastAPI:
                 payload = event["payload"]
                 if event_type == "session.hello":
                     await writer.event("session.hello.ack", payload={"protocol": 2})
+                    continue
+                if event_type == "session.heartbeat":
+                    await writer.event("session.heartbeat.ack")
                     continue
                 if event_type == "settings.get":
                     await _emit_settings(runtime, writer)
@@ -351,6 +596,15 @@ def create_app(services: AppServices) -> FastAPI:
                             payload={"code": "empty_user_text", "message": "用户输入不能为空"},
                         )
                         continue
+                    if len(text) > _MAX_USER_TEXT_CHARS:
+                        await writer.event(
+                            "error",
+                            payload={
+                                "code": "user_text_too_long",
+                                "message": f"单次输入不能超过 {_MAX_USER_TEXT_CHARS} 个字符",
+                            },
+                        )
+                        continue
                     turn_id = _clean_identifier(payload.get("turnId")) or uuid.uuid4().hex
                     await turns.start(text, turn_id)
                     continue
@@ -365,7 +619,9 @@ def create_app(services: AppServices) -> FastAPI:
                 await vision_scheduler.close()
             if asr_session:
                 await asr_session.close()
-            await turns.cancel()
+            if turns:
+                await turns.cancel()
+            await connection.release()
 
     if services.web_dist is not None:
         web_dist = services.web_dist.resolve()
@@ -377,16 +633,59 @@ def create_app(services: AppServices) -> FastAPI:
     return app
 
 
+def _set_secure_cookie(
+    response: JSONResponse,
+    name: str,
+    value: str,
+    max_age: int,
+) -> None:
+    response.set_cookie(
+        name,
+        value,
+        max_age=max_age,
+        secure=True,
+        httponly=True,
+        samesite="strict",
+        path="/",
+    )
+
+
+async def _read_bounded_json(request: Request, limit: int) -> object:
+    """在 JSON 解析前限制真实流量，避免 chunked body 绕过 Content-Length。"""
+
+    content_length = request.headers.get("content-length")
+    if content_length and (not content_length.isdecimal() or int(content_length) > limit):
+        raise ValueError("request body exceeds limit")
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > limit:
+            raise ValueError("request body exceeds limit")
+        body.extend(chunk)
+    if not body:
+        raise ValueError("request body is empty")
+    try:
+        return json.loads(body)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("request body must be valid JSON") from exc
+
+
 async def _run_turn(
     runtime: RuntimeSession,
     writer: ConnectionWriter,
     turn_id: str,
     user_text: str,
+    trace: TurnTrace,
+    turn_lease: TurnLease,
 ) -> None:
     generation = 0
     try:
         profile = runtime.profiles.get()
         generation, context = await runtime.kernel.begin_turn(user_text)
+        trace.bind_generation(generation)
+        trace.mark(
+            TracePoint.CONTEXT_READY,
+            attributes=TraceAttributes(retrieval_timed_out=context.retrieval_timed_out),
+        )
         await writer.event(
             "reply.phase",
             turn_id=turn_id,
@@ -402,8 +701,15 @@ async def _run_turn(
             affect=context.affect,
         )
         texts: list[str] = []
-        async for segment in runtime.turn_service.generate(user_text, context, profile):
+        first_frame_sent = False
+        async for segment in runtime.turn_service.generate(
+            user_text,
+            context,
+            profile,
+            trace=trace,
+        ):
             if generation != runtime.kernel.generation:
+                trace.cancel()
                 return
             await _emit_avatar_intent(
                 runtime,
@@ -414,8 +720,9 @@ async def _run_turn(
                 segment_index=segment.index,
             )
             if generation != runtime.kernel.generation:
+                trace.cancel()
                 return
-            await writer.reply_segment(
+            frame_sent_ns = await writer.reply_segment(
                 turn_id=turn_id,
                 generation=generation,
                 index=segment.index,
@@ -423,6 +730,17 @@ async def _run_turn(
                 audio=segment.audio,
                 content_type=segment.content_type,
             )
+            if not first_frame_sent:
+                first_frame_sent = True
+                trace.mark_at(
+                    TracePoint.FIRST_REPLY_FRAME_SENT,
+                    frame_sent_ns,
+                    attributes=TraceAttributes(
+                        segment_index=segment.index,
+                        audio_bytes=len(segment.audio),
+                        content_type=segment.content_type,
+                    ),
+                )
             texts.append(segment.text)
         reply = "".join(texts).strip()
         if not reply:
@@ -447,9 +765,14 @@ async def _run_turn(
                 generation,
                 "idle",
             )
+            trace.complete()
+        else:
+            trace.cancel()
     except asyncio.CancelledError:
+        trace.cancel()
         raise
     except Exception as exc:
+        trace.fail(exc)
         _LOGGER.warning("Reply generation failed (%s)", type(exc).__name__)
         if generation == runtime.kernel.generation:
             await writer.event(
@@ -465,6 +788,8 @@ async def _run_turn(
                 generation,
                 "idle",
             )
+    finally:
+        await turn_lease.release()
 
 
 async def _emit_avatar_intent(
@@ -532,6 +857,15 @@ async def _handle_binary(
     except ValueError as exc:
         await writer.event("error", payload={"code": "invalid_binary", "message": str(exc)})
         return
+    if frame.kind is BinaryKind.PCM16 and len(frame.payload) > _MAX_PCM_FRAME_BYTES:
+        await writer.event(
+            "error",
+            payload={
+                "code": "invalid_pcm_frame",
+                "message": "单个 PCM16 帧不能超过 200 毫秒",
+            },
+        )
+        return
     if frame.kind is BinaryKind.PCM16 and asr_session is not None:
         try:
             asr_session.submit_pcm16(frame.payload)
@@ -557,10 +891,14 @@ async def _handle_asr_update(
     writer: ConnectionWriter,
     turns: TurnController,
 ) -> None:
+    final_monotonic_ns = time.monotonic_ns() if update.final and update.text else 0
     event_type = "asr.final" if update.final else "asr.partial"
     await writer.event(event_type, payload={"text": update.text})
     if update.final and update.text:
-        await turns.start_from_asr(update.text)
+        await turns.start_from_asr(
+            update.text,
+            final_monotonic_ns=final_monotonic_ns,
+        )
     elif update.text:
         await turns.listen()
 
@@ -621,8 +959,8 @@ async def _cancel_task(task: asyncio.Task[None] | None) -> None:
 
 
 def _parse_client_event(raw: str) -> dict[str, Any]:
-    import json
-
+    if len(raw) > _MAX_CONTROL_EVENT_CHARS:
+        raise ValueError("控制事件超过 64 KiB")
     try:
         event = json.loads(raw)
     except json.JSONDecodeError as exc:
@@ -647,8 +985,10 @@ def _parse_session_identity(
 ) -> SessionIdentity:
     if raw_user_id is not None:
         raise InvalidIdentity("显式 user 参数需要服务端认证 IdentityResolver")
+    if raw_anima_id is not None and AnimaId.parse(raw_anima_id) != AnimaId.default():
+        raise InvalidIdentity("匿名会话只能使用默认 Anima；自定义角色需要服务端认证")
     user_id = UserId.anonymous_for(session_id)
-    anima_id = AnimaId.default() if raw_anima_id is None else AnimaId.parse(raw_anima_id)
+    anima_id = AnimaId.default()
     return SessionIdentity(
         user_id=user_id,
         anima_id=anima_id,

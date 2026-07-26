@@ -4,9 +4,11 @@ import asyncio
 import time
 from pathlib import Path
 
+from fastapi import WebSocketDisconnect
 from fastapi.testclient import TestClient
 
 from veyrasoul.gateway import AppServices, create_app
+from veyrasoul.gateway.admission import AdmissionGate, AdmissionPolicy
 from veyrasoul.identity import AnimaId, SessionIdentity, UserId
 from veyrasoul.orchestration.ports import (
     AsrUpdate,
@@ -15,6 +17,11 @@ from veyrasoul.orchestration.ports import (
 )
 from veyrasoul.domain.perception import VisualSnapshot
 from veyrasoul.perception import VisualFrame
+from veyrasoul.telemetry import (
+    ProviderModel,
+    TraceProviders,
+    TraceSettings,
+)
 from veyrasoul.transport import BinaryKind, build_binary_frame, parse_binary_frame
 
 
@@ -76,6 +83,32 @@ class ProfileAwareLlm:
     async def stream_reply(self, messages: list[dict[str, str]]):
         self.messages = messages
         yield "1234567890。"
+
+
+class FailingLlm:
+    async def stream_reply(self, messages: list[dict[str, str]]):
+        del messages
+        raise RuntimeError("private prompt must not reach telemetry")
+        yield ""  # pragma: no cover - keeps this an async generator
+
+
+class TraceCollector:
+    def __init__(self) -> None:
+        self.snapshots = []
+
+    def emit(self, snapshot) -> None:
+        self.snapshots.append(snapshot)
+
+
+def trace_settings(sink: TraceCollector) -> TraceSettings:
+    return TraceSettings(
+        sink=sink,
+        providers=TraceProviders(
+            asr=ProviderModel("sherpa-onnx", "zipformer"),
+            llm=ProviderModel("deepseek", "flash"),
+            tts=ProviderModel("sherpa-onnx", "matcha-zh-en"),
+        ),
+    )
 
 
 class FakeAsrSession:
@@ -187,7 +220,11 @@ def test_health_endpoint(tmp_path) -> None:
     client = TestClient(make_app(tmp_path / "memory.db"))
     response = client.get("/v2/health")
     assert response.status_code == 200
-    assert response.json()["protocol"] == 2
+    payload = response.json()
+    assert payload["protocol"] == 2
+    assert payload["service"] == "anima-gateway"
+    assert payload["version"] == "0.0.1"
+    assert payload["releaseDigest"] == "development"
 
 
 def test_gateway_can_serve_built_web_from_same_origin(tmp_path) -> None:
@@ -263,6 +300,23 @@ def test_binary_media_header_is_validated(tmp_path) -> None:
         accepted = websocket.receive_json()
         assert accepted["type"] == "media.accepted"
         assert accepted["payload"] == {"kind": "pcm16", "sequence": 7, "bytes": 640}
+
+
+def test_oversized_pcm_and_user_text_are_rejected_before_inference(tmp_path) -> None:
+    client = TestClient(make_app(tmp_path / "memory.db"))
+    with client.websocket_connect("/v2/realtime?session=bounded-input") as websocket:
+        websocket.receive_json()
+        websocket.send_bytes(
+            build_binary_frame(BinaryKind.PCM16, 8, 1000, b"\x00\x00" * 6_401)
+        )
+        pcm_error = websocket.receive_json()
+        assert pcm_error["payload"]["code"] == "invalid_pcm_frame"
+
+        websocket.send_json(
+            {"v": 2, "type": "turn.user_text", "payload": {"text": "字" * 2_001}}
+        )
+        text_error = websocket.receive_json()
+        assert text_error["payload"]["code"] == "user_text_too_long"
 
 
 def test_visual_semantics_are_published_and_injected_into_every_turn(tmp_path) -> None:
@@ -664,3 +718,210 @@ def test_distinct_anonymous_sessions_use_distinct_owners_and_databases(tmp_path)
     second = layout.state_database(UserId.parse(owners[1]), AnimaId.default())
     assert first != second
     assert first.is_file() and second.is_file()
+
+
+def test_public_gateway_verifies_challenge_then_accepts_exact_origin(tmp_path) -> None:
+    web_dist = tmp_path / "web"
+    web_dist.mkdir()
+    (web_dist / "index.html").write_text("<main>Anima</main>", encoding="utf-8")
+    app = create_app(
+        AppServices(
+            memory_path=tmp_path / "memory.db",
+            llm=FakeLlm(),
+            tts=FakeTts(),
+            stable_system_prompt="默认人设",
+            web_dist=web_dist,
+            admission=AdmissionPolicy(
+                required=True,
+                secret="a" * 32,
+                turnstile_site_key="unit-test-site-key",
+                turnstile_secret="unit-test-turnstile-secret",
+                allowed_origins=("https://anima.veyralux.org",),
+            ),
+        )
+    )
+    client = TestClient(app, base_url="https://anima.veyralux.org")
+
+    challenge_tokens: list[object] = []
+
+    async def accept_challenge(token: object, remote_ip: str) -> bool:
+        challenge_tokens.append(token)
+        return token == "passed-turnstile" and bool(remote_ip)
+
+    app.state.admission_gate.verify_challenge = accept_challenge
+    status = client.get("/v2/admission/status")
+    assert status.json() == {
+        "required": True,
+        "ready": False,
+        "siteKey": "unit-test-site-key",
+    }
+    oversized = client.post(
+        "/v2/admission/verify",
+        content=(chunk for chunk in (b'{"token":"', b"x" * 4_096, b'"}')),
+        headers={"content-type": "application/json"},
+    )
+    assert oversized.status_code == 400
+    assert challenge_tokens == []
+    response = client.post(
+        "/v2/admission/verify",
+        json={"token": "passed-turnstile"},
+    )
+    assert response.status_code == 200
+    assert challenge_tokens == ["passed-turnstile"]
+    assert "HttpOnly" in response.headers["set-cookie"]
+    assert "Secure" in response.headers["set-cookie"]
+    token = client.cookies.get(AdmissionGate.COOKIE_NAME)
+    device_token = client.cookies.get(AdmissionGate.DEVICE_COOKIE_NAME)
+    assert token and device_token
+    with client.websocket_connect(
+        "/v2/realtime?session=client-value-is-ignored",
+        headers={
+            "origin": "https://anima.veyralux.org",
+            "cookie": (
+                f"{AdmissionGate.COOKIE_NAME}={token}; "
+                f"{AdmissionGate.DEVICE_COOKIE_NAME}={device_token}"
+            ),
+        },
+    ) as websocket:
+        ready = websocket.receive_json()
+        assert ready["type"] == "session.ready"
+        assert ready["payload"]["identityAssurance"] == "admission_device"
+        assert ready["sessionId"] != "client-value-is-ignored"
+
+
+def test_gateway_closes_control_event_flood_before_processing_it(tmp_path) -> None:
+    app = create_app(
+        AppServices(
+            memory_path=tmp_path / "memory.db",
+            llm=FakeLlm(),
+            tts=FakeTts(),
+            stable_system_prompt="默认人设",
+            admission=AdmissionPolicy(
+                control_events_per_second=1,
+                control_burst_events=1,
+            ),
+        )
+    )
+
+    with TestClient(app).websocket_connect(
+        "/v2/realtime?session=control-budget"
+    ) as websocket:
+        assert websocket.receive_json()["type"] == "session.ready"
+        websocket.send_json({"v": 2, "type": "settings.get", "payload": {}})
+        assert websocket.receive_json()["type"] == "settings.current"
+        websocket.send_json({"v": 2, "type": "settings.get", "payload": {}})
+        try:
+            websocket.receive_json()
+        except WebSocketDisconnect as exc:
+            assert exc.code == 1008
+        else:
+            raise AssertionError("control event flood must close the connection")
+
+
+def test_voice_turn_trace_covers_latency_chain_without_conversation_content(tmp_path) -> None:
+    import json
+
+    sink = TraceCollector()
+    asr = FakeAsrFactory(["这是不能进入链路日志的秘密问题"])
+    app = create_app(
+        AppServices(
+            memory_path=tmp_path / "memory.db",
+            llm=FakeLlm(),
+            tts=FakeTts(),
+            asr=asr,
+            stable_system_prompt="这是不能进入链路日志的秘密系统提示词。",
+            trace=trace_settings(sink),
+        )
+    )
+    pcm_frame = build_binary_frame(BinaryKind.PCM16, 1, 1000, b"\x00\x00" * 320)
+    with TestClient(app).websocket_connect("/v2/realtime?session=trace-user") as websocket:
+        websocket.receive_json()
+        websocket.send_bytes(pcm_frame)
+        assert websocket.receive_json()["type"] == "asr.partial"
+        assert_avatar_intent(websocket.receive_json(), "listening")
+        assert websocket.receive_json()["type"] == "asr.final"
+        phase = websocket.receive_json()
+        assert_avatar_intent(websocket.receive_json(), "thinking", generation=phase["generation"])
+        for _ in range(2):
+            assert_avatar_intent(websocket.receive_json(), "speaking", generation=phase["generation"])
+            parse_binary_frame(websocket.receive()["bytes"])
+            assert websocket.receive_json()["type"] == "reply.segment.ready"
+        assert websocket.receive_json()["type"] == "reply.completed"
+        assert_avatar_intent(websocket.receive_json(), "idle", generation=phase["generation"])
+
+    assert len(sink.snapshots) == 1
+    payload = sink.snapshots[0].to_dict()
+    names = [point["name"] for point in payload["points"]]
+    required = {
+        "asr.final",
+        "context.ready",
+        "llm.request",
+        "llm.first_valid_delta",
+        "llm.completed",
+        "reply.first_speakable_clause",
+        "tts.submit",
+        "tts.completed",
+        "reply.first_frame_sent",
+        "turn.completed",
+    }
+    assert required <= set(names)
+    assert payload["dimensions"]["generation"] == phase["generation"]
+    assert payload["providers"]["llm"] == {"provider": "deepseek", "model": "flash"}
+    serialized = json.dumps(payload, ensure_ascii=False)
+    assert "秘密问题" not in serialized
+    assert "秘密系统提示词" not in serialized
+    assert "乌龙茶" not in serialized
+
+
+def test_cancelled_and_failed_turns_close_their_trace(tmp_path) -> None:
+    cancelled_sink = TraceCollector()
+    cancelled_app = create_app(
+        AppServices(
+            memory_path=tmp_path / "cancel.db",
+            llm=InterruptibleLlm(),
+            tts=FakeTts(),
+            stable_system_prompt="你是草莓兔兔。",
+            trace=trace_settings(cancelled_sink),
+        )
+    )
+    with TestClient(cancelled_app).websocket_connect(
+        "/v2/realtime?session=trace-cancel"
+    ) as websocket:
+        websocket.receive_json()
+        websocket.send_json(
+            {"v": 2, "type": "turn.user_text", "payload": {"text": "第一问"}}
+        )
+        phase = websocket.receive_json()
+        assert_avatar_intent(websocket.receive_json(), "thinking", generation=phase["generation"])
+        websocket.send_json({"v": 2, "type": "turn.cancel", "payload": {}})
+        assert websocket.receive_json()["type"] == "turn.cancelled"
+        assert_avatar_intent(websocket.receive_json(), "idle")
+
+    assert cancelled_sink.snapshots[-1].outcome == "cancelled"
+    assert cancelled_sink.snapshots[-1].points[-1].name == "turn.cancelled"
+
+    failed_sink = TraceCollector()
+    failed_app = create_app(
+        AppServices(
+            memory_path=tmp_path / "failed.db",
+            llm=FailingLlm(),
+            tts=FakeTts(),
+            stable_system_prompt="你是草莓兔兔。",
+            trace=trace_settings(failed_sink),
+        )
+    )
+    with TestClient(failed_app).websocket_connect(
+        "/v2/realtime?session=trace-error"
+    ) as websocket:
+        websocket.receive_json()
+        websocket.send_json(
+            {"v": 2, "type": "turn.user_text", "payload": {"text": "触发错误"}}
+        )
+        phase = websocket.receive_json()
+        assert_avatar_intent(websocket.receive_json(), "thinking", generation=phase["generation"])
+        assert websocket.receive_json()["type"] == "error"
+        assert_avatar_intent(websocket.receive_json(), "idle", generation=phase["generation"])
+
+    assert failed_sink.snapshots[-1].outcome == "error"
+    assert failed_sink.snapshots[-1].points[-1].name == "turn.error"
+    assert failed_sink.snapshots[-1].points[-1].attributes == {"errorType": "RuntimeError"}

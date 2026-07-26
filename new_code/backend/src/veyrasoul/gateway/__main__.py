@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-import os
+import hashlib
+import logging
 from pathlib import Path
 
 import uvicorn
@@ -16,95 +17,141 @@ from veyrasoul.integrations import (
     SherpaTtsConfig,
     SherpaTtsSynthesizer,
 )
+from veyrasoul.telemetry import (
+    JsonLogTraceSink,
+    ProviderModel,
+    TraceProviders,
+    TraceSettings,
+)
+
+from .settings import RuntimeSettings
 
 
-def build_app():
-    api_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
-    if not api_key:
-        raise RuntimeError("DEEPSEEK_API_KEY is required")
-    v2_root = Path(__file__).resolve().parents[4]
-    persona_path = Path(os.environ.get("VEYRASOUL_PERSONA_PATH", v2_root / "config" / "persona.md"))
-    tts_model_value = os.environ.get("VEYRASOUL_TTS_MODEL_DIR", "").strip()
-    if not tts_model_value:
-        raise RuntimeError("VEYRASOUL_TTS_MODEL_DIR is required")
-    tts_model_dir = Path(tts_model_value).expanduser()
-    asr_model_value = os.environ.get("VEYRASOUL_ASR_MODEL_DIR", "").strip()
-    if not asr_model_value:
-        raise RuntimeError("VEYRASOUL_ASR_MODEL_DIR is required")
-    asr_model_dir = Path(asr_model_value).expanduser()
-    memory_path = Path(
-        os.environ.get("VEYRASOUL_MEMORY_PATH", v2_root / "data" / "memory" / "veyrasoul.db")
-    )
-    data_root = Path(
-        os.environ.get("VEYRASOUL_DATA_ROOT", v2_root / "data")
-    ).expanduser()
-    web_dist_value = os.environ.get("VEYRASOUL_WEB_DIST", str(v2_root / "web" / "dist")).strip()
-    web_dist = Path(web_dist_value).expanduser() if web_dist_value else None
-    vlm = LocalVlmClient(
-        LocalVlmConfig(
-            base_url=os.environ.get("VEYRASOUL_VLM_URL", "http://127.0.0.1:8767"),
-            timeout_seconds=float(os.environ.get("VEYRASOUL_VLM_TIMEOUT", "20")),
-        )
-    )
+# Keep transport-level buffers below the application JPEG ceiling.  Application
+# validation happens only after the WebSocket implementation has assembled a
+# message, so relying on it alone would allow many 16 MiB messages to queue in
+# Uvicorn before our own byte budget sees them.
+WS_MAX_MESSAGE_BYTES = 1_600_000
+WS_MAX_QUEUE = 2
+
+
+def _release_digest(root: Path) -> str:
+    manifest = root / ".release.sha256"
+    try:
+        payload = manifest.read_bytes()
+    except OSError:
+        return "development"
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _server_options(settings: RuntimeSettings) -> dict[str, object]:
+    return {
+        "host": settings.host,
+        "port": settings.port,
+        "log_level": settings.log_level,
+        "ws": "websockets",
+        "ws_max_size": WS_MAX_MESSAGE_BYTES,
+        "ws_max_queue": WS_MAX_QUEUE,
+        "ws_ping_interval": 20.0,
+        "ws_ping_timeout": 20.0,
+        "ws_per_message_deflate": False,
+        "limit_concurrency": 64,
+        "backlog": 128,
+        "timeout_keep_alive": 5,
+        "timeout_graceful_shutdown": 15,
+        "access_log": False,
+    }
+
+
+def build_app(settings: RuntimeSettings | None = None):
+    config = settings or RuntimeSettings.from_environment()
+    # Reuse Uvicorn's production logger; its logging config is applied after build_app().
+    trace_logger = logging.getLogger("uvicorn.error")
     llm = DeepSeekStreamClient(
         DeepSeekConfig(
-            api_key=api_key,
-            model=os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash"),
-            max_tokens=int(os.environ.get("DEEPSEEK_MAX_TOKENS", "256")),
+            api_key=config.llm_api_key,
+            model=config.llm_model,
+            base_url=config.llm_base_url,
+            max_tokens=config.llm_max_tokens,
         )
     )
+    if config.tts_model_dir is None:
+        raise RuntimeError("selected TTS provider has no model directory")
     tts = SherpaTtsSynthesizer(
         SherpaTtsConfig(
-            model_dir=tts_model_dir,
-            sid=int(os.environ.get("VEYRASOUL_TTS_SID", "0")),
-            speed=float(os.environ.get("VEYRASOUL_TTS_SPEED", "1.0")),
-            num_threads=int(os.environ.get("VEYRASOUL_TTS_THREADS", "4")),
+            model_dir=config.tts_model_dir,
+            sid=config.tts_sid,
+            speed=config.tts_speed,
+            num_threads=config.tts_threads,
         )
     )
-    asr = SherpaStreamingAsr(
-        SherpaAsrConfig(
-            model_dir=asr_model_dir,
-            num_threads=int(os.environ.get("VEYRASOUL_ASR_THREADS", "4")),
-            decoding_method=os.environ.get(
-                "VEYRASOUL_ASR_DECODING_METHOD", "greedy_search"
-            ),
-            rule1_min_trailing_silence=float(
-                os.environ.get("VEYRASOUL_ASR_RULE1_SILENCE", "1.6")
-            ),
-            rule2_min_trailing_silence=float(
-                os.environ.get("VEYRASOUL_ASR_RULE2_SILENCE", "0.55")
-            ),
-            rule3_min_utterance_length=float(
-                os.environ.get("VEYRASOUL_ASR_RULE3_LENGTH", "20.0")
-            ),
-            queue_frames=int(os.environ.get("VEYRASOUL_ASR_QUEUE_FRAMES", "50")),
+    asr = None
+    if config.asr_provider == "sherpa":
+        if config.asr_model_dir is None:
+            raise RuntimeError("selected ASR provider has no model directory")
+        asr = SherpaStreamingAsr(
+            SherpaAsrConfig(
+                model_dir=config.asr_model_dir,
+                num_threads=config.asr_threads,
+                decoding_method=config.asr_decoding_method,
+                rule1_min_trailing_silence=config.asr_rule1_silence,
+                rule2_min_trailing_silence=config.asr_rule2_silence,
+                rule3_min_utterance_length=config.asr_rule3_length,
+                queue_frames=config.asr_queue_frames,
+            )
         )
+    vlm = None
+    if config.vision_provider == "local-vlm":
+        vlm = LocalVlmClient(
+            LocalVlmConfig(
+                base_url=config.vision_url,
+                timeout_seconds=config.vision_timeout_seconds,
+            )
+        )
+    startup = tuple(
+        callback for callback in (asr.warmup if asr else None, tts.warmup) if callback is not None
+    )
+    shutdown = tuple(
+        callback for callback in (llm.aclose, vlm.aclose if vlm else None) if callback is not None
     )
     services = AppServices(
-        memory_path=memory_path,
+        memory_path=config.memory_path,
         llm=llm,
         tts=tts,
         asr=asr,
         vision=vlm,
-        vision_refresh_seconds=float(
-            os.environ.get("VEYRASOUL_VISION_REFRESH_SECONDS", "5.0")
+        vision_refresh_seconds=config.vision_refresh_seconds,
+        stable_system_prompt=config.persona_path.read_text(encoding="utf-8"),
+        startup=startup,
+        shutdown=shutdown,
+        web_dist=config.web_dist,
+        data_root=config.data_root,
+        trace=TraceSettings(
+            sink=JsonLogTraceSink(
+                trace_logger,
+                hmac_key=config.telemetry_hmac_key or None,
+            ),
+            providers=TraceProviders(
+                asr=ProviderModel(
+                    config.asr_provider or "disabled",
+                    config.asr_model_dir.name if config.asr_model_dir else "disabled",
+                ),
+                llm=ProviderModel(config.llm_provider, config.llm_model),
+                tts=ProviderModel(
+                    config.tts_provider,
+                    config.tts_model_dir.name,
+                ),
+            ),
         ),
-        stable_system_prompt=persona_path.read_text(encoding="utf-8"),
-        startup=(asr.warmup, tts.warmup),
-        shutdown=(llm.aclose, vlm.aclose),
-        web_dist=web_dist,
-        data_root=data_root,
+        admission=config.admission,
+        release_digest=_release_digest(config.root),
     )
     return create_app(services)
 
 
 def main() -> None:
-    uvicorn.run(
-        build_app(),
-        host=os.environ.get("VEYRASOUL_HOST", "127.0.0.1"),
-        port=int(os.environ.get("VEYRASOUL_PORT", "8875")),
-        log_level=os.environ.get("VEYRASOUL_LOG_LEVEL", "info"),
-    )
+    settings = RuntimeSettings.from_environment()
+    uvicorn.run(build_app(settings), **_server_options(settings))
 
 
 if __name__ == "__main__":

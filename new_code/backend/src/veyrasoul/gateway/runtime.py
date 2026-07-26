@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from veyrasoul.avatar import AvatarDirector
@@ -26,6 +26,9 @@ from veyrasoul.personalization import (
 )
 from veyrasoul.perception import VisionAnalyzer
 from veyrasoul.runtime.latest_value import LatestValue
+from veyrasoul.telemetry import TraceSettings
+
+from .admission import AdmissionPolicy
 
 
 _CORE_SYSTEM_PROMPT = (
@@ -40,6 +43,8 @@ class AppServices:
     llm: StreamingLlm
     tts: SpeechSynthesizer
     stable_system_prompt: str
+    trace: TraceSettings = field(default_factory=TraceSettings)
+    admission: AdmissionPolicy = field(default_factory=AdmissionPolicy)
     asr: StreamingAsrFactory | None = None
     vision: VisionAnalyzer | None = None
     vision_refresh_seconds: float = 5.0
@@ -49,6 +54,7 @@ class AppServices:
     web_dist: Path | None = None
     data_root: Path | None = None
     identity_resolver: IdentityResolver | None = None
+    release_digest: str = "development"
 
 
 @dataclass(slots=True)
@@ -58,6 +64,7 @@ class RuntimeSession:
     avatar_director: AvatarDirector
     identity: SessionIdentity
     profiles: AnimaProfileRepository
+    trace: TraceSettings
 
 
 class SessionRegistry:
@@ -89,6 +96,7 @@ class SessionRegistry:
                 avatar_director=AvatarDirector(),
                 identity=identity,
                 profiles=profiles,
+                trace=self.services.trace,
             )
             self._sessions[key] = runtime
             while len(self._sessions) > max(1, self.services.max_sessions):

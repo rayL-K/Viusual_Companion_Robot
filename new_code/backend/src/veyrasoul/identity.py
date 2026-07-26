@@ -66,6 +66,7 @@ class SessionIdentity:
     def __post_init__(self) -> None:
         if self.assurance not in {
             "anonymous_session_hint",
+            "admission_device",
             "authenticated",
             "client_asserted",
         }:

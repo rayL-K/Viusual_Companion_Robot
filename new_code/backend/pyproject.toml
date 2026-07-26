@@ -1,7 +1,7 @@
 [project]
-name = "veyrasoul-core"
-version = "0.1.0"
-description = "Low-latency multimodal companion runtime for RK3588"
+name = "anima-core"
+version = "0.0.1"
+description = "Portable low-latency multimodal companion runtime"
 requires-python = ">=3.10,<3.13"
 dependencies = []
 

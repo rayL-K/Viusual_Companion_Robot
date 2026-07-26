@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
-from veyrasoul.integrations.sherpa_asr import SherpaAsrSession
+from veyrasoul.integrations.sherpa_asr import SherpaAsrConfig, SherpaAsrSession, SherpaStreamingAsr
 from veyrasoul.orchestration.ports import AsrUpdate
 
 
@@ -10,7 +12,7 @@ class FakeStreamingRecognizer:
     def __init__(self) -> None:
         self.calls: list[bytes] = []
 
-    def _decode(self, stream: object, pcm16: bytes) -> tuple[str, bool]:
+    async def decode(self, stream: object, pcm16: bytes) -> tuple[str, bool]:
         self.calls.append(pcm16)
         if len(self.calls) == 1:
             return "你", False
@@ -48,6 +50,40 @@ def test_streaming_session_emits_partial_then_endpoint_final() -> None:
         assert len(owner.calls) == 2
 
     asyncio.run(scenario())
+
+
+def test_asr_waiters_do_not_starve_the_shared_asyncio_executor(tmp_path) -> None:
+    owner = SherpaStreamingAsr(SherpaAsrConfig(tmp_path))
+    entered = threading.Event()
+    release = threading.Event()
+    calls = 0
+
+    def fake_decode(stream: object, pcm16: bytes) -> tuple[str, bool]:
+        nonlocal calls
+        del stream, pcm16
+        calls += 1
+        entered.set()
+        assert release.wait(2)
+        return "", False
+
+    owner._decode = fake_decode  # type: ignore[method-assign]
+
+    async def scenario() -> None:
+        loop = asyncio.get_running_loop()
+        loop.set_default_executor(ThreadPoolExecutor(max_workers=4))
+        tasks = [
+            asyncio.create_task(owner.decode(object(), b"\x00\x00" * 320))
+            for _ in range(4)
+        ]
+        while not entered.is_set():
+            await asyncio.sleep(0)
+        probe = await asyncio.wait_for(asyncio.to_thread(lambda: "executor-ready"), 0.5)
+        assert probe == "executor-ready"
+        release.set()
+        assert await asyncio.gather(*tasks) == [("", False)] * 4
+
+    asyncio.run(scenario())
+    assert calls == 4
 
 
 def test_streaming_session_rejects_invalid_pcm_and_submission_before_start() -> None:

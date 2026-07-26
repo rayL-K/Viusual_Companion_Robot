@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import io
+import re
 import threading
 import wave
 from dataclasses import dataclass
@@ -21,6 +23,12 @@ class SherpaTtsConfig:
     speed: float = 1.0
     num_threads: int = 4
     language: str = "zh"
+    pronunciation_overrides: tuple[tuple[str, str], ...] = (("Anima", "安妮玛"),)
+
+    def __post_init__(self) -> None:
+        for source, spoken in self.pronunciation_overrides:
+            if not str(source).strip() or not str(spoken).strip():
+                raise ValueError("TTS pronunciation overrides must contain non-empty pairs")
 
 
 class SherpaTtsSynthesizer:
@@ -28,6 +36,8 @@ class SherpaTtsSynthesizer:
         self.config = config
         self._engine = None
         self._load_lock = threading.Lock()
+        self._synthesis_lock = threading.Lock()
+        self._async_synthesis_lock = asyncio.Lock()
 
     async def synthesize(
         self,
@@ -43,7 +53,25 @@ class SherpaTtsSynthesizer:
         normalized = str(text or "").strip()
         if not normalized:
             raise ValueError("TTS text must not be empty")
-        return await asyncio.to_thread(self._synthesize_sync, normalized, sid)
+        spoken = _apply_pronunciation_overrides(normalized, self.config.pronunciation_overrides)
+        # Acquire before entering the shared executor. Otherwise every competing
+        # request occupies a worker while waiting on the native lock and can
+        # starve ASR/memory work that also relies on asyncio.to_thread().
+        async with self._async_synthesis_lock:
+            worker = asyncio.create_task(
+                asyncio.to_thread(self._synthesize_sync, spoken, sid),
+                name="sherpa-tts-native",
+            )
+            try:
+                return await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                # Native inference cannot be interrupted safely. Keep the async
+                # gate until it exits so the next request never queues another
+                # lock-waiting worker in the shared executor.
+                while not worker.done():
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await asyncio.shield(worker)
+                raise
 
     async def warmup(self) -> None:
         """在服务接收会话前加载模型，避免首轮用户承担冷启动。"""
@@ -61,11 +89,13 @@ class SherpaTtsSynthesizer:
 
     def _synthesize_sync(self, text: str, sid: int) -> tuple[bytes, str]:
         engine = self._load()
-        audio = engine.generate(
-            text,
-            sid=max(0, int(sid)),
-            speed=max(0.5, min(2.0, float(self.config.speed))),
-        )
+        # sherpa OfflineTts owns mutable native state; one engine must not be entered concurrently.
+        with self._synthesis_lock:
+            audio = engine.generate(
+                text,
+                sid=max(0, int(sid)),
+                speed=max(0.5, min(2.0, float(self.config.speed))),
+            )
         samples = np.asarray(audio.samples, dtype=np.float32).reshape(-1)
         if samples.size == 0:
             raise RuntimeError("sherpa-onnx returned empty audio")
@@ -189,3 +219,19 @@ def _voice_sid(voice_id: str, default_sid: int) -> int:
     if normalized.isdecimal() and int(normalized) <= 65_535:
         return int(normalized)
     raise ValueError("当前 sherpa-onnx 音色仅支持 default、数字或 sid:<数字>")
+
+
+def _apply_pronunciation_overrides(
+    text: str,
+    overrides: tuple[tuple[str, str], ...],
+) -> str:
+    value = text
+    for source, spoken in overrides:
+        escaped = re.escape(source.strip())
+        value = re.sub(
+            rf"(?<![A-Za-z0-9]){escaped}(?![A-Za-z0-9])",
+            spoken.strip(),
+            value,
+            flags=re.IGNORECASE,
+        )
+    return value

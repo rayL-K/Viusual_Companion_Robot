@@ -27,6 +27,37 @@ def test_pipeline_yields_only_after_audio_exists() -> None:
     asyncio.run(scenario())
 
 
+def test_pipeline_reads_ahead_while_first_segment_is_synthesizing() -> None:
+    async def scenario() -> None:
+        first_tts_started = asyncio.Event()
+        allow_first_tts = asyncio.Event()
+        second_sentence_consumed = asyncio.Event()
+
+        async def stream():
+            yield "第一句话。"
+            second_sentence_consumed.set()
+            yield "第二句话。"
+
+        async def synthesize(text: str) -> tuple[bytes, str]:
+            if text == "第一句话。":
+                first_tts_started.set()
+                await allow_first_tts.wait()
+            return text.encode("utf-8"), "audio/wav"
+
+        async def collect():
+            return [segment async for segment in ReplyPipeline(synthesize).run(stream())]
+
+        task = asyncio.create_task(collect())
+        await asyncio.wait_for(first_tts_started.wait(), 1)
+        await asyncio.wait_for(second_sentence_consumed.wait(), 1)
+        assert not task.done()
+        allow_first_tts.set()
+        segments = await asyncio.wait_for(task, 1)
+        assert [segment.text for segment in segments] == ["第一句话。", "第二句话。"]
+
+    asyncio.run(scenario())
+
+
 def test_reply_character_limit_closes_upstream_without_consuming_extra_chunks() -> None:
     async def scenario() -> None:
         consumed: list[str] = []

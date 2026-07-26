@@ -1,4 +1,4 @@
-"""仅供本机浏览器 E2E 使用的确定性模型桩；不会连接或替换开发板 V1。"""
+"""仅供本机浏览器 E2E 使用的确定性 Anima 模型桩。"""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from veyrasoul.perception import VisualFrame
 from .app import AppServices, create_app
 
 
-_DEMO_TEMP = tempfile.TemporaryDirectory(prefix="veyrasoul-e2e-")
+_DEMO_TEMP = tempfile.TemporaryDirectory(prefix="anima-e2e-")
 
 
 class DemoLlm:
@@ -59,8 +59,8 @@ class DemoVision:
 
 
 def build_demo_app():
-    v2_root = Path(__file__).resolve().parents[4]
-    web_dist = Path(os.environ.get("VEYRASOUL_WEB_DIST", v2_root / "web" / "dist"))
+    product_root = Path(__file__).resolve().parents[4]
+    web_dist = Path(os.environ.get("ANIMA_WEB_DIST", product_root / "web" / "dist"))
     if not (web_dist / "index.html").is_file():
         raise RuntimeError("请先在 new_code/web 执行 npm run build")
     memory_path = Path(_DEMO_TEMP.name) / "memory.db"
@@ -71,7 +71,7 @@ def build_demo_app():
             tts=DemoTts(),
             vision=DemoVision(),
             vision_refresh_seconds=0.1,
-            stable_system_prompt="你是草莓兔兔的本机 E2E 桩。",
+            stable_system_prompt="你是 Anima 的本机 E2E 桩。",
             web_dist=web_dist,
         )
     )
@@ -81,7 +81,7 @@ def main() -> None:
     uvicorn.run(
         build_demo_app(),
         host="127.0.0.1",
-        port=int(os.environ.get("VEYRASOUL_E2E_PORT", "8875")),
+        port=int(os.environ.get("ANIMA_E2E_PORT", "8875")),
         log_level="warning",
     )
 
