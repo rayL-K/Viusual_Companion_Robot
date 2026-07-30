@@ -153,18 +153,26 @@ Assert-Match -Text $EnvTemplate -Pattern '(?m)^ANIMA_TURNSTILE_SITE_KEY=\r?$' -M
 Assert-Match -Text $EnvTemplate -Pattern '(?m)^ANIMA_TURNSTILE_SECRET=\r?$' -Message "The environment template must leave the Turnstile secret empty."
 Assert-Match -Text $EnvTemplate -Pattern '(?m)^ANIMA_ADMISSION_TTL_SECONDS=86400\r?$' -Message "The environment template must use the recommended admission TTL."
 Assert-Match -Text $EnvTemplate -Pattern '(?m)^ANIMA_DEVICE_TTL_SECONDS=2592000\r?$' -Message "The environment template must use the 30-day device identity TTL."
+Assert-Match -Text $EnvTemplate -Pattern '(?m)^ANIMA_TOC_ENABLED=false\r?$' -Message "The ELF2 template must explicitly select non-ToC validation mode."
+Assert-Match -Text $EnvTemplate -Pattern '(?m)^ANIMA_REALTIME_ALLOW_ANONYMOUS=true\r?$' -Message "The current ELF2 validation template must explicitly enable anonymous realtime."
+Assert-Match -Text $EnvTemplate -Pattern '(?m)^ANIMA_AUTH_DATABASE=/var/lib/anima/auth\.sqlite3\r?$' -Message "The ToC auth database must live in the writable production state directory."
+Assert-Match -Text $EnvTemplate -Pattern '(?m)^ANIMA_LOGIN_FERNET_KEY=\r?$' -Message "The environment template must leave the login-state encryption key empty."
 Assert-NoMatch -Text $EnvTemplate -Pattern '(?i)sk-[A-Za-z0-9]|replace-me|password\s*=' -Message "The environment template contains a secret-like placeholder or credential."
 Assert-NoMatch -Text $EnvTemplate -Pattern '(?m)^\s*(ANIMA_HOST|ANIMA_PORT|ANIMA_WEB_DIST|ANIMA_DATA_ROOT|ANIMA_MEMORY_PATH|ANIMA_PERSONA_PATH|ANIMA_ADMISSION_REQUIRED|ANIMA_ALLOWED_ORIGINS|PYTHONPATH)\s*=' -Message "The environment template must not define deployment-reserved keys."
 
+$BenchmarkOutput = Join-Path (
+    [System.IO.Path]::GetTempPath()
+) ("anima-memory-benchmark-{0}-{1}.json" -f $PID, [guid]::NewGuid())
 Push-Location (Join-Path $Root "backend")
 try {
     & $Python -m pytest -q
     if ($LASTEXITCODE -ne 0) { throw "Backend tests failed." }
-    & $Python scripts/benchmark_memory.py --output ..\artifacts\memory-benchmark.json
+    & $Python scripts/benchmark_memory.py --output $BenchmarkOutput
     if ($LASTEXITCODE -ne 0) { throw "Memory benchmark failed." }
 }
 finally {
     Pop-Location
+    Remove-Item -LiteralPath $BenchmarkOutput -Force -ErrorAction SilentlyContinue
 }
 
 Push-Location (Join-Path $Root "web")
