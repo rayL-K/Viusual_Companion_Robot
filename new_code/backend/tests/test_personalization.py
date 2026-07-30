@@ -11,6 +11,7 @@ from veyrasoul.personalization import (
     ProfileValidationError,
     SqliteAnimaProfileStore,
 )
+from veyrasoul.providers import Capability, Locality, ProviderRegistry
 
 
 def test_identity_types_are_normalized_and_reject_path_input() -> None:
@@ -57,6 +58,15 @@ def test_profile_persists_to_sqlite_and_anima_markdown(tmp_path) -> None:
             "maxReplyChars": 88,
             "replyDelayMs": 120,
             "voiceId": "sid:3",
+            "providers": {
+                "asr": {"provider": "sherpa", "config": {"model": "zipformer-zh-en"}},
+                "vision": {"provider": "local-vlm", "config": {"model": "qwen-vl"}},
+                "llm": {"provider": "deepseek", "config": {"model": "deepseek-chat"}},
+                "tts": {
+                    "provider": "sherpa",
+                    "config": {"model": "matcha", "voice": "warm.zh"},
+                },
+            },
         }
     )
     assert updated.revision == 2
@@ -66,11 +76,68 @@ def test_profile_persists_to_sqlite_and_anima_markdown(tmp_path) -> None:
 
     reopened = SqliteAnimaProfileStore(layout, user, anima, "另一个默认值")
     assert reopened.get() == updated
+    assert reopened.get().provider_snapshot.resolve("tts").config == {
+        "model": "matcha",
+        "voice": "warm.zh",
+    }
     with sqlite3.connect(layout.state_database(user, anima)) as connection:
         row = connection.execute(
             "SELECT max_reply_chars, reply_delay_ms, voice_id FROM anima_settings"
         ).fetchone()
     assert row == (88, 120, "sid:3")
+
+
+@pytest.mark.parametrize("field", ["api_key", "base_url", "endpoint", "token"])
+def test_profile_never_accepts_provider_credentials_or_endpoints(tmp_path, field) -> None:
+    store = SqliteAnimaProfileStore(
+        DataLayout(tmp_path / "data", tmp_path / "legacy.db"),
+        UserId.parse("alice"),
+        AnimaId.default(),
+        "默认人设",
+    )
+
+    with pytest.raises(ProfileValidationError, match="server-managed"):
+        store.update(
+            {
+                "expectedRevision": 1,
+                "providers": {
+                    "llm": {
+                        "provider": "deepseek",
+                        "config": {field: "must-not-be-stored"},
+                    }
+                },
+            }
+        )
+    assert "must-not-be-stored" not in store.database_path.read_bytes().decode(
+        "utf-8", errors="ignore"
+    )
+
+
+def test_profile_rejects_nested_secrets_even_with_a_permissive_custom_registry(tmp_path) -> None:
+    registry = ProviderRegistry()
+    for capability in Capability:
+        registry.register_provider(capability, "disabled", Locality.DISABLED)
+    registry.register_provider("llm", "custom", "cloud")
+    store = SqliteAnimaProfileStore(
+        DataLayout(tmp_path / "data", tmp_path / "legacy.db"),
+        UserId.parse("alice"),
+        AnimaId.default(),
+        "默认人设",
+        registry,
+    )
+
+    with pytest.raises(ProfileValidationError, match="server-managed"):
+        store.update(
+            {
+                "expectedRevision": 1,
+                "providers": {
+                    "llm": {
+                        "provider": "custom",
+                        "config": {"transport": {"clientSecret": "must-not-persist"}},
+                    }
+                },
+            }
+        )
 
 
 def test_profile_patch_is_strict_and_does_not_mutate_other_users(tmp_path) -> None:

@@ -87,6 +87,16 @@ class RuntimeSettings:
     asr_rule2_silence: float = 0.55
     asr_rule3_length: float = 20.0
     asr_queue_frames: int = 50
+    audio_api_key: str = field(default="", repr=False)
+    audio_base_url: str = "https://api.openai.com/v1"
+    audio_connect_timeout_seconds: float = 5.0
+    audio_read_timeout_seconds: float = 30.0
+    audio_max_response_bytes: int = 16 * 1024 * 1024
+    audio_max_connections: int = 20
+    audio_max_keepalive_connections: int = 10
+    tts_cloud_model: str = "gpt-4o-mini-tts"
+    tts_cloud_voice: str = "alloy"
+    asr_cloud_model: str = "gpt-4o-mini-transcribe"
     vision_provider: str | None = None
     vision_url: str = "http://127.0.0.1:8767"
     vision_timeout_seconds: float = 20.0
@@ -130,20 +140,25 @@ class RuntimeSettings:
             raise ValueError("ANIMA_LLM_API_KEY or DEEPSEEK_API_KEY is required")
 
         tts_provider = _provider(read.get("ANIMA_TTS_PROVIDER", default="sherpa")) or ""
-        if tts_provider != "sherpa":
+        if tts_provider not in {"sherpa", "openai-compatible"}:
             raise ValueError(f"unsupported ANIMA_TTS_PROVIDER: {tts_provider or 'disabled'}")
         tts_model = read.get("ANIMA_TTS_MODEL_DIR", "VEYRASOUL_TTS_MODEL_DIR")
-        if not tts_model:
+        if tts_provider == "sherpa" and not tts_model:
             raise ValueError("ANIMA_TTS_MODEL_DIR is required for the sherpa TTS provider")
 
         asr_provider = _provider(read.get("ANIMA_ASR_PROVIDER", default="sherpa"))
         asr_model: str | None = None
         if asr_provider is not None:
-            if asr_provider != "sherpa":
+            if asr_provider not in {"sherpa", "openai-compatible"}:
                 raise ValueError(f"unsupported ANIMA_ASR_PROVIDER: {asr_provider}")
             asr_model = read.get("ANIMA_ASR_MODEL_DIR", "VEYRASOUL_ASR_MODEL_DIR")
-            if not asr_model:
+            if asr_provider == "sherpa" and not asr_model:
                 raise ValueError("ANIMA_ASR_MODEL_DIR is required for the sherpa ASR provider")
+
+        cloud_audio_enabled = "openai-compatible" in {tts_provider, asr_provider}
+        audio_api_key = read.get("ANIMA_AUDIO_API_KEY") if cloud_audio_enabled else ""
+        if cloud_audio_enabled and not audio_api_key:
+            raise ValueError("ANIMA_AUDIO_API_KEY is required for cloud ASR or TTS")
 
         vision_provider = _provider(read.get("ANIMA_VISION_PROVIDER", default="local-vlm"))
         if vision_provider not in {None, "local-vlm"}:
@@ -292,7 +307,7 @@ class RuntimeSettings:
                 "ANIMA_LLM_MAX_TOKENS", "DEEPSEEK_MAX_TOKENS", default=256, minimum=32, maximum=2_048
             ),
             tts_provider=tts_provider,
-            tts_model_dir=Path(tts_model).expanduser(),
+            tts_model_dir=Path(tts_model).expanduser() if tts_model else None,
             tts_sid=read.integer("ANIMA_TTS_SID", "VEYRASOUL_TTS_SID", default=0, minimum=0, maximum=65_535),
             tts_speed=read.number("ANIMA_TTS_SPEED", "VEYRASOUL_TTS_SPEED", default=1.0, minimum=0.5, maximum=2.0),
             tts_threads=read.integer("ANIMA_TTS_THREADS", "VEYRASOUL_TTS_THREADS", default=4, minimum=1, maximum=64),
@@ -313,6 +328,36 @@ class RuntimeSettings:
             ),
             asr_queue_frames=read.integer(
                 "ANIMA_ASR_QUEUE_FRAMES", "VEYRASOUL_ASR_QUEUE_FRAMES", default=50, minimum=10, maximum=500
+            ),
+            audio_api_key=audio_api_key,
+            audio_base_url=_base_url(
+                read.get("ANIMA_AUDIO_BASE_URL", default="https://api.openai.com/v1"),
+                setting="ANIMA_AUDIO_BASE_URL",
+            ),
+            audio_connect_timeout_seconds=read.number(
+                "ANIMA_AUDIO_CONNECT_TIMEOUT_SECONDS", default=5.0, minimum=0.1, maximum=60.0
+            ),
+            audio_read_timeout_seconds=read.number(
+                "ANIMA_AUDIO_READ_TIMEOUT_SECONDS", default=30.0, minimum=0.1, maximum=300.0
+            ),
+            audio_max_response_bytes=read.integer(
+                "ANIMA_AUDIO_MAX_RESPONSE_BYTES",
+                default=16 * 1024 * 1024,
+                minimum=1024,
+                maximum=128 * 1024 * 1024,
+            ),
+            audio_max_connections=read.integer(
+                "ANIMA_AUDIO_MAX_CONNECTIONS", default=20, minimum=1, maximum=256
+            ),
+            audio_max_keepalive_connections=read.integer(
+                "ANIMA_AUDIO_MAX_KEEPALIVE_CONNECTIONS", default=10, minimum=0, maximum=256
+            ),
+            tts_cloud_model=read.get(
+                "ANIMA_TTS_CLOUD_MODEL", default="gpt-4o-mini-tts"
+            ),
+            tts_cloud_voice=read.get("ANIMA_TTS_CLOUD_VOICE", default="alloy"),
+            asr_cloud_model=read.get(
+                "ANIMA_ASR_CLOUD_MODEL", default="gpt-4o-mini-transcribe"
             ),
             vision_provider=vision_provider,
             vision_url=_loopback_url(
@@ -422,16 +467,16 @@ def _path(value: str, default: Path) -> Path:
     return (Path(value).expanduser() if value else default).resolve()
 
 
-def _base_url(value: str) -> str:
+def _base_url(value: str, *, setting: str = "ANIMA_LLM_BASE_URL") -> str:
     normalized = value.strip().rstrip("/")
     parsed = urlsplit(normalized)
     if parsed.username or parsed.password or parsed.query or parsed.fragment:
-        raise ValueError("ANIMA_LLM_BASE_URL must not contain credentials, query, or fragment")
+        raise ValueError(f"{setting} must not contain credentials, query, or fragment")
     if parsed.scheme == "https" and parsed.netloc:
         return normalized
     if parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "localhost", "::1"}:
         return normalized
-    raise ValueError("ANIMA_LLM_BASE_URL must use HTTPS, except for a loopback development endpoint")
+    raise ValueError(f"{setting} must use HTTPS, except for a loopback development endpoint")
 
 
 def _loopback_url(value: str, *, setting: str) -> str:

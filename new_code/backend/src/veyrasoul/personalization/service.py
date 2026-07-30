@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from veyrasoul.identity import AnimaId, UserId
+from veyrasoul.providers import ProviderRegistry, default_provider_registry
 
 from .catalog import (
     ACTIVE,
@@ -28,12 +29,14 @@ class IdentityService:
         repository: SqliteIdentityRepository,
         layout: DataLayout,
         default_persona: str,
+        provider_registry: ProviderRegistry | None = None,
     ) -> None:
         if repository.database_path != layout.identity_database():
             raise ValueError("目录数据库必须位于同一 DataLayout")
         self.repository = repository
         self.layout = layout
         self.default_persona = default_persona
+        self.provider_registry = provider_registry or default_provider_registry()
 
     def create_user(self, user_id: UserId, display_name: str) -> User:
         return self.repository.create_user(user_id, display_name)
@@ -73,7 +76,11 @@ class IdentityService:
     ) -> SqliteAnimaProfileStore:
         self.require_active_anima(actor_id, anima_id)
         return SqliteAnimaProfileStore(
-            self.layout, actor_id, anima_id, self.default_persona
+            self.layout,
+            actor_id,
+            anima_id,
+            self.default_persona,
+            self.provider_registry,
         )
 
     def require_active_anima(self, actor_id: UserId, anima_id: AnimaId) -> Anima:

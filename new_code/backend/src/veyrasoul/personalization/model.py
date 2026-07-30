@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any, Mapping
+
+from veyrasoul.providers import ProviderRegistry, ProviderSnapshot, default_provider_registry
 
 
 MIN_REPLY_CHARS = 8
@@ -12,12 +14,27 @@ MAX_REPLY_CHARS = 2_000
 MAX_REPLY_DELAY_MS = 10_000
 MAX_PERSONA_CHARS = 20_000
 _VOICE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$")
+_SERVER_MANAGED_PROVIDER_KEYS = frozenset(
+    {
+        "apikey",
+        "authorization",
+        "baseurl",
+        "credential",
+        "credentials",
+        "endpoint",
+        "password",
+        "privatekey",
+        "secret",
+        "token",
+    }
+)
 _FIELDS = {
     "expectedRevision",
     "personaMarkdown",
     "maxReplyChars",
     "replyDelayMs",
     "voiceId",
+    "providers",
 }
 
 
@@ -35,6 +52,17 @@ class AnimaProfile:
     max_reply_chars: int = 160
     reply_delay_ms: int = 0
     voice_id: str = "default"
+    provider_snapshot: ProviderSnapshot = field(
+        default_factory=lambda: default_provider_registry().parse_snapshot(
+            {
+                "llm": "deepseek",
+                "asr": "sherpa",
+                "tts": "sherpa",
+                "vision": "local-vlm",
+            }
+        ),
+        repr=False,
+    )
     revision: int = 1
 
     def __post_init__(self) -> None:
@@ -51,10 +79,16 @@ class AnimaProfile:
         )
         if not isinstance(self.voice_id, str) or not _VOICE_ID.fullmatch(self.voice_id):
             raise ProfileValidationError("voiceId 格式无效")
+        if not isinstance(self.provider_snapshot, ProviderSnapshot):
+            raise ProfileValidationError("providers 必须是不可变的 ProviderSnapshot")
         if isinstance(self.revision, bool) or not isinstance(self.revision, int) or self.revision < 1:
             raise ProfileValidationError("revision 必须为正整数")
 
-    def apply_patch(self, payload: Mapping[str, Any]) -> "AnimaProfile":
+    def apply_patch(
+        self,
+        payload: Mapping[str, Any],
+        provider_registry: ProviderRegistry | None = None,
+    ) -> "AnimaProfile":
         unknown = set(payload) - _FIELDS
         if unknown:
             raise ProfileValidationError(f"不支持的设置字段：{', '.join(sorted(unknown))}")
@@ -88,6 +122,16 @@ class AnimaProfile:
             if not isinstance(voice_id, str) or not _VOICE_ID.fullmatch(voice_id):
                 raise ProfileValidationError("voiceId 格式无效")
             values["voice_id"] = voice_id
+        if "providers" in payload:
+            providers = payload["providers"]
+            if not isinstance(providers, Mapping):
+                raise ProfileValidationError("providers 必须是对象")
+            _reject_server_managed_provider_values(providers)
+            registry = provider_registry or default_provider_registry()
+            try:
+                values["provider_snapshot"] = registry.parse_snapshot(providers)
+            except ValueError as exc:
+                raise ProfileValidationError(str(exc)) from exc
         return replace(self, **values)
 
     def to_wire(self) -> dict[str, object]:
@@ -96,6 +140,7 @@ class AnimaProfile:
             "maxReplyChars": self.max_reply_chars,
             "replyDelayMs": self.reply_delay_ms,
             "voiceId": self.voice_id,
+            "providers": self.provider_snapshot.as_dict(),
             "revision": self.revision,
         }
 
@@ -125,3 +170,24 @@ def _integer_range(value: object, name: str, minimum: int, maximum: int) -> int:
     if not minimum <= value <= maximum:
         raise ProfileValidationError(f"{name} 必须在 {minimum}-{maximum} 之间")
     return value
+
+
+def _reject_server_managed_provider_values(value: object) -> None:
+    """Fail closed even when a custom registry accidentally accepts secrets."""
+
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            normalized = re.sub(r"[^a-z0-9]+", "", str(key).lower())
+            if (
+                normalized in _SERVER_MANAGED_PROVIDER_KEYS
+                or normalized.endswith(
+                    ("apikey", "credential", "password", "privatekey", "secret", "token")
+                )
+            ):
+                raise ProfileValidationError(
+                    "provider credentials and endpoints are server-managed and cannot be selected"
+                )
+            _reject_server_managed_provider_values(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _reject_server_managed_provider_values(item)

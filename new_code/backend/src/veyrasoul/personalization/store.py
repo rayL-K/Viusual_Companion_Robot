@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 import sqlite3
 import threading
 import time
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import Any, Iterator, Mapping
 
 from veyrasoul.identity import AnimaId, UserId
+from veyrasoul.providers import ProviderRegistry, default_provider_registry
 
 from .layout import DataLayout
 from .model import AnimaProfile, ProfileValidationError
@@ -23,6 +25,7 @@ class SqliteAnimaProfileStore:
         user_id: UserId,
         anima_id: AnimaId,
         default_persona: str,
+        provider_registry: ProviderRegistry | None = None,
     ) -> None:
         self.layout = layout
         self.user_id = user_id
@@ -30,6 +33,7 @@ class SqliteAnimaProfileStore:
         self.database_path = layout.state_database(user_id, anima_id)
         self.persona_path = layout.persona_file(user_id, anima_id)
         self.default_profile = AnimaProfile(default_persona)
+        self.provider_registry = provider_registry or default_provider_registry()
         self._lock = threading.RLock()
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self.persona_path.parent.mkdir(parents=True, exist_ok=True)
@@ -49,7 +53,7 @@ class SqliteAnimaProfileStore:
         try:
             with self._lock, self._connection(immediate=True) as connection:
                 current = self._get_or_create(connection)
-                updated = current.apply_patch(payload)
+                updated = current.apply_patch(payload, self.provider_registry)
                 # The human-readable Anima.md is part of the public settings contract,
                 # not a best-effort afterthought. Write it before committing SQLite so
                 # a filesystem failure rolls the database transaction back as well.
@@ -69,13 +73,14 @@ class SqliteAnimaProfileStore:
     def _get_or_create(self, connection: sqlite3.Connection) -> AnimaProfile:
         row = connection.execute(
             """
-            SELECT persona_markdown, max_reply_chars, reply_delay_ms, voice_id, revision
+            SELECT persona_markdown, max_reply_chars, reply_delay_ms, voice_id,
+                   provider_snapshot_json, revision
             FROM anima_settings WHERE anima_id=?
             """,
             (self.anima_id.value,),
         ).fetchone()
         if row is not None:
-            return _row_to_profile(row)
+            return _row_to_profile(row, self.provider_registry)
         profile = self._initial_profile()
         self._upsert(connection, profile)
         return profile
@@ -116,24 +121,35 @@ class SqliteAnimaProfileStore:
                     max_reply_chars INTEGER NOT NULL,
                     reply_delay_ms INTEGER NOT NULL,
                     voice_id TEXT NOT NULL,
+                    provider_snapshot_json TEXT NOT NULL DEFAULT '{}',
                     revision INTEGER NOT NULL,
                     updated_at_ms INTEGER NOT NULL
                 )
                 """
             )
+            columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(anima_settings)")
+            }
+            if "provider_snapshot_json" not in columns:
+                connection.execute(
+                    "ALTER TABLE anima_settings "
+                    "ADD COLUMN provider_snapshot_json TEXT NOT NULL DEFAULT '{}'"
+                )
 
     def _upsert(self, connection: sqlite3.Connection, profile: AnimaProfile) -> None:
         connection.execute(
             """
             INSERT INTO anima_settings(
                 anima_id, persona_markdown, max_reply_chars, reply_delay_ms,
-                voice_id, revision, updated_at_ms
-            ) VALUES(?, ?, ?, ?, ?, ?, ?)
+                voice_id, provider_snapshot_json, revision, updated_at_ms
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(anima_id) DO UPDATE SET
                 persona_markdown=excluded.persona_markdown,
                 max_reply_chars=excluded.max_reply_chars,
                 reply_delay_ms=excluded.reply_delay_ms,
                 voice_id=excluded.voice_id,
+                provider_snapshot_json=excluded.provider_snapshot_json,
                 revision=excluded.revision,
                 updated_at_ms=excluded.updated_at_ms
             """,
@@ -143,6 +159,12 @@ class SqliteAnimaProfileStore:
                 profile.max_reply_chars,
                 profile.reply_delay_ms,
                 profile.voice_id,
+                json.dumps(
+                    profile.provider_snapshot.as_dict(),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ),
                 profile.revision,
                 int(time.time() * 1000),
             ),
@@ -166,11 +188,28 @@ class SqliteAnimaProfileStore:
             raise RuntimeError(f"设置已写入 SQLite，但无法同步 {self.persona_path}: {exc}") from exc
 
 
-def _row_to_profile(row: sqlite3.Row) -> AnimaProfile:
+def _row_to_profile(
+    row: sqlite3.Row,
+    registry: ProviderRegistry,
+) -> AnimaProfile:
+    raw_snapshot = str(row["provider_snapshot_json"])
+    try:
+        parsed_snapshot = json.loads(raw_snapshot)
+        provider_snapshot = registry.parse_snapshot(
+            parsed_snapshot if parsed_snapshot else {
+                "llm": "deepseek",
+                "asr": "sherpa",
+                "tts": "sherpa",
+                "vision": "local-vlm",
+            }
+        )
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise ProfileValidationError("持久化的 providers 快照无效") from exc
     return AnimaProfile(
         persona_markdown=str(row["persona_markdown"]),
         max_reply_chars=int(row["max_reply_chars"]),
         reply_delay_ms=int(row["reply_delay_ms"]),
         voice_id=str(row["voice_id"]),
+        provider_snapshot=provider_snapshot,
         revision=int(row["revision"]),
     )

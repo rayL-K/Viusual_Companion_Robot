@@ -31,6 +31,9 @@ from veyrasoul.integrations import (
     DeepSeekStreamClient,
     LocalVlmClient,
     LocalVlmConfig,
+    OpenAiAudioConfig,
+    OpenAiCompatibleAsr,
+    OpenAiCompatibleTts,
     SherpaAsrConfig,
     SherpaStreamingAsr,
     SherpaTtsConfig,
@@ -101,6 +104,7 @@ def build_app(
     *,
     oidc_verifier: OidcVerifier | None = None,
     oidc_token_transport: httpx.BaseTransport | None = None,
+    audio_transport: httpx.AsyncBaseTransport | None = None,
 ):
     config = settings or RuntimeSettings.from_environment()
     llm_selection = config.provider_snapshot.resolve("llm")
@@ -117,16 +121,38 @@ def build_app(
             max_tokens=config.llm_max_tokens,
         )
     )
-    if config.tts_model_dir is None:
-        raise RuntimeError("selected TTS provider has no model directory")
-    tts = SherpaTtsSynthesizer(
-        SherpaTtsConfig(
-            model_dir=config.tts_model_dir,
-            sid=config.tts_sid,
-            speed=config.tts_speed,
-            num_threads=config.tts_threads,
+    cloud_audio_config = None
+    if "openai-compatible" in {tts_selection.name, asr_selection.name}:
+        cloud_audio_config = OpenAiAudioConfig(
+            api_key=config.audio_api_key,
+            base_url=config.audio_base_url,
+            connect_timeout_seconds=config.audio_connect_timeout_seconds,
+            read_timeout_seconds=config.audio_read_timeout_seconds,
+            max_response_bytes=config.audio_max_response_bytes,
+            max_connections=config.audio_max_connections,
+            max_keepalive_connections=config.audio_max_keepalive_connections,
         )
-    )
+    if tts_selection.name == "sherpa":
+        if config.tts_model_dir is None:
+            raise RuntimeError("selected TTS provider has no model directory")
+        tts = SherpaTtsSynthesizer(
+            SherpaTtsConfig(
+                model_dir=config.tts_model_dir,
+                sid=config.tts_sid,
+                speed=config.tts_speed,
+                num_threads=config.tts_threads,
+            )
+        )
+    elif tts_selection.name == "openai-compatible":
+        assert cloud_audio_config is not None
+        tts = OpenAiCompatibleTts(
+            cloud_audio_config,
+            model=config.tts_cloud_model,
+            voice=config.tts_cloud_voice,
+            transport=audio_transport,
+        )
+    else:
+        raise RuntimeError(f"unsupported selected TTS provider: {tts_selection.name}")
     asr = None
     if asr_selection.name == "sherpa":
         if config.asr_model_dir is None:
@@ -142,6 +168,13 @@ def build_app(
                 queue_frames=config.asr_queue_frames,
             )
         )
+    elif asr_selection.name == "openai-compatible":
+        assert cloud_audio_config is not None
+        asr = OpenAiCompatibleAsr(
+            cloud_audio_config,
+            model=config.asr_cloud_model,
+            transport=audio_transport,
+        )
     vlm = None
     if vision_selection.name == "local-vlm":
         vlm = LocalVlmClient(
@@ -154,7 +187,14 @@ def build_app(
         callback for callback in (asr.warmup if asr else None, tts.warmup) if callback is not None
     )
     shutdown = list(
-        callback for callback in (llm.aclose, vlm.aclose if vlm else None) if callback is not None
+        callback
+        for callback in (
+            llm.aclose,
+            vlm.aclose if vlm else None,
+            tts.aclose if isinstance(tts, OpenAiCompatibleTts) else None,
+            asr.aclose if isinstance(asr, OpenAiCompatibleAsr) else None,
+        )
+        if callback is not None
     )
     stable_system_prompt = config.persona_path.read_text(encoding="utf-8")
     embedding_provider = HashingEmbeddingProvider()
@@ -249,12 +289,22 @@ def build_app(
             providers=TraceProviders(
                 asr=ProviderModel(
                     asr_selection.name,
-                    config.asr_model_dir.name if config.asr_model_dir else "disabled",
+                    (
+                        config.asr_model_dir.name
+                        if config.asr_model_dir
+                        else config.asr_cloud_model
+                        if asr_selection.name == "openai-compatible"
+                        else "disabled"
+                    ),
                 ),
                 llm=ProviderModel(llm_selection.name, config.llm_model),
                 tts=ProviderModel(
                     tts_selection.name,
-                    config.tts_model_dir.name,
+                    (
+                        config.tts_model_dir.name
+                        if config.tts_model_dir
+                        else config.tts_cloud_model
+                    ),
                 ),
             ),
         ),

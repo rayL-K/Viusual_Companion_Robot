@@ -21,6 +21,21 @@ from .contracts import (
 ConfigValidator = Callable[[Mapping[str, Any]], Mapping[str, Any] | None]
 
 _DISABLED_ALIASES = frozenset({"disabled", "none", "off", "false", "0"})
+_PUBLIC_CONFIG_FIELDS = frozenset({"model", "voice"})
+_FORBIDDEN_PUBLIC_CONFIG_FIELDS = frozenset(
+    {
+        "api_key",
+        "apikey",
+        "base_url",
+        "baseurl",
+        "endpoint",
+        "secret",
+        "token",
+        "authorization",
+        "password",
+        "credentials",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,8 +213,78 @@ def default_provider_registry() -> ProviderRegistry:
     registry = ProviderRegistry()
     for capability in Capability:
         registry.register_provider(capability, "disabled", Locality.DISABLED)
-    registry.register_provider(Capability.LLM, "deepseek", Locality.CLOUD)
-    registry.register_provider(Capability.ASR, "sherpa", Locality.LOCAL)
-    registry.register_provider(Capability.TTS, "sherpa", Locality.LOCAL)
-    registry.register_provider(Capability.VISION, "local-vlm", Locality.LOCAL)
+    registry.register_provider(
+        Capability.LLM,
+        "deepseek",
+        Locality.CLOUD,
+        validate_config=_public_selection_config("model"),
+    )
+    registry.register_provider(
+        Capability.ASR,
+        "sherpa",
+        Locality.LOCAL,
+        validate_config=_public_selection_config("model"),
+    )
+    registry.register_provider(
+        Capability.TTS,
+        "sherpa",
+        Locality.LOCAL,
+        validate_config=_public_selection_config("model", "voice"),
+    )
+    registry.register_provider(
+        Capability.ASR,
+        "openai-compatible",
+        Locality.CLOUD,
+        validate_config=_public_selection_config("model"),
+    )
+    registry.register_provider(
+        Capability.TTS,
+        "openai-compatible",
+        Locality.CLOUD,
+        validate_config=_public_selection_config("model", "voice"),
+    )
+    registry.register_provider(
+        Capability.VISION,
+        "local-vlm",
+        Locality.LOCAL,
+        validate_config=_public_selection_config("model"),
+    )
     return registry
+
+
+def _public_selection_config(*allowed: str) -> ConfigValidator:
+    """Validate user-owned selections without accepting transport credentials."""
+
+    allowed_fields = frozenset(allowed)
+    if not allowed_fields <= _PUBLIC_CONFIG_FIELDS:
+        raise ValueError("public provider config allowlist is invalid")
+
+    def validate(config: Mapping[str, Any]) -> Mapping[str, Any]:
+        normalized_keys = {
+            str(key).strip().lower().replace("-", "_"): key for key in config
+        }
+        forbidden = set(normalized_keys) & _FORBIDDEN_PUBLIC_CONFIG_FIELDS
+        if forbidden:
+            raise ProviderConfigError(
+                "provider credentials and endpoints are server-managed and cannot be selected"
+            )
+        unknown = set(normalized_keys) - allowed_fields
+        if unknown:
+            raise ProviderConfigError(
+                f"unsupported public provider config: {', '.join(sorted(unknown))}"
+            )
+        result: dict[str, str] = {}
+        for field_name in allowed_fields:
+            source_key = normalized_keys.get(field_name)
+            if source_key is None:
+                continue
+            value = config[source_key]
+            if not isinstance(value, str) or not value.strip():
+                raise ProviderConfigError(f"{field_name} must be a non-empty string")
+            cleaned = value.strip()
+            if len(cleaned) > 160 or "\x00" in cleaned:
+                raise ProviderConfigError(f"{field_name} is invalid")
+            result[field_name] = cleaned
+        return result
+
+    return validate

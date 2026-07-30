@@ -191,6 +191,64 @@ def test_settings_preserve_profile_revision_contract(tmp_path) -> None:
     assert stale.status_code == 412
 
 
+def test_settings_provider_selection_is_allowlisted_and_owner_scoped(tmp_path) -> None:
+    client, current, _ = api(tmp_path)
+
+    changed = client.patch(
+        "/v2/animas/rabbit/settings",
+        headers={"If-Match": '"1"'},
+        json={
+            "providers": {
+                "llm": {
+                    "provider": "deepseek",
+                    "config": {"model": "deepseek-chat"},
+                },
+                "tts": {
+                    "provider": "sherpa",
+                    "config": {"model": "matcha", "voice": "warm.zh"},
+                },
+                "asr": {"provider": "sherpa", "config": {"model": "zipformer"}},
+                "vision": {"provider": "local-vlm", "config": {"model": "qwen-vl"}},
+            }
+        },
+    )
+    assert changed.status_code == 200
+    assert changed.json()["providers"]["tts"]["config"] == {
+        "model": "matcha",
+        "voice": "warm.zh",
+    }
+
+    current["user"] = UserId.parse("bob")
+    hidden = client.get("/v2/animas/rabbit/settings")
+    assert hidden.status_code == 404
+    stolen = client.patch(
+        "/v2/animas/rabbit/settings",
+        headers={"If-Match": '"2"'},
+        json={"providers": {"llm": "deepseek"}},
+    )
+    assert stolen.status_code == 404
+
+
+@pytest.mark.parametrize(
+    "providers",
+    [
+        {"llm": "unregistered"},
+        {"llm": {"provider": "deepseek", "config": {"api_key": "secret"}}},
+        {"vision": {"provider": "local-vlm", "config": {"base_url": "https://evil"}}},
+    ],
+)
+def test_settings_reject_invalid_or_secret_provider_selection(tmp_path, providers) -> None:
+    client, _, _ = api(tmp_path)
+
+    response = client.patch(
+        "/v2/animas/rabbit/settings",
+        headers={"If-Match": '"1"'},
+        json={"providers": providers},
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "invalid_request"
+
+
 def test_documents_are_owner_scoped_and_size_limited(tmp_path) -> None:
     client, current, calls = api(tmp_path)
 

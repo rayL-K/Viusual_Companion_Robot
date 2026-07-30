@@ -43,6 +43,32 @@ def test_anonymous_realtime_requires_explicit_development_opt_in(tmp_path) -> No
     assert settings.realtime_allow_anonymous is True
 
 
+def test_cloud_audio_needs_no_local_models_and_hides_server_key(tmp_path) -> None:
+    environment = _minimum_environment(tmp_path)
+    environment.pop("ANIMA_TTS_MODEL_DIR")
+    environment.update(
+        {
+            "ANIMA_TTS_PROVIDER": "openai-compatible",
+            "ANIMA_ASR_PROVIDER": "openai-compatible",
+            "ANIMA_AUDIO_API_KEY": "server-audio-secret",
+            "ANIMA_AUDIO_BASE_URL": "https://audio.example/v1",
+        }
+    )
+    settings = RuntimeSettings.from_environment(environment, root=tmp_path)
+    assert settings.tts_model_dir is None
+    assert settings.asr_model_dir is None
+    assert settings.capabilities()["asr"] == "openai-compatible"
+    assert "server-audio-secret" not in repr(settings)
+
+
+def test_cloud_audio_rejects_missing_key(tmp_path) -> None:
+    environment = _minimum_environment(tmp_path)
+    environment.pop("ANIMA_TTS_MODEL_DIR")
+    environment["ANIMA_TTS_PROVIDER"] = "openai-compatible"
+    with pytest.raises(ValueError, match="ANIMA_AUDIO_API_KEY"):
+        RuntimeSettings.from_environment(environment, root=tmp_path)
+
+
 def _toc_environment(tmp_path: Path) -> dict[str, str]:
     environment = _minimum_environment(tmp_path)
     environment.update(

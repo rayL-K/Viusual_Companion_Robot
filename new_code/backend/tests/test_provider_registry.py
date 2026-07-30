@@ -22,8 +22,10 @@ def test_default_registry_describes_current_local_and_cloud_adapters() -> None:
         ("llm", "deepseek", "cloud"),
         ("llm", "disabled", "disabled"),
         ("asr", "sherpa", "local"),
+        ("asr", "openai-compatible", "cloud"),
         ("asr", "disabled", "disabled"),
         ("tts", "sherpa", "local"),
+        ("tts", "openai-compatible", "cloud"),
         ("tts", "disabled", "disabled"),
         ("vision", "local-vlm", "local"),
         ("vision", "disabled", "disabled"),
@@ -65,25 +67,25 @@ def test_omitted_and_legacy_disabled_values_resolve_canonically() -> None:
 
 
 def test_structured_snapshot_keeps_provider_config_immutable_and_serializable() -> None:
-    source = {"model": "deepseek-chat", "options": {"temperature": 0.4}}
+    source = {"model": "deepseek-chat"}
     snapshot = default_provider_registry().parse_snapshot(
         {
             "llm": {"provider": "deepseek", "locality": "cloud", "config": source},
-            "asr": {"provider": "sherpa", "config": {"threads": 4}},
+            "asr": {"provider": "sherpa", "config": {"model": "zipformer"}},
             "tts": {"provider": "sherpa"},
             "vision": {"provider": "local-vlm"},
         }
     )
-    source["options"]["temperature"] = 1.0
+    source["model"] = "mutated"
 
-    assert snapshot.resolve("llm").config["options"]["temperature"] == 0.4
+    assert snapshot.resolve("llm").config["model"] == "deepseek-chat"
     assert snapshot.as_dict()["llm"] == {
         "provider": "deepseek",
         "locality": "cloud",
-        "config": {"model": "deepseek-chat", "options": {"temperature": 0.4}},
+        "config": {"model": "deepseek-chat"},
     }
     with pytest.raises(TypeError):
-        snapshot.resolve("asr").config["threads"] = 8
+        snapshot.resolve("asr").config["model"] = "other"
 
 
 def test_registration_validator_returns_canonical_config() -> None:
@@ -165,52 +167,28 @@ def test_disabled_provider_rejects_config_and_reserved_name_misuse() -> None:
         ProviderDescriptor("custom", Capability.TTS, "edge")
 
 
-def test_secret_config_is_not_exposed_by_repr() -> None:
-    snapshot = default_provider_registry().parse_snapshot(
-        {"llm": {"provider": "deepseek", "config": {"api_key": "secret-value"}}}
-    )
+@pytest.mark.parametrize("field", ["api_key", "base_url", "endpoint", "token"])
+def test_default_registry_rejects_server_managed_provider_config(field) -> None:
+    with pytest.raises(ProviderConfigError, match="server-managed"):
+        default_provider_registry().parse_snapshot(
+            {"llm": {"provider": "deepseek", "config": {field: "secret-value"}}}
+        )
 
-    assert "secret-value" not in repr(snapshot)
 
-
-def test_snapshot_serialization_recursively_redacts_sensitive_config() -> None:
-    snapshot = default_provider_registry().parse_snapshot(
+def test_cloud_audio_public_config_cannot_set_transport_secrets() -> None:
+    registry = default_provider_registry()
+    snapshot = registry.parse_snapshot(
         {
-            "llm": {
-                "provider": "deepseek",
-                "config": {
-                    "api_key": "api-secret",
-                    "model": "deepseek-chat",
-                    "transport": {
-                        "Authorization": "Bearer private",
-                        "accessToken": "access-secret",
-                        "timeout": 3,
-                    },
-                    "fallbacks": [
-                        {"client_secret": "client-secret", "name": "backup"},
-                        {"password": "password-secret"},
-                    ],
-                    "max_tokens": 256,
-                },
-            }
+            "asr": {"provider": "openai-compatible", "config": {"model": "asr-fast"}},
+            "tts": {
+                "provider": "openai-compatible",
+                "config": {"model": "tts-fast", "voice": "alloy"},
+            },
         }
     )
-
-    serialized = snapshot.as_dict()["llm"]["config"]
-
-    assert serialized == {
-        "api_key": "[REDACTED]",
-        "model": "deepseek-chat",
-        "transport": {
-            "Authorization": "[REDACTED]",
-            "accessToken": "[REDACTED]",
-            "timeout": 3,
-        },
-        "fallbacks": [
-            {"client_secret": "[REDACTED]", "name": "backup"},
-            {"password": "[REDACTED]"},
-        ],
-        "max_tokens": 256,
-    }
-    assert snapshot.resolve("llm").config["api_key"] == "api-secret"
-    assert "api-secret" not in repr(snapshot.as_dict())
+    assert snapshot.resolve("asr").locality is Locality.CLOUD
+    assert snapshot.resolve("tts").config["voice"] == "alloy"
+    with pytest.raises(ProviderConfigError, match="server-managed"):
+        registry.parse_snapshot(
+            {"tts": {"provider": "openai-compatible", "config": {"base_url": "https://bad"}}}
+        )
