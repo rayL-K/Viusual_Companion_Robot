@@ -418,7 +418,13 @@ function parseAudioSequence(value: unknown): bigint {
 
 export function realtimeUrl(
   locationLike: Pick<Location, "protocol" | "host"> = window.location,
+  animaId?: string,
 ): string {
   const protocol = locationLike.protocol === "https:" ? "wss:" : "ws:";
-  return `${protocol}//${locationLike.host}/v2/realtime`;
+  const base = `${protocol}//${locationLike.host}/v2/realtime`;
+  if (!animaId) return base;
+  if (!/^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$/.test(animaId)) {
+    throw new Error("Anima ID 无效");
+  }
+  return `${base}?anima=${encodeURIComponent(animaId)}`;
 }

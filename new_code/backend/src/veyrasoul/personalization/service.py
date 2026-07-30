@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import shutil
-from contextlib import contextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator
 
 from veyrasoul.identity import AnimaId, UserId
 
-from .catalog import ACTIVE, Anima, LifecycleConflictError, SqliteIdentityRepository, User
+from .catalog import (
+    ACTIVE,
+    Anima,
+    DocumentUsageReservation,
+    LifecycleConflictError,
+    SqliteIdentityRepository,
+    User,
+)
 from .layout import DataLayout
 from .store import SqliteAnimaProfileStore
 
@@ -78,21 +84,42 @@ class IdentityService:
             raise LifecycleConflictError("Anima 不处于 active 状态")
         return anima
 
-    @contextmanager
     def active_anima_lease(
         self, actor_id: UserId, anima_id: AnimaId
-    ) -> Iterator[Anima]:
+    ) -> "ActiveAnimaLease":
         """Keep destructive lifecycle transitions behind a durable I/O lease."""
 
-        anima, lease_id = self.repository.acquire_active_anima_lease(
-            actor_id, anima_id
+        return ActiveAnimaLease(
+            repository=self.repository,
+            actor_id=actor_id,
+            anima_id=anima_id,
         )
-        try:
-            yield anima
-        finally:
-            self.repository.release_active_anima_lease(
-                actor_id, anima_id, lease_id
-            )
+
+    def reserve_document_usage(
+        self,
+        actor_id: UserId,
+        anima_id: AnimaId,
+        document_id: str,
+        size_bytes: int,
+    ) -> DocumentUsageReservation:
+        return self.repository.reserve_document_usage(
+            actor_id, anima_id, document_id, size_bytes
+        )
+
+    def commit_document_usage(
+        self, reservation: DocumentUsageReservation
+    ) -> None:
+        self.repository.commit_document_usage(reservation)
+
+    def rollback_document_usage(
+        self, reservation: DocumentUsageReservation
+    ) -> None:
+        self.repository.rollback_document_usage(reservation)
+
+    def release_document_usage(
+        self, actor_id: UserId, anima_id: AnimaId, document_id: str
+    ) -> None:
+        self.repository.release_document_usage(actor_id, anima_id, document_id)
 
     def request_anima_deletion(
         self, actor_id: UserId, anima_id: AnimaId, expected_revision: int
@@ -100,6 +127,7 @@ class IdentityService:
         return self.repository.request_anima_deletion(
             actor_id, anima_id, expected_revision
         )
+
 
     def cancel_anima_deletion(
         self, actor_id: UserId, anima_id: AnimaId, expected_revision: int
@@ -143,3 +171,43 @@ class IdentityService:
             return
         except OSError as exc:
             raise RuntimeError(f"无法清理用户私有数据 {directory}: {exc}") from exc
+
+
+@dataclass(slots=True)
+class ActiveAnimaLease:
+    """Renewable cross-process guard used by long-lived realtime sessions."""
+
+    repository: SqliteIdentityRepository
+    actor_id: UserId
+    anima_id: AnimaId
+    ttl_ms: int = 300_000
+    _lease_id: str = field(default="", repr=False)
+
+    def __enter__(self) -> Anima:
+        if self._lease_id:
+            raise RuntimeError("Anima lease cannot be entered twice")
+        anima, self._lease_id = self.repository.acquire_active_anima_lease(
+            self.actor_id,
+            self.anima_id,
+            ttl_ms=self.ttl_ms,
+        )
+        return anima
+
+    def renew(self) -> None:
+        if not self._lease_id:
+            raise LifecycleConflictError("Anima 活跃租约尚未建立")
+        self.repository.renew_active_anima_lease(
+            self.actor_id,
+            self.anima_id,
+            self._lease_id,
+            ttl_ms=self.ttl_ms,
+        )
+
+    def __exit__(self, *_: object) -> None:
+        lease_id, self._lease_id = self._lease_id, ""
+        if lease_id:
+            self.repository.release_active_anima_lease(
+                self.actor_id,
+                self.anima_id,
+                lease_id,
+            )

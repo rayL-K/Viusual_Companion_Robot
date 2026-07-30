@@ -66,6 +66,7 @@ def build_demo_app():
     memory_path = Path(_DEMO_TEMP.name) / "memory.db"
     return create_app(
         AppServices(
+            allow_anonymous_realtime=True,
             memory_path=memory_path,
             llm=DemoLlm(),
             tts=DemoTts(),

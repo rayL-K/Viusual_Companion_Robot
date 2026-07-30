@@ -23,6 +23,8 @@ from veyrasoul.personalization.catalog_model import (
     CatalogError,
     LifecycleConflictError,
     ObjectNotFoundError,
+    ResourceBusyError,
+    ResourceQuotaError,
     RevisionConflictError,
     User,
 )
@@ -221,15 +223,32 @@ def create_toc_router(
                 with service.active_anima_lease(
                     principal.user_id, parsed_anima_id
                 ):
-                    return document_ingestor_factory(
-                        principal.user_id, parsed_anima_id
-                    ).ingest(
-                        document_id=_required_string(body, "id"),
-                        title=_required_string(body, "title"),
-                        text=_required_string(body, "text"),
-                        source=_required_string(body, "source"),
-                        metadata=metadata,
+                    document_id = _required_string(body, "id")
+                    text = _required_string(body, "text")
+                    size_bytes = len(text.encode("utf-8"))
+                    if size_bytes > service.repository.quota.max_document_bytes:
+                        raise DocumentTooLargeError
+                    reservation = service.reserve_document_usage(
+                        principal.user_id,
+                        parsed_anima_id,
+                        document_id,
+                        size_bytes,
                     )
+                    try:
+                        result = document_ingestor_factory(
+                            principal.user_id, parsed_anima_id
+                        ).ingest(
+                            document_id=document_id,
+                            title=_required_string(body, "title"),
+                            text=text,
+                            source=_required_string(body, "source"),
+                            metadata=metadata,
+                        )
+                        service.commit_document_usage(reservation)
+                        return result
+                    except BaseException:
+                        service.rollback_document_usage(reservation)
+                        raise
 
             ingested = await run_in_threadpool(operation)
             return JSONResponse(
@@ -258,9 +277,13 @@ def create_toc_router(
                 with service.active_anima_lease(
                     principal.user_id, parsed_anima_id
                 ):
-                    return document_ingestor_factory(
+                    deleted = document_ingestor_factory(
                         principal.user_id, parsed_anima_id
                     ).delete(document_id)
+                    service.release_document_usage(
+                        principal.user_id, parsed_anima_id, document_id
+                    )
+                    return deleted
 
             deleted = await run_in_threadpool(operation)
             return JSONResponse({"id": document_id, "deleted": deleted})
@@ -283,11 +306,13 @@ async def _json_object(request: Request) -> dict[str, Any]:
             raise ApiInputError("Content-Length 无效") from exc
         if parsed_content_length > MAX_JSON_BYTES:
             raise RequestTooLargeError
-    raw = await request.body()
-    if len(raw) > MAX_JSON_BYTES:
-        raise RequestTooLargeError
+    raw = bytearray()
+    async for chunk in request.stream():
+        if len(raw) + len(chunk) > MAX_JSON_BYTES:
+            raise RequestTooLargeError
+        raw.extend(chunk)
     try:
-        value = json.loads(raw)
+        value = json.loads(bytes(raw))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ApiInputError("请求体必须是有效的 JSON") from exc
     if not isinstance(value, dict):
@@ -302,6 +327,10 @@ async def _optional_json_object(request: Request) -> dict[str, Any]:
 
 
 class RequestTooLargeError(ValueError):
+    pass
+
+
+class DocumentTooLargeError(ValueError):
     pass
 
 
@@ -367,6 +396,8 @@ def _error_response(exc: Exception) -> JSONResponse:
 def _classify_error(exc: Exception) -> tuple[int, str, str]:
     if isinstance(exc, RequestTooLargeError):
         return 413, "request_too_large", "请求体超过大小限制"
+    if isinstance(exc, DocumentTooLargeError):
+        return 413, "document_too_large", "文档超过字节大小限制"
     if isinstance(exc, PreconditionRequiredError):
         return 428, "revision_required", "更新请求必须提供 If-Match 或 expectedRevision"
     if isinstance(exc, ObjectNotFoundError):
@@ -375,6 +406,10 @@ def _classify_error(exc: Exception) -> tuple[int, str, str]:
         return 412, "revision_conflict", str(exc)
     if isinstance(exc, LifecycleConflictError):
         return 409, "lifecycle_conflict", str(exc)
+    if isinstance(exc, ResourceBusyError):
+        return 409, "resource_busy", str(exc)
+    if isinstance(exc, ResourceQuotaError):
+        return 429, "resource_quota_exceeded", str(exc)
     if isinstance(exc, (ApiInputError, InvalidIdentity, ProfileValidationError, ValueError)):
         return 400, "invalid_request", str(exc)
     if isinstance(exc, CatalogError):

@@ -10,7 +10,12 @@ from dataclasses import dataclass
 
 from veyrasoul.identity import UserId
 
-from .model import AuthPrincipal, IssuedSession, SessionCredentials
+from .model import (
+    AuthPrincipal,
+    IssuedSession,
+    SessionCredentials,
+    VerifiedOidcIdentity,
+)
 from .ports import AuthRepository, OidcVerifier
 
 
@@ -39,11 +44,28 @@ class AuthService:
         self._config = config
         self._clock_ms = clock_ms or (lambda: time.time_ns() // 1_000_000)
 
-    def sign_in(self, id_token: str) -> IssuedSession:
-        if not id_token:
-            raise ValueError("OIDC id_token 不能为空")
-        identity = self._verifier.verify(id_token)
+    def sign_in(self, id_token: str, expected_nonce: str) -> IssuedSession:
+        return self.sign_in_with_provisioning(
+            id_token, expected_nonce, lambda _user, _identity: None
+        )
+
+    def sign_in_with_provisioning(
+        self,
+        id_token: str,
+        expected_nonce: str,
+        provision_user: Callable[[UserId, VerifiedOidcIdentity], None],
+    ) -> IssuedSession:
+        """Resolve and provision the catalog before any session is issued."""
+
+        if not id_token or not expected_nonce:
+            raise ValueError("OIDC id_token 与 expected_nonce 不能为空")
+        if not callable(provision_user):
+            raise ValueError("provision_user 必须可调用")
+        identity = self._verifier.verify(id_token, expected_nonce)
         user_id = self._repository.resolve_user(identity)
+        # A failed callback can leave a stable, retryable OIDC mapping, but
+        # _issue has not run and therefore cannot leave a usable orphan session.
+        provision_user(user_id, identity)
         return self._issue(user_id, identity.issuer)
 
     def authenticate(

@@ -10,9 +10,11 @@ from .model import AuthPrincipal, VerifiedOidcIdentity
 
 
 class OidcVerifier(Protocol):
-    """由具体 OIDC SDK 实现；领域层禁止自行解析或验证 JWT。"""
+    """由 OIDC SDK 实现；expected_nonce 必须来自服务端登录状态。"""
 
-    def verify(self, id_token: str) -> VerifiedOidcIdentity: ...
+    def verify(
+        self, id_token: str, expected_nonce: str
+    ) -> VerifiedOidcIdentity: ...
 
 
 class AuthRepository(Protocol):

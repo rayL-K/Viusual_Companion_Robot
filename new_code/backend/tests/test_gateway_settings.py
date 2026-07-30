@@ -30,7 +30,67 @@ def test_settings_support_a_portable_text_first_server_profile(tmp_path) -> None
         "vision": "disabled",
     }
     assert settings.data_root == (tmp_path / "data").resolve()
+    assert settings.realtime_allow_anonymous is False
     assert "unit-test-secret" not in repr(settings)
+
+
+def test_anonymous_realtime_requires_explicit_development_opt_in(tmp_path) -> None:
+    environment = _minimum_environment(tmp_path)
+    environment["ANIMA_REALTIME_ALLOW_ANONYMOUS"] = "true"
+
+    settings = RuntimeSettings.from_environment(environment, root=tmp_path)
+
+    assert settings.realtime_allow_anonymous is True
+
+
+def _toc_environment(tmp_path: Path) -> dict[str, str]:
+    environment = _minimum_environment(tmp_path)
+    environment.update(
+        {
+            "ANIMA_TOC_ENABLED": "true",
+            "ANIMA_OIDC_ISSUER": "https://identity.example",
+            "ANIMA_OIDC_AUDIENCE": "anima",
+            "ANIMA_OIDC_JWKS_URL": "https://identity.example/.well-known/jwks.json",
+            "ANIMA_OIDC_AUTHORIZATION_ENDPOINT": "https://identity.example/authorize",
+            "ANIMA_OIDC_TOKEN_ENDPOINT": "https://identity.example/token",
+            "ANIMA_OIDC_CLIENT_ID": "anima-web",
+            "ANIMA_OIDC_REDIRECT_URI": "https://anima.example/auth/callback",
+            "ANIMA_AUTH_DATABASE": str(tmp_path / "auth.sqlite3"),
+            "ANIMA_LOGIN_FERNET_KEY": "secret-fernet-material",
+        }
+    )
+    return environment
+
+
+def test_enabled_toc_fails_closed_when_any_required_setting_is_missing(tmp_path) -> None:
+    environment = _minimum_environment(tmp_path)
+    environment["ANIMA_TOC_ENABLED"] = "true"
+
+    with pytest.raises(ValueError, match="ANIMA_OIDC_ISSUER") as rejected:
+        RuntimeSettings.from_environment(environment, root=tmp_path)
+
+    assert "ANIMA_AUTH_DATABASE" in str(rejected.value)
+    assert "ANIMA_LOGIN_FERNET_KEY" in str(rejected.value)
+
+
+def test_enabled_toc_settings_are_complete_and_hide_login_key(tmp_path) -> None:
+    environment = _toc_environment(tmp_path)
+    environment["ANIMA_LOGIN_FERNET_KEY"] = "do-not-print-this-key"
+
+    settings = RuntimeSettings.from_environment(environment, root=tmp_path)
+
+    assert settings.toc.enabled is True
+    assert settings.toc.auth_database == (tmp_path / "auth.sqlite3").resolve()
+    assert settings.realtime_allow_anonymous is False
+    assert "do-not-print-this-key" not in repr(settings)
+
+
+def test_toc_cannot_enable_anonymous_realtime(tmp_path) -> None:
+    environment = _toc_environment(tmp_path)
+    environment["ANIMA_REALTIME_ALLOW_ANONYMOUS"] = "true"
+
+    with pytest.raises(ValueError, match="must be false"):
+        RuntimeSettings.from_environment(environment, root=tmp_path)
 
 
 def test_settings_keep_legacy_model_mount_names_during_migration(tmp_path) -> None:

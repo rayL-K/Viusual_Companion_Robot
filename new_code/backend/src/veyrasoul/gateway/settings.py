@@ -17,6 +17,46 @@ _DISABLED = {"", "disabled", "none", "off"}
 
 
 @dataclass(frozen=True, slots=True)
+class TocRuntimeSettings:
+    enabled: bool = False
+    issuer: str = ""
+    audience: str = ""
+    jwks_url: str = ""
+    authorization_endpoint: str = ""
+    token_endpoint: str = ""
+    client_id: str = ""
+    redirect_uri: str = ""
+    auth_database: Path | None = None
+    login_fernet_key: str = field(default="", repr=False)
+
+    def __post_init__(self) -> None:
+        if not self.enabled:
+            return
+        missing = [
+            name
+            for name, value in (
+                ("ANIMA_OIDC_ISSUER", self.issuer),
+                ("ANIMA_OIDC_AUDIENCE", self.audience),
+                ("ANIMA_OIDC_JWKS_URL", self.jwks_url),
+                (
+                    "ANIMA_OIDC_AUTHORIZATION_ENDPOINT",
+                    self.authorization_endpoint,
+                ),
+                ("ANIMA_OIDC_TOKEN_ENDPOINT", self.token_endpoint),
+                ("ANIMA_OIDC_CLIENT_ID", self.client_id),
+                ("ANIMA_OIDC_REDIRECT_URI", self.redirect_uri),
+                ("ANIMA_AUTH_DATABASE", self.auth_database),
+                ("ANIMA_LOGIN_FERNET_KEY", self.login_fernet_key),
+            )
+            if not value
+        ]
+        if missing:
+            raise ValueError(
+                "ANIMA_TOC_ENABLED=true requires: " + ", ".join(missing)
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class RuntimeSettings:
     root: Path
     host: str
@@ -51,6 +91,11 @@ class RuntimeSettings:
     vision_url: str = "http://127.0.0.1:8767"
     vision_timeout_seconds: float = 20.0
     vision_refresh_seconds: float = 5.0
+    realtime_allow_anonymous: bool = False
+    realtime_allowed_origins: tuple[str, ...] = ()
+    realtime_reauth_seconds: float = 30.0
+    realtime_lease_renew_seconds: float = 60.0
+    toc: TocRuntimeSettings = field(default_factory=TocRuntimeSettings, repr=False)
 
     def __post_init__(self) -> None:
         legacy = {
@@ -61,6 +106,10 @@ class RuntimeSettings:
         }
         if self.provider_snapshot.capabilities() != legacy:
             raise ValueError("provider snapshot does not match legacy provider settings")
+        if self.toc.enabled and self.realtime_allow_anonymous:
+            raise ValueError(
+                "ANIMA_REALTIME_ALLOW_ANONYMOUS must be false when ToC is enabled"
+            )
 
     @classmethod
     def from_environment(
@@ -120,7 +169,9 @@ class RuntimeSettings:
             allowed_origins=_origins(
                 read.get(
                     "ANIMA_ALLOWED_ORIGINS",
-                    default="https://anima.veyralux.org" if admission_required else "",
+                    # Authenticated browser WebSockets require an exact Origin
+                    # allowlist even when the optional admission challenge is off.
+                    default="https://anima.veyralux.org",
                 )
             ),
             token_ttl_seconds=read.integer(
@@ -193,6 +244,26 @@ class RuntimeSettings:
                 "vision": vision_provider,
             }
         )
+        toc_enabled = read.boolean("ANIMA_TOC_ENABLED", default=False)
+        auth_database_value = read.get("ANIMA_AUTH_DATABASE")
+        toc = TocRuntimeSettings(
+            enabled=toc_enabled,
+            issuer=read.get("ANIMA_OIDC_ISSUER"),
+            audience=read.get("ANIMA_OIDC_AUDIENCE"),
+            jwks_url=read.get("ANIMA_OIDC_JWKS_URL"),
+            authorization_endpoint=read.get(
+                "ANIMA_OIDC_AUTHORIZATION_ENDPOINT"
+            ),
+            token_endpoint=read.get("ANIMA_OIDC_TOKEN_ENDPOINT"),
+            client_id=read.get("ANIMA_OIDC_CLIENT_ID"),
+            redirect_uri=read.get("ANIMA_OIDC_REDIRECT_URI"),
+            auth_database=(
+                _path(auth_database_value, data_root / "auth.sqlite3")
+                if auth_database_value
+                else None
+            ),
+            login_fernet_key=read.get("ANIMA_LOGIN_FERNET_KEY"),
+        )
 
         return cls(
             root=product_root,
@@ -258,6 +329,32 @@ class RuntimeSettings:
             vision_refresh_seconds=read.number(
                 "ANIMA_VISION_REFRESH_SECONDS", "VEYRASOUL_VISION_REFRESH_SECONDS", default=5.0, minimum=1.0, maximum=300.0
             ),
+            realtime_allow_anonymous=read.boolean(
+                "ANIMA_REALTIME_ALLOW_ANONYMOUS",
+                default=False,
+            ),
+            realtime_allowed_origins=_origins(
+                read.get(
+                    "ANIMA_REALTIME_ALLOWED_ORIGINS",
+                    default=read.get(
+                        "ANIMA_ALLOWED_ORIGINS",
+                        default="https://anima.veyralux.org",
+                    ),
+                )
+            ),
+            realtime_reauth_seconds=read.number(
+                "ANIMA_REALTIME_REAUTH_SECONDS",
+                default=30.0,
+                minimum=1.0,
+                maximum=300.0,
+            ),
+            realtime_lease_renew_seconds=read.number(
+                "ANIMA_REALTIME_LEASE_RENEW_SECONDS",
+                default=60.0,
+                minimum=1.0,
+                maximum=240.0,
+            ),
+            toc=toc,
         )
 
     def capabilities(self) -> dict[str, str]:

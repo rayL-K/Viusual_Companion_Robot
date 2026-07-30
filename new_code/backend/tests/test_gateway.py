@@ -4,6 +4,7 @@ import asyncio
 import time
 from pathlib import Path
 
+import pytest
 from fastapi import WebSocketDisconnect
 from fastapi.testclient import TestClient
 
@@ -173,6 +174,7 @@ def resolve_client_asserted_identity(
 def make_app(memory_path: Path):
     return create_app(
         AppServices(
+            allow_anonymous_realtime=True,
             memory_path=memory_path,
             llm=FakeLlm(),
             tts=FakeTts(),
@@ -225,6 +227,8 @@ def test_health_endpoint(tmp_path) -> None:
     assert payload["service"] == "anima-gateway"
     assert payload["version"] == "0.0.1"
     assert payload["releaseDigest"] == "development"
+    assert payload["tocEnabled"] is False
+    assert payload["anonymousRealtimeEnabled"] is True
 
 
 def test_gateway_can_serve_built_web_from_same_origin(tmp_path) -> None:
@@ -233,6 +237,7 @@ def test_gateway_can_serve_built_web_from_same_origin(tmp_path) -> None:
     (web_dist / "index.html").write_text("<h1>VeyraSoul</h1>", encoding="utf-8")
     app = create_app(
         AppServices(
+            allow_anonymous_realtime=True,
             memory_path=tmp_path / "memory.db",
             llm=FakeLlm(),
             tts=FakeTts(),
@@ -323,6 +328,7 @@ def test_visual_semantics_are_published_and_injected_into_every_turn(tmp_path) -
     llm = CapturingLlm()
     app = create_app(
         AppServices(
+            allow_anonymous_realtime=True,
             memory_path=tmp_path / "memory.db",
             llm=llm,
             tts=FakeTts(),
@@ -358,6 +364,7 @@ def test_visual_semantics_are_published_and_injected_into_every_turn(tmp_path) -
 def test_visual_failure_returns_stable_error_without_internal_details(tmp_path) -> None:
     app = create_app(
         AppServices(
+            allow_anonymous_realtime=True,
             memory_path=tmp_path / "memory.db",
             llm=FakeLlm(),
             tts=FakeTts(),
@@ -383,6 +390,7 @@ def test_visual_failure_returns_stable_error_without_internal_details(tmp_path) 
 def test_new_turn_cancels_slow_previous_generation(tmp_path) -> None:
     app = create_app(
         AppServices(
+            allow_anonymous_realtime=True,
             memory_path=tmp_path / "memory.db",
             llm=InterruptibleLlm(),
             tts=FakeTts(),
@@ -433,6 +441,7 @@ def test_pcm_asr_updates_start_turn_and_cancel_previous_generation(tmp_path) -> 
     asr = FakeAsrFactory(["第一问", "第二问"])
     app = create_app(
         AppServices(
+            allow_anonymous_realtime=True,
             memory_path=tmp_path / "memory.db",
             llm=InterruptibleLlm(),
             tts=FakeTts(),
@@ -491,6 +500,7 @@ def test_pcm_asr_updates_start_turn_and_cancel_previous_generation(tmp_path) -> 
 def test_explicit_cancel_emits_generation_bound_idle_intent(tmp_path) -> None:
     app = create_app(
         AppServices(
+            allow_anonymous_realtime=True,
             memory_path=tmp_path / "memory.db",
             llm=InterruptibleLlm(),
             tts=FakeTts(),
@@ -522,6 +532,7 @@ def test_settings_events_persist_profile_and_constrain_next_turn(tmp_path) -> No
     tts = FakeTts()
     app = create_app(
         AppServices(
+            allow_anonymous_realtime=True,
             memory_path=tmp_path / "legacy.db",
             data_root=tmp_path / "accounts",
             llm=llm,
@@ -591,19 +602,15 @@ def test_settings_events_persist_profile_and_constrain_next_turn(tmp_path) -> No
 
 def test_invalid_identity_and_settings_return_actionable_protocol_errors(tmp_path) -> None:
     client = TestClient(make_app(tmp_path / "memory.db"))
-    with client.websocket_connect("/v2/realtime?session=../../shared") as websocket:
-        error = websocket.receive_json()
-        assert error["payload"]["code"] == "invalid_session"
-
-    with client.websocket_connect("/v2/realtime?session=x&user=../../admin") as websocket:
-        error = websocket.receive_json()
-        assert error["type"] == "error"
-        assert error["payload"]["code"] == "invalid_identity"
-
-    with client.websocket_connect("/v2/realtime?session=x&user=alice") as websocket:
-        error = websocket.receive_json()
-        assert error["payload"]["code"] == "invalid_identity"
-        assert "IdentityResolver" in error["payload"]["message"]
+    for url in (
+        "/v2/realtime?session=../../shared",
+        "/v2/realtime?session=x&user=../../admin",
+        "/v2/realtime?session=x&user=alice",
+    ):
+        with pytest.raises(WebSocketDisconnect) as rejected:
+            with client.websocket_connect(url):
+                pass
+        assert rejected.value.code == 4403
 
     with client.websocket_connect("/v2/realtime?session=x") as websocket:
         websocket.receive_json()
@@ -623,6 +630,7 @@ def test_user_databases_and_conversation_history_are_isolated(tmp_path) -> None:
     memory_path = tmp_path / "legacy.db"
     app = create_app(
         AppServices(
+            allow_anonymous_realtime=True,
             memory_path=memory_path,
             llm=FakeLlm(),
             tts=FakeTts(),
@@ -677,6 +685,7 @@ def test_anonymous_default_session_keeps_legacy_memory_database(tmp_path) -> Non
     llm = CapturingLlm()
     app = create_app(
         AppServices(
+            allow_anonymous_realtime=True,
             memory_path=memory_path,
             llm=llm,
             tts=FakeTts(),
@@ -729,6 +738,7 @@ def test_public_gateway_verifies_challenge_then_accepts_exact_origin(tmp_path) -
     (web_dist / "index.html").write_text("<main>Anima</main>", encoding="utf-8")
     app = create_app(
         AppServices(
+            allow_anonymous_realtime=True,
             memory_path=tmp_path / "memory.db",
             llm=FakeLlm(),
             tts=FakeTts(),
@@ -795,6 +805,7 @@ def test_public_gateway_verifies_challenge_then_accepts_exact_origin(tmp_path) -
 def test_gateway_closes_control_event_flood_before_processing_it(tmp_path) -> None:
     app = create_app(
         AppServices(
+            allow_anonymous_realtime=True,
             memory_path=tmp_path / "memory.db",
             llm=FakeLlm(),
             tts=FakeTts(),
@@ -828,6 +839,7 @@ def test_voice_turn_trace_covers_latency_chain_without_conversation_content(tmp_
     asr = FakeAsrFactory(["这是不能进入链路日志的秘密问题"])
     app = create_app(
         AppServices(
+            allow_anonymous_realtime=True,
             memory_path=tmp_path / "memory.db",
             llm=FakeLlm(),
             tts=FakeTts(),
@@ -880,6 +892,7 @@ def test_cancelled_and_failed_turns_close_their_trace(tmp_path) -> None:
     cancelled_sink = TraceCollector()
     cancelled_app = create_app(
         AppServices(
+            allow_anonymous_realtime=True,
             memory_path=tmp_path / "cancel.db",
             llm=InterruptibleLlm(),
             tts=FakeTts(),
@@ -906,6 +919,7 @@ def test_cancelled_and_failed_turns_close_their_trace(tmp_path) -> None:
     failed_sink = TraceCollector()
     failed_app = create_app(
         AppServices(
+            allow_anonymous_realtime=True,
             memory_path=tmp_path / "failed.db",
             llm=FailingLlm(),
             tts=FakeTts(),

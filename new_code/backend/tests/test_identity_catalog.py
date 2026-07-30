@@ -18,6 +18,8 @@ from veyrasoul.personalization import (
     LifecycleConflictError,
     ObjectNotFoundError,
     RevisionConflictError,
+    ResourceQuotaConfig,
+    ResourceQuotaError,
     IdentityService,
     SqliteIdentityRepository,
 )
@@ -26,6 +28,42 @@ from veyrasoul.personalization import (
 def repository(tmp_path) -> SqliteIdentityRepository:
     layout = DataLayout(tmp_path / "data", tmp_path / "legacy.db")
     return SqliteIdentityRepository(layout.identity_database())
+
+
+def test_document_quota_reservations_are_atomic_under_concurrency(tmp_path) -> None:
+    layout = DataLayout(tmp_path / "data", tmp_path / "legacy.db")
+    repo = SqliteIdentityRepository(
+        layout.identity_database(),
+        ResourceQuotaConfig(
+            max_animas_per_user=4,
+            max_document_bytes=10,
+            max_documents_per_anima=4,
+            max_document_bytes_per_user=10,
+        ),
+    )
+    alice = UserId.parse("alice")
+    repo.create_user(alice, "Alice")
+    rabbit = AnimaId.parse("rabbit")
+    fox = AnimaId.parse("fox")
+    repo.create_anima(alice, rabbit, "兔")
+    repo.create_anima(alice, fox, "狐")
+
+    def reserve(anima: AnimaId, document_id: str):
+        return repo.reserve_document_usage(alice, anima, document_id, 7)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(reserve, rabbit, "rabbit-doc"),
+            executor.submit(reserve, fox, "fox-doc"),
+        ]
+        outcomes: list[object] = []
+        for future in futures:
+            try:
+                outcomes.append(future.result())
+            except ResourceQuotaError as exc:
+                outcomes.append(exc)
+    assert sum(not isinstance(value, Exception) for value in outcomes) == 1
+    assert sum(isinstance(value, ResourceQuotaError) for value in outcomes) == 1
 
 
 def service(tmp_path) -> IdentityService:
@@ -52,7 +90,7 @@ def test_schema_migration_is_versioned_and_reopenable(tmp_path) -> None:
     reopened = SqliteIdentityRepository(repo.database_path)
     assert reopened.get_user(UserId.parse("alice")).display_name == "Alice"
     with sqlite3.connect(repo.database_path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
         tables = {
             row[0]
             for row in connection.execute(

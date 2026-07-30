@@ -6,6 +6,7 @@ import sqlite3
 import threading
 import time
 import uuid
+import re
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Iterator
@@ -23,6 +24,10 @@ from .catalog_model import (
     LifecycleConflictError,
     ObjectNotFoundError,
     RevisionConflictError,
+    ResourceBusyError,
+    ResourceQuotaConfig,
+    ResourceQuotaError,
+    DocumentUsageReservation,
     User,
     display_name as validate_display_name,
     revision as validate_revision,
@@ -35,8 +40,13 @@ from .catalog_schema import migrate
 class SqliteIdentityRepository:
     """SQLite-backed authorization source; every Anima query is actor-scoped."""
 
-    def __init__(self, database_path: Path) -> None:
+    def __init__(
+        self,
+        database_path: Path,
+        quota: ResourceQuotaConfig = ResourceQuotaConfig(),
+    ) -> None:
         self.database_path = database_path.expanduser().resolve()
+        self.quota = quota
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self._migrate()
@@ -79,6 +89,17 @@ class SqliteIdentityRepository:
         try:
             with self._write() as connection:
                 _require_active_user(connection, actor_id)
+                count = int(
+                    connection.execute(
+                        """
+                        SELECT COUNT(*) FROM animas
+                        WHERE owner_user_id=? AND state!='deleted'
+                        """,
+                        (actor_id.value,),
+                    ).fetchone()[0]
+                )
+                if count >= self.quota.max_animas_per_user:
+                    raise ResourceQuotaError("已达到每用户 Anima 数量上限")
                 connection.execute(
                     """
                     INSERT INTO animas(
@@ -91,6 +112,169 @@ class SqliteIdentityRepository:
         except sqlite3.IntegrityError as exc:
             raise CatalogError("anima_id 已存在") from exc
         return Anima(anima_id, actor_id, name, ACTIVE, 1, now, now)
+
+    def reserve_document_usage(
+        self,
+        actor_id: UserId,
+        anima_id: AnimaId,
+        document_id: str,
+        size_bytes: int,
+    ) -> DocumentUsageReservation:
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}", document_id):
+            raise ValueError("document_id is invalid")
+        if isinstance(size_bytes, bool) or not isinstance(size_bytes, int) or size_bytes < 1:
+            raise ValueError("document size must be a positive integer")
+        if size_bytes > self.quota.max_document_bytes:
+            raise ResourceQuotaError("单文档超过字节上限")
+        now = _now_ms()
+        reservation_id = uuid.uuid4().hex
+        with self._write() as connection:
+            _recover_stale_document_reservations(
+                connection, now - self.quota.reservation_ttl_ms
+            )
+            row = _owned_anima(connection, actor_id, anima_id, include_deleted=True)
+            if row is None:
+                raise ObjectNotFoundError("Anima 不存在")
+            if row["state"] != ACTIVE:
+                raise LifecycleConflictError("Anima 不处于 active 状态")
+            current = connection.execute(
+                """
+                SELECT size_bytes, reservation_id FROM document_usage
+                WHERE owner_user_id=? AND anima_id=? AND document_id=?
+                """,
+                (actor_id.value, anima_id.value, document_id),
+            ).fetchone()
+            if current is not None and current["reservation_id"] is not None:
+                raise ResourceBusyError("文档正在被另一个请求更新")
+            document_count = int(
+                connection.execute(
+                    """
+                    SELECT COUNT(*) FROM document_usage
+                    WHERE owner_user_id=? AND anima_id=?
+                    """,
+                    (actor_id.value, anima_id.value),
+                ).fetchone()[0]
+            )
+            if current is None and document_count >= self.quota.max_documents_per_anima:
+                raise ResourceQuotaError("已达到每个 Anima 的文档数量上限")
+            previous_size = int(current["size_bytes"]) if current is not None else None
+            total = int(
+                connection.execute(
+                    "SELECT COALESCE(SUM(size_bytes), 0) FROM document_usage WHERE owner_user_id=?",
+                    (actor_id.value,),
+                ).fetchone()[0]
+            )
+            if total - (previous_size or 0) + size_bytes > self.quota.max_document_bytes_per_user:
+                raise ResourceQuotaError("已达到每用户文档总字节上限")
+            connection.execute(
+                """
+                INSERT INTO document_usage(
+                    owner_user_id, anima_id, document_id, size_bytes,
+                    previous_size_bytes, reservation_id, reserved_at_ms
+                ) VALUES(?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(owner_user_id, anima_id, document_id) DO UPDATE SET
+                    size_bytes=excluded.size_bytes,
+                    previous_size_bytes=excluded.previous_size_bytes,
+                    reservation_id=excluded.reservation_id,
+                    reserved_at_ms=excluded.reserved_at_ms
+                """,
+                (
+                    actor_id.value,
+                    anima_id.value,
+                    document_id,
+                    size_bytes,
+                    previous_size,
+                    reservation_id,
+                    now,
+                ),
+            )
+        return DocumentUsageReservation(
+            actor_id, anima_id, document_id, reservation_id
+        )
+
+    def commit_document_usage(self, reservation: DocumentUsageReservation) -> None:
+        with self._write() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE document_usage
+                SET previous_size_bytes=NULL, reservation_id=NULL, reserved_at_ms=NULL
+                WHERE owner_user_id=? AND anima_id=? AND document_id=? AND reservation_id=?
+                """,
+                (
+                    reservation.owner_id.value,
+                    reservation.anima_id.value,
+                    reservation.document_id,
+                    reservation.reservation_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise ResourceBusyError("文档容量预留已失效")
+
+    def rollback_document_usage(self, reservation: DocumentUsageReservation) -> None:
+        with self._write() as connection:
+            row = connection.execute(
+                """
+                SELECT previous_size_bytes FROM document_usage
+                WHERE owner_user_id=? AND anima_id=? AND document_id=? AND reservation_id=?
+                """,
+                (
+                    reservation.owner_id.value,
+                    reservation.anima_id.value,
+                    reservation.document_id,
+                    reservation.reservation_id,
+                ),
+            ).fetchone()
+            if row is None:
+                return
+            if row["previous_size_bytes"] is None:
+                connection.execute(
+                    """
+                    DELETE FROM document_usage
+                    WHERE owner_user_id=? AND anima_id=? AND document_id=? AND reservation_id=?
+                    """,
+                    (
+                        reservation.owner_id.value,
+                        reservation.anima_id.value,
+                        reservation.document_id,
+                        reservation.reservation_id,
+                    ),
+                )
+            else:
+                connection.execute(
+                    """
+                    UPDATE document_usage SET size_bytes=?, previous_size_bytes=NULL,
+                        reservation_id=NULL, reserved_at_ms=NULL
+                    WHERE owner_user_id=? AND anima_id=? AND document_id=? AND reservation_id=?
+                    """,
+                    (
+                        int(row["previous_size_bytes"]),
+                        reservation.owner_id.value,
+                        reservation.anima_id.value,
+                        reservation.document_id,
+                        reservation.reservation_id,
+                    ),
+                )
+
+    def release_document_usage(
+        self, actor_id: UserId, anima_id: AnimaId, document_id: str
+    ) -> None:
+        with self._write() as connection:
+            cursor = connection.execute(
+                """
+                DELETE FROM document_usage
+                WHERE owner_user_id=? AND anima_id=? AND document_id=?
+                  AND reservation_id IS NULL
+                """,
+                (actor_id.value, anima_id.value, document_id),
+            )
+            if cursor.rowcount == 0 and connection.execute(
+                """
+                SELECT 1 FROM document_usage
+                WHERE owner_user_id=? AND anima_id=? AND document_id=?
+                """,
+                (actor_id.value, anima_id.value, document_id),
+            ).fetchone():
+                raise ResourceBusyError("文档正在被另一个请求更新")
 
     def get_anima(self, actor_id: UserId, anima_id: AnimaId) -> Anima:
         with self._read() as connection:
@@ -174,6 +358,44 @@ class SqliteIdentityRepository:
                 """,
                 (lease_id, actor_id.value, anima_id.value),
             )
+
+    def renew_active_anima_lease(
+        self,
+        actor_id: UserId,
+        anima_id: AnimaId,
+        lease_id: str,
+        *,
+        ttl_ms: int = 300_000,
+    ) -> None:
+        """Extend only a still-live lease for an Anima that remains active."""
+
+        if isinstance(ttl_ms, bool) or not 1_000 <= ttl_ms <= 3_600_000:
+            raise ValueError("lease ttl_ms 必须在 1000-3600000 之间")
+        now = _now_ms()
+        with self._write() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE active_anima_leases
+                SET expires_at_ms=?
+                WHERE lease_id=? AND owner_user_id=? AND anima_id=?
+                  AND expires_at_ms>?
+                  AND EXISTS (
+                      SELECT 1 FROM animas
+                      WHERE owner_user_id=? AND anima_id=? AND state='active'
+                  )
+                """,
+                (
+                    now + ttl_ms,
+                    lease_id,
+                    actor_id.value,
+                    anima_id.value,
+                    now,
+                    actor_id.value,
+                    anima_id.value,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise LifecycleConflictError("Anima 活跃租约已失效")
 
     def cancel_anima_deletion(
         self, actor_id: UserId, anima_id: AnimaId, expected_revision: int
@@ -261,6 +483,10 @@ class SqliteIdentityRepository:
             if before_finalize is not None:
                 before_finalize()
             connection.execute(
+                "DELETE FROM document_usage WHERE owner_user_id=?",
+                (actor_id.value,),
+            )
+            connection.execute(
                 """
                 UPDATE animas SET state='deleted', revision=revision+1, updated_at_ms=?
                 WHERE owner_user_id=? AND state!='deleted'
@@ -338,6 +564,14 @@ class SqliteIdentityRepository:
                 raise LifecycleConflictError("Anima 生命周期状态无效")
             if before_update is not None:
                 before_update()
+            if next_state == DELETED:
+                connection.execute(
+                    """
+                    DELETE FROM document_usage
+                    WHERE owner_user_id=? AND anima_id=?
+                    """,
+                    (actor_id.value, anima_id.value),
+                )
             connection.execute(
                 """
                 UPDATE animas
@@ -393,6 +627,29 @@ def _require_active_user(connection: sqlite3.Connection, actor_id: UserId) -> sq
 def _purge_expired_leases(connection: sqlite3.Connection, now_ms: int) -> None:
     connection.execute(
         "DELETE FROM active_anima_leases WHERE expires_at_ms<=?", (now_ms,)
+    )
+
+
+def _recover_stale_document_reservations(
+    connection: sqlite3.Connection, stale_before_ms: int
+) -> None:
+    connection.execute(
+        """
+        DELETE FROM document_usage
+        WHERE reservation_id IS NOT NULL AND reserved_at_ms<=?
+          AND previous_size_bytes IS NULL
+        """,
+        (stale_before_ms,),
+    )
+    connection.execute(
+        """
+        UPDATE document_usage
+        SET size_bytes=previous_size_bytes, previous_size_bytes=NULL,
+            reservation_id=NULL, reserved_at_ms=NULL
+        WHERE reservation_id IS NOT NULL AND reserved_at_ms<=?
+          AND previous_size_bytes IS NOT NULL
+        """,
+        (stale_before_ms,),
     )
 
 

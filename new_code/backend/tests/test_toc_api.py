@@ -1,18 +1,29 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 import veyrasoul.gateway.toc_api as toc_api
 from veyrasoul.auth import AuthPrincipal
-from veyrasoul.gateway.toc_api import MAX_JSON_BYTES, create_toc_router
+from veyrasoul.gateway.toc_api import (
+    MAX_JSON_BYTES,
+    RequestTooLargeError,
+    _classify_error,
+    _json_object,
+    create_toc_router,
+)
 from veyrasoul.identity import AnimaId, UserId
 from veyrasoul.memory.ingestion import IngestedDocument
 from veyrasoul.personalization import (
     DataLayout,
     IdentityService,
+    ResourceQuotaConfig,
+    ResourceBusyError,
     SqliteIdentityRepository,
 )
 
@@ -40,10 +51,16 @@ class FakeIngestor:
         return True
 
 
-def api(tmp_path) -> tuple[TestClient, dict[str, UserId], list[tuple[UserId, AnimaId]]]:
+def api(
+    tmp_path, quota: ResourceQuotaConfig | None = None
+) -> tuple[TestClient, dict[str, UserId], list[tuple[UserId, AnimaId]]]:
     layout = DataLayout(tmp_path / "data", tmp_path / "legacy.db")
     service = IdentityService(
-        SqliteIdentityRepository(layout.identity_database()), layout, "默认人设"
+        SqliteIdentityRepository(
+            layout.identity_database(), quota or ResourceQuotaConfig()
+        ),
+        layout,
+        "默认人设",
     )
     alice = UserId.parse("alice")
     bob = UserId.parse("bob")
@@ -215,6 +232,114 @@ def test_documents_are_owner_scoped_and_size_limited(tmp_path) -> None:
     )
     assert oversized.status_code == 413
     assert oversized.json()["error"]["code"] == "request_too_large"
+
+
+def test_chunked_json_body_stops_when_limit_is_crossed() -> None:
+    delivered = 0
+    chunks = [
+        b"{" + b"x" * (MAX_JSON_BYTES - 6),
+        b"xxxxxxxxxx",
+        b"}",
+    ]
+
+    async def receive():
+        nonlocal delivered
+        chunk = chunks[delivered]
+        delivered += 1
+        return {
+            "type": "http.request",
+            "body": chunk,
+            "more_body": delivered < len(chunks),
+        }
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/",
+            "headers": [],
+            "query_string": b"",
+            "server": ("test", 80),
+            "client": ("test", 1),
+            "scheme": "http",
+        },
+        receive,
+    )
+    with pytest.raises(RequestTooLargeError):
+        asyncio.run(_json_object(request))
+    assert delivered == 2
+
+
+def test_tenant_resource_quotas_return_stable_http_errors(tmp_path) -> None:
+    client, _, calls = api(
+        tmp_path,
+        ResourceQuotaConfig(
+            max_animas_per_user=2,
+            max_document_bytes=12,
+            max_documents_per_anima=1,
+            max_document_bytes_per_user=12,
+        ),
+    )
+    anima_limit = client.post(
+        "/v2/animas", json={"id": "second", "displayName": "第二个"}
+    )
+    assert anima_limit.status_code == 201
+    exceeded_animas = client.post(
+        "/v2/animas", json={"id": "third", "displayName": "第三个"}
+    )
+    assert exceeded_animas.status_code == 429
+    assert exceeded_animas.json()["error"]["code"] == "resource_quota_exceeded"
+
+    first = client.post(
+        "/v2/animas/rabbit/documents",
+        json={
+            "id": "one",
+            "title": "一",
+            "text": "123456",
+            "source": "test",
+        },
+    )
+    assert first.status_code == 201
+    too_many = client.post(
+        "/v2/animas/rabbit/documents",
+        json={
+            "id": "two",
+            "title": "二",
+            "text": "1",
+            "source": "test",
+        },
+    )
+    assert too_many.status_code == 429
+    assert too_many.json()["error"]["code"] == "resource_quota_exceeded"
+
+    user_bytes = client.post(
+        "/v2/animas/second/documents",
+        json={
+            "id": "total",
+            "title": "总量",
+            "text": "1234567",
+            "source": "test",
+        },
+    )
+    assert user_bytes.status_code == 429
+    assert user_bytes.json()["error"]["code"] == "resource_quota_exceeded"
+
+    too_large = client.post(
+        "/v2/animas/second/documents",
+        json={
+            "id": "large",
+            "title": "大",
+            "text": "中文中文中文",
+            "source": "test",
+        },
+    )
+    assert too_large.status_code == 413
+    assert too_large.json()["error"]["code"] == "document_too_large"
+    assert calls[-1] == (UserId.parse("alice"), AnimaId.parse("rabbit"))
+    assert _classify_error(ResourceBusyError("busy"))[:2] == (
+        409,
+        "resource_busy",
+    )
 
 
 def test_delete_anima_is_revisioned_soft_delete(tmp_path) -> None:

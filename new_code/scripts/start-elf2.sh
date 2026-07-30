@@ -203,6 +203,24 @@ require_runtime_config() {
   require_secret_value "${config_path}" ANIMA_TELEMETRY_HMAC_KEY
   require_nonempty_env_value "${config_path}" ANIMA_TURNSTILE_SITE_KEY
   require_nonempty_env_value "${config_path}" ANIMA_TURNSTILE_SECRET
+  if grep -Eq '^[[:space:]]*ANIMA_TOC_ENABLED[[:space:]]*=[[:space:]]*true[[:space:]]*$' "${config_path}"; then
+    grep -Eq '^[[:space:]]*ANIMA_REALTIME_ALLOW_ANONYMOUS[[:space:]]*=[[:space:]]*false[[:space:]]*$' "${config_path}" || \
+      fail "ToC 模式必须显式关闭匿名实时会话"
+    require_nonempty_env_value "${config_path}" ANIMA_OIDC_ISSUER
+    require_nonempty_env_value "${config_path}" ANIMA_OIDC_AUDIENCE
+    require_nonempty_env_value "${config_path}" ANIMA_OIDC_JWKS_URL
+    require_nonempty_env_value "${config_path}" ANIMA_OIDC_AUTHORIZATION_ENDPOINT
+    require_nonempty_env_value "${config_path}" ANIMA_OIDC_TOKEN_ENDPOINT
+    require_nonempty_env_value "${config_path}" ANIMA_OIDC_CLIENT_ID
+    require_nonempty_env_value "${config_path}" ANIMA_OIDC_REDIRECT_URI
+    require_nonempty_env_value "${config_path}" ANIMA_AUTH_DATABASE
+    require_secret_value "${config_path}" ANIMA_LOGIN_FERNET_KEY
+  elif grep -Eq '^[[:space:]]*ANIMA_TOC_ENABLED[[:space:]]*=[[:space:]]*false[[:space:]]*$' "${config_path}"; then
+    grep -Eq '^[[:space:]]*ANIMA_REALTIME_ALLOW_ANONYMOUS[[:space:]]*=[[:space:]]*true[[:space:]]*$' "${config_path}" || \
+      fail "非 ToC 的 ELF2 验证模式必须显式启用匿名实时会话"
+  else
+    fail "Anima 环境文件必须显式定义 ANIMA_TOC_ENABLED=true 或 false"
+  fi
 }
 
 require_candidate_config() {
@@ -211,6 +229,10 @@ require_candidate_config() {
   if grep -Eq '^[[:space:]]*(ANIMA_HOST|ANIMA_PORT|ANIMA_WEB_DIST|ANIMA_DATA_ROOT|ANIMA_MEMORY_PATH|ANIMA_PERSONA_PATH|ANIMA_LLM_API_KEY|ANIMA_ADMISSION_REQUIRED|ANIMA_ADMISSION_SECRET|ANIMA_ALLOWED_ORIGINS|ANIMA_TELEMETRY_HMAC_KEY|ANIMA_TURNSTILE_SECRET|ANIMA_TURNSTILE_SITE_KEY|PYTHONPATH)[[:space:]]*=' "${config_path}"; then
     fail "Candidate 环境文件包含路径或密钥保留键"
   fi
+  grep -Eq '^[[:space:]]*ANIMA_TOC_ENABLED[[:space:]]*=[[:space:]]*false[[:space:]]*$' "${config_path}" || \
+    fail "Candidate 必须显式关闭 ToC"
+  grep -Eq '^[[:space:]]*ANIMA_REALTIME_ALLOW_ANONYMOUS[[:space:]]*=[[:space:]]*false[[:space:]]*$' "${config_path}" || \
+    fail "Candidate 必须显式关闭匿名实时会话"
 }
 
 require_secret_value() {
@@ -300,6 +322,8 @@ prefix = pathlib.Path(sys.prefix).resolve()
 for name in (
     "fastapi",
     "httpx",
+    "jwt",
+    "cryptography",
     "numpy",
     "sherpa_onnx",
     "uvicorn",

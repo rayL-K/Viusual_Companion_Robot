@@ -99,6 +99,19 @@ ssh -t anima-elf2 'sudo bash /home/wenkang/anima/source/deploy/install-control-p
 
 安装器会：创建 `anima-gateway`、`anima-candidate`、`anima-tunnel` 三个无登录服务用户；建立 root-owned 控制面与目录；将共享 venv 收紧为 root-owned、group/other 不可写；将模型目录/文件规范化为 root-owned 的 `0755/0644`，使隔离 UID 只能读取和遍历；执行运行时导入预检；安装空配置模板；执行 `systemctl daemon-reload`。它不会启动公网服务、不会填写密钥、不会迁移或删除用户数据。
 
+本版 ToC 认证新增 `PyJWT` 与 `cryptography`。升级既有共享运行时时，先在受信 source 上执行一次：
+
+```bash
+sudo /home/wenkang/anima/.venv/bin/python -m pip install \
+  '/home/wenkang/anima/source/backend[gateway,models]'
+sudo chown -R root:root /home/wenkang/anima/.venv
+sudo find /home/wenkang/anima/.venv -xdev -type d -exec chmod go-w {} +
+sudo find /home/wenkang/anima/.venv -xdev -type f -exec chmod go-w {} +
+```
+
+随后再运行控制面安装或发布命令。发布器会以隔离的 `anima-candidate` UID 导入
+`jwt`、`cryptography` 及其余运行时依赖；缺包或包从共享 venv 外部加载时会在切换 release 前失败。
+
 如果以后需要修改 systemd hardening 或发布器本身，重复这一**受信安装**步骤；不要通过 release 更新 unit。
 
 ## 5. 生产配置、Tunnel 与数据
@@ -120,9 +133,15 @@ sudoedit /etc/anima/tunnel-token
 - `ANIMA_TURNSTILE_SITE_KEY` 与 `ANIMA_TURNSTILE_SECRET`
 - 实际的 `ANIMA_ASR_MODEL_DIR`、`ANIMA_TTS_MODEL_DIR`（服务内均应为 `/opt/anima/models/...`）
 
+当前 ELF2 验证配置显式使用 `ANIMA_TOC_ENABLED=false` 与
+`ANIMA_REALTIME_ALLOW_ANONYMOUS=true`。这不是 ToC 生产默认值：接入身份提供商时必须把二者分别改为
+`true` 与 `false`，并填写模板中的 issuer、audience、JWKS、authorization endpoint、token endpoint、
+client ID、固定 callback URI、`ANIMA_AUTH_DATABASE` 及独立 Fernet key。OIDC 配置不完整时网关会拒绝启动；
+浏览器不能通过 query 参数自报用户身份。
+
 生产 env 不得定义 `ANIMA_HOST`、`ANIMA_PORT`、`ANIMA_WEB_DIST`、`ANIMA_DATA_ROOT`、`ANIMA_MEMORY_PATH`、`ANIMA_PERSONA_PATH`、`ANIMA_ADMISSION_REQUIRED`、`ANIMA_ALLOWED_ORIGINS` 或 `PYTHONPATH`。发布器会拒绝此类覆盖。
 
-candidate env 不放任何生产 API key、Turnstile key/secret、admission/HMAC secret 或生产路径。候选单元强制 `ANIMA_ADMISSION_REQUIRED=false`，因为它只在 loopback 上用于运行时/模型健康门。
+candidate env 不放任何生产 API key、Turnstile key/secret、admission/HMAC secret、OIDC/Fernet 配置或生产路径。候选单元强制 `ANIMA_ADMISSION_REQUIRED=false`，并显式关闭 ToC 与匿名实时会话，因为它只在 loopback 上用于运行时/模型健康门。
 
 Tunnel token 只写入 `/etc/anima/tunnel-token`（root:root，0600）。`anima-cloudflared.service` 使用 systemd `LoadCredential=` 将其临时投递到 `/run/credentials/anima-cloudflared.service/anima-token`，再由独立的 `anima-tunnel` 进程通过 `--token-file` 读取；兼容 ELF2 的 systemd 249，token 不在进程参数、日志或 release 中。发布器要求 Tunnel 连续通过多次进程存活检查，不会把短暂的 `activating` 状态误判为已上线。remote-config Tunnel 已配置 ingress 时不要添加 `--url` 覆盖控制面规则。
 

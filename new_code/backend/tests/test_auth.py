@@ -20,7 +20,10 @@ class StubVerifier:
     def __init__(self, identities: dict[str, VerifiedOidcIdentity]) -> None:
         self.identities = identities
 
-    def verify(self, id_token: str) -> VerifiedOidcIdentity:
+    def verify(
+        self, id_token: str, expected_nonce: str
+    ) -> VerifiedOidcIdentity:
+        assert expected_nonce == "login-nonce"
         return self.identities[id_token]
 
 
@@ -49,9 +52,9 @@ def test_oidc_subject_maps_stably_and_users_are_isolated(tmp_path) -> None:
     now = [1_000_000]
     service = _service(tmp_path, now)
 
-    alice = service.sign_in("alice-id-token")
-    alice_again = service.sign_in("alice-id-token")
-    bob = service.sign_in("bob-id-token")
+    alice = service.sign_in("alice-id-token", "login-nonce")
+    alice_again = service.sign_in("alice-id-token", "login-nonce")
+    bob = service.sign_in("bob-id-token", "login-nonce")
 
     assert alice.principal.user_id == alice_again.principal.user_id
     assert alice.principal.user_id != bob.principal.user_id
@@ -65,14 +68,14 @@ def test_oidc_subject_maps_stably_and_users_are_isolated(tmp_path) -> None:
 def test_expired_and_revoked_sessions_are_rejected(tmp_path) -> None:
     now = [1_000_000]
     service = _service(tmp_path, now)
-    issued = service.sign_in("alice-id-token")
+    issued = service.sign_in("alice-id-token", "login-nonce")
 
     now[0] = issued.credentials.expires_at_ms
     with pytest.raises(AuthenticationError, match="过期"):
         service.authenticate(issued.credentials.access_token)
 
     now[0] = 2_000_000
-    active = service.sign_in("alice-id-token")
+    active = service.sign_in("alice-id-token", "login-nonce")
     service.revoke_mutation(
         active.credentials.access_token, active.credentials.csrf_token
     )
@@ -83,7 +86,7 @@ def test_expired_and_revoked_sessions_are_rejected(tmp_path) -> None:
 def test_rotation_rejects_old_token_and_replay(tmp_path) -> None:
     now = [1_000_000]
     service = _service(tmp_path, now)
-    original = service.sign_in("alice-id-token")
+    original = service.sign_in("alice-id-token", "login-nonce")
     rotated = service.rotate(
         original.credentials.access_token, original.credentials.csrf_token
     )
@@ -103,7 +106,7 @@ def test_rotation_rejects_old_token_and_replay(tmp_path) -> None:
 def test_concurrent_rotation_has_exactly_one_winner(tmp_path) -> None:
     now = [1_000_000]
     service = _service(tmp_path, now)
-    original = service.sign_in("alice-id-token")
+    original = service.sign_in("alice-id-token", "login-nonce")
     barrier = threading.Barrier(2)
 
     def rotate_once():
@@ -130,7 +133,12 @@ def test_concurrent_sign_in_enforces_per_user_active_session_limit(tmp_path) -> 
     service = _service(tmp_path, now, max_active_sessions=2)
 
     with ThreadPoolExecutor(max_workers=6) as executor:
-        issued = tuple(executor.map(lambda _: service.sign_in("alice-id-token"), range(6)))
+        issued = tuple(
+            executor.map(
+                lambda _: service.sign_in("alice-id-token", "login-nonce"),
+                range(6),
+            )
+        )
 
     active = 0
     for session in issued:
@@ -151,7 +159,7 @@ def test_concurrent_sign_in_enforces_per_user_active_session_limit(tmp_path) -> 
 def test_cleanup_expired_removes_expired_rows(tmp_path) -> None:
     now = [1_000_000]
     service = _service(tmp_path, now)
-    issued = service.sign_in("alice-id-token")
+    issued = service.sign_in("alice-id-token", "login-nonce")
     now[0] = issued.credentials.expires_at_ms
 
     assert service.cleanup_expired() == 1
@@ -163,8 +171,8 @@ def test_cleanup_expired_removes_expired_rows(tmp_path) -> None:
 def test_revoke_requires_bound_csrf_token(tmp_path) -> None:
     now = [1_000_000]
     service = _service(tmp_path, now)
-    alice = service.sign_in("alice-id-token")
-    bob = service.sign_in("bob-id-token")
+    alice = service.sign_in("alice-id-token", "login-nonce")
+    bob = service.sign_in("bob-id-token", "login-nonce")
 
     with pytest.raises(CsrfValidationError):
         service.revoke_mutation(
@@ -177,7 +185,7 @@ def test_revoke_requires_bound_csrf_token(tmp_path) -> None:
 def test_database_and_reprs_do_not_leak_plaintext_credentials(tmp_path) -> None:
     now = [1_000_000]
     service = _service(tmp_path, now)
-    issued = service.sign_in("alice-id-token")
+    issued = service.sign_in("alice-id-token", "login-nonce")
     access = issued.credentials.access_token
     csrf = issued.credentials.csrf_token
 
@@ -207,7 +215,7 @@ def test_auth_migration_coexists_with_other_schema_versions(tmp_path) -> None:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 7
         assert connection.execute(
             "SELECT MAX(version) FROM auth_schema_versions"
-        ).fetchone()[0] == 1
+        ).fetchone()[0] == 2
         assert connection.execute(
             "SELECT name FROM sqlite_master WHERE name='unrelated'"
         ).fetchone() is not None
@@ -216,8 +224,8 @@ def test_auth_migration_coexists_with_other_schema_versions(tmp_path) -> None:
 def test_principal_cannot_be_selected_by_client_user_query(tmp_path) -> None:
     now = [1_000_000]
     service = _service(tmp_path, now)
-    alice = service.sign_in("alice-id-token")
-    bob = service.sign_in("bob-id-token")
+    alice = service.sign_in("alice-id-token", "login-nonce")
+    bob = service.sign_in("bob-id-token", "login-nonce")
 
     # 客户端即使携带其他 user_id，授权 actor 仍只由 bearer 会话产生。
     untrusted_query_user_id = bob.principal.user_id

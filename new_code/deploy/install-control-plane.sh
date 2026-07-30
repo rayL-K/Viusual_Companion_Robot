@@ -71,6 +71,8 @@ prefix = pathlib.Path(sys.prefix).resolve()
 for name in (
     "fastapi",
     "httpx",
+    "jwt",
+    "cryptography",
     "numpy",
     "sherpa_onnx",
     "uvicorn",

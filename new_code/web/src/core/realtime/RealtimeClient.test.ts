@@ -339,6 +339,17 @@ describe("realtimeUrl", () => {
     expect(realtimeUrl({ protocol: "http:", host: "localhost:5174" }))
       .toBe("ws://localhost:5174/v2/realtime");
   });
+
+  it("carries only the selected Anima identity", () => {
+    const url = realtimeUrl(
+      { protocol: "https:", host: "anima.veyralux.org" },
+      "strawberry_rabbit",
+    );
+    expect(url).toBe(
+      "wss://anima.veyralux.org/v2/realtime?anima=strawberry_rabbit",
+    );
+    expect(url).not.toMatch(/user|token|session=/);
+  });
 });
 
 function connectedClient(

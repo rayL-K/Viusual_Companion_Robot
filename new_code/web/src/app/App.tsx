@@ -1,5 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 
+import {
+  bootstrapAccess,
+  TocApiClient,
+  TocApiError,
+  type TocAnima,
+  type TocUser,
+} from "../core/api/toc";
 import { MediaSession } from "../core/media/MediaSession";
 import { ensureRealtimeAdmission } from "../core/realtime/admission";
 import { RealtimeClient, realtimeUrl } from "../core/realtime/RealtimeClient";
@@ -21,11 +28,22 @@ import { CameraPreview } from "../features/call/CameraPreview";
 import { AnimaSettingsPanel } from "../features/settings/AnimaSettingsPanel";
 
 type DrawerView = "overview" | "settings";
+type AuthState =
+  | { phase: "loading" }
+  | { phase: "unauthenticated" }
+  | { phase: "recoverable"; message: string }
+  | { phase: "unavailable" }
+  | { phase: "anonymous"; animas: TocAnima[] }
+  | { phase: "authenticated"; user: TocUser; animas: TocAnima[] };
 
 export const PRODUCT_NAME = "Anima";
 export const PRODUCT_VERSION = "v0.0.1";
 
 export function App() {
+  const api = useMemo(() => new TocApiClient(), []);
+  const [authState, setAuthState] = useState<AuthState>({ phase: "loading" });
+  const [authAttempt, setAuthAttempt] = useState(0);
+  const [selectedAnimaId, setSelectedAnimaId] = useState("");
   const [draft, setDraft] = useState("");
   const [callActive, setCallActive] = useState(false);
   const [callStarting, setCallStarting] = useState(false);
@@ -37,12 +55,58 @@ export function App() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const callStartedAtRef = useRef(0);
   const client = useMemo(
-    () => new RealtimeClient(realtimeUrl(), undefined, undefined, ensureRealtimeAdmission),
-    [],
+    () => new RealtimeClient(
+      realtimeUrl(window.location, selectedAnimaId || undefined),
+      undefined,
+      undefined,
+      ensureRealtimeAdmission,
+    ),
+    [selectedAnimaId],
   );
   const media = useMemo(() => new MediaSession(client), [client]);
 
   useEffect(() => {
+    let active = true;
+    setAuthState({ phase: "loading" });
+    void bootstrapAccess(api)
+      .then((access) => {
+        if (!active) return;
+        if (access.mode === "unavailable") {
+          setAuthState({ phase: "unavailable" });
+          setSelectedAnimaId("");
+          return;
+        }
+        const animas = access.mode === "toc" ? access.animas : [access.anima];
+        setAuthState(
+          access.mode === "toc"
+            ? { phase: "authenticated", user: access.user, animas }
+            : { phase: "anonymous", animas },
+        );
+        setSelectedAnimaId((current) =>
+          animas.some((anima) => anima.id === current)
+            ? current
+            : (animas[0]?.id ?? ""),
+        );
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        if (error instanceof TocApiError && error.kind === "unauthenticated") {
+          setAuthState({ phase: "unauthenticated" });
+          return;
+        }
+        setAuthState({
+          phase: "recoverable",
+          message: error instanceof Error ? error.message : "服务暂时不可达",
+        });
+      });
+    return () => { active = false; };
+  }, [api, authAttempt]);
+
+  useEffect(() => {
+    if (
+      (authState.phase !== "authenticated" && authState.phase !== "anonymous")
+      || !selectedAnimaId
+    ) return;
     const removeHandler = client.onEvent((event) => {
       if (event.type === "session.ready") resetAvatarGenerationDomain(event.sessionId);
       if (event.type === "reply.phase") replyPhase.value = parseReplyPhase(event.payload.phase);
@@ -80,7 +144,7 @@ export function App() {
       media.stop(videoRef.current);
       client.disconnect();
     };
-  }, [client, media]);
+  }, [authState.phase, client, media, selectedAnimaId]);
 
   useEffect(() => {
     if (!callActive) return;
@@ -138,6 +202,19 @@ export function App() {
     }
   };
 
+  if (authState.phase !== "authenticated" && authState.phase !== "anonymous") {
+    return (
+      <SessionGate
+        state={authState}
+        onRetry={() => setAuthAttempt((attempt) => attempt + 1)}
+      />
+    );
+  }
+
+  const selectedAnima = authState.animas.find(
+    (anima) => anima.id === selectedAnimaId,
+  );
+
   return (
     <main class={`shell ${callActive ? "shell--in-call" : "shell--idle"}`}>
       <header class="topbar">
@@ -146,6 +223,21 @@ export function App() {
           <div><strong>{PRODUCT_NAME}</strong><small>{PRODUCT_VERSION} · multimodal companion</small></div>
         </div>
         <div class="topbar__actions">
+          {authState.animas.length > 0 && (
+            <label class="anima-picker">
+              <span class="sr-only">选择 Anima</span>
+              <select
+                value={selectedAnimaId}
+                disabled={callActive}
+                onChange={(event) => setSelectedAnimaId(event.currentTarget.value)}
+                aria-label="选择 Anima"
+              >
+                {authState.animas.map((anima) => (
+                  <option value={anima.id} key={anima.id}>{anima.displayName}</option>
+                ))}
+              </select>
+            </label>
+          )}
           {callActive && <span class="call-duration"><i />{formatDuration(callSeconds)}</span>}
           <span class={`connection connection--${connectionPhase.value}`}>
             <i />{connectionLabel(connectionPhase.value)}
@@ -164,7 +256,7 @@ export function App() {
 
         <section class="conversation-rail" aria-label="陪伴对话">
           <section class="dialogue" aria-live="polite">
-            <div class="dialogue__identity"><span>{PRODUCT_NAME}</span><small>{PRODUCT_VERSION} · 与你同在</small></div>
+            <div class="dialogue__identity"><span>{selectedAnima?.displayName ?? PRODUCT_NAME}</span><small>{PRODUCT_VERSION} · 与你同在</small></div>
             <p>{assistantText.value}</p>
           </section>
 
@@ -202,7 +294,7 @@ export function App() {
                   onEnd={endCall}
                 />
               ) : (
-                <button class="start-call" type="button" onClick={() => void startCall()} disabled={callStarting}>
+                <button class="start-call" type="button" onClick={() => void startCall()} disabled={callStarting || !selectedAnima}>
                   <span aria-hidden="true">◉</span>
                   <strong>{callStarting ? "正在建立通话…" : "开始陪伴通话"}</strong>
                   <small>打开摄像头与麦克风</small>
@@ -221,7 +313,7 @@ export function App() {
           ) : (
             <>
               <article class="sense-card"><span>视觉上下文</span><p>{visualSummary.value}</p></article>
-              <article class="sense-card"><span>数据边界</span><p>当前是匿名隔离空间，用于区分本次会话数据；账号体系与持久身份认证将在启用后单独标示。</p></article>
+              <article class="sense-card"><span>数据边界</span><p>{authState.phase === "anonymous" ? "显式匿名体验空间" : `${authState.user.displayName} 的独立空间`} · 当前 Anima：{selectedAnima?.displayName ?? "尚未选择"}</p></article>
               <div class="drawer__controls">
                 <button type="button" onClick={toggleCamera} disabled={!callActive}>{cameraEnabled ? "关闭摄像头" : "打开摄像头"}</button>
                 <button type="button" onClick={toggleMicrophone} disabled={!callActive}>{microphoneEnabled ? "关闭麦克风" : "打开麦克风"}</button>
@@ -232,6 +324,41 @@ export function App() {
         </div>
       </aside>
       {drawerOpen.value && <button class="scrim" type="button" aria-label="关闭控制台" onClick={() => (drawerOpen.value = false)} />}
+    </main>
+  );
+}
+
+function SessionGate({
+  state,
+  onRetry,
+}: {
+  state: Exclude<AuthState, { phase: "authenticated" } | { phase: "anonymous" }>;
+  onRetry: () => void;
+}) {
+  const loading = state.phase === "loading";
+  const unauthenticated = state.phase === "unauthenticated";
+  const unavailable = state.phase === "unavailable";
+  return (
+    <main class="session-gate">
+      <section class="session-gate__card" aria-live="polite">
+        <span class="brand__mark">A</span>
+        <small>ANIMA · PRIVATE MULTIMODAL SPACE</small>
+        <h1>{loading ? "正在确认访问方式" : unauthenticated ? "欢迎回到 Anima" : unavailable ? "服务尚未开放" : "连接暂时走神了"}</h1>
+        <p>
+          {loading
+            ? "正在确认安全会话与专属角色…"
+            : unauthenticated
+              ? "登录后继续你的私人陪伴空间。"
+              : unavailable
+                ? "服务未配置访问方式，请联系服务管理员。"
+              : state.message}
+        </p>
+        {!loading && !unavailable && (
+          unauthenticated
+            ? <a class="session-gate__cta" href="/auth/login">安全登录</a>
+            : <button class="session-gate__cta" type="button" onClick={onRetry}>重新连接</button>
+        )}
+      </section>
     </main>
   );
 }

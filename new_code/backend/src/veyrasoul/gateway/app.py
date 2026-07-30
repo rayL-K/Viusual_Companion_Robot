@@ -9,7 +9,7 @@ import logging
 import time
 import uuid
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from veyrasoul.affect import AffectState
+from veyrasoul.auth import AuthenticationError, AuthPrincipal
 from veyrasoul.avatar import AvatarIntent, AvatarPhase
 from veyrasoul.domain.perception import VisualSnapshot
 from veyrasoul.identity import (
@@ -27,7 +28,11 @@ from veyrasoul.identity import (
     validate_session_hint,
 )
 from veyrasoul.orchestration.ports import AsrUpdate, StreamingAsrSession
-from veyrasoul.personalization import ProfileConflictError, ProfileValidationError
+from veyrasoul.personalization import (
+    CatalogError,
+    ProfileConflictError,
+    ProfileValidationError,
+)
 from veyrasoul.perception import VisualSemanticScheduler
 from veyrasoul.telemetry import (
     TraceAttributes,
@@ -59,6 +64,74 @@ class CancelledTurn:
 class ListeningTurn:
     generation: int
     turn_id: str
+
+
+@dataclass(slots=True)
+class RealtimeHandshake:
+    session_id: str
+    identity: SessionIdentity
+    anima_lease: Any | None = None
+    access_token: str = field(default="", repr=False)
+    auth_session_id: str = ""
+    auth_expires_at_ms: int = 0
+
+    async def release(self) -> None:
+        lease = self.anima_lease
+        if lease is None:
+            return
+        self.anima_lease = None
+        await asyncio.to_thread(lease.__exit__, None, None, None)
+
+    async def maintain(self, services: AppServices) -> None:
+        """Revalidate revocable auth and renew the durable data lease."""
+
+        if self.access_token:
+            authenticator = services.realtime_authenticator
+            if authenticator is None:
+                raise RealtimeHandshakeError(4401, "authentication unavailable")
+            try:
+                principal = await asyncio.to_thread(authenticator, self.access_token)
+            except (AuthenticationError, ValueError):
+                raise RealtimeHandshakeError(
+                    4401, "authentication expired or revoked"
+                ) from None
+            except Exception as exc:
+                _LOGGER.warning(
+                    "Realtime session revalidation failed (%s)",
+                    type(exc).__name__,
+                )
+                raise RealtimeHandshakeError(
+                    1011, "authentication service unavailable"
+                ) from None
+            now_ms = int(time.time() * 1000)
+            if (
+                not isinstance(principal, AuthPrincipal)
+                or principal.user_id != self.identity.user_id
+                or principal.session_id != self.auth_session_id
+                or principal.expires_at_ms <= now_ms
+            ):
+                raise RealtimeHandshakeError(
+                    4401, "authentication expired or revoked"
+                )
+            self.auth_expires_at_ms = principal.expires_at_ms
+        if self.anima_lease is not None:
+            try:
+                await asyncio.to_thread(self.anima_lease.renew)
+            except Exception as exc:
+                _LOGGER.warning(
+                    "Realtime Anima lease renewal failed (%s)",
+                    type(exc).__name__,
+                )
+                raise RealtimeHandshakeError(
+                    4403, "Anima lease is no longer available"
+                ) from None
+
+
+class RealtimeHandshakeError(RuntimeError):
+    def __init__(self, close_code: int, reason: str) -> None:
+        super().__init__(reason)
+        self.close_code = close_code
+        self.reason = reason
 
 
 class ConnectionWriter:
@@ -304,6 +377,11 @@ def create_app(services: AppServices) -> FastAPI:
             "version": "0.0.1",
             "releaseDigest": services.release_digest,
             "streaming_asr": services.asr is not None,
+            "tocEnabled": (
+                services.toc_router is not None
+                and services.realtime_authenticator is not None
+            ),
+            "anonymousRealtimeEnabled": services.allow_anonymous_realtime,
         }
 
     @app.get("/v2/admission/status")
@@ -370,8 +448,14 @@ def create_app(services: AppServices) -> FastAPI:
                 reason=handshake_failure.reason,
             )
             return
+        try:
+            handshake = await _authenticate_realtime_handshake(websocket, services, admission)
+        except RealtimeHandshakeError as exc:
+            await websocket.close(code=exc.close_code, reason=exc.reason)
+            return
         connection, connection_failure = await admission.try_connect(client_key(websocket))
         if connection is None:
+            await handshake.release()
             await websocket.close(
                 code=connection_failure.close_code if connection_failure else 1013,
                 reason=(
@@ -381,59 +465,15 @@ def create_app(services: AppServices) -> FastAPI:
                 ),
             )
             return
-        await websocket.accept()
-        raw_session = websocket.query_params.get("session")
         try:
-            if services.admission.required:
-                device_user = admission.device_identity(
-                    websocket.cookies.get(AdmissionGate.DEVICE_COOKIE_NAME)
-                )
-                if device_user is None:
-                    raise InvalidIdentity("设备会话无效")
-                if websocket.query_params.get("user") is not None:
-                    raise InvalidIdentity("公网匿名会话的 user 身份由服务端签发")
-                if websocket.query_params.get("anima") not in {None, "default"}:
-                    raise InvalidIdentity("公网匿名会话只能使用默认 Anima")
-                session_id = f"session_{device_user.removeprefix('device_')}"
-            else:
-                session_id = (
-                    validate_session_hint(raw_session)
-                    if raw_session is not None
-                    else uuid.uuid4().hex
-                )
-        except InvalidIdentity as exc:
-            writer = ConnectionWriter(websocket, uuid.uuid4().hex)
-            await writer.event(
-                "error",
-                payload={"code": "invalid_session", "message": str(exc)},
-            )
-            await websocket.close(code=1008, reason="invalid session")
+            await websocket.accept()
+        except Exception:
             await connection.release()
-            return
+            await handshake.release()
+            raise
+        session_id = handshake.session_id
+        identity = handshake.identity
         writer = ConnectionWriter(websocket, session_id)
-        try:
-            if services.admission.required:
-                identity = SessionIdentity(
-                    user_id=UserId.parse(device_user),
-                    anima_id=AnimaId.default(),
-                    anonymous=True,
-                    assurance="admission_device",
-                )
-            else:
-                resolver = services.identity_resolver or _parse_session_identity
-                identity = resolver(
-                    websocket.query_params.get("user"),
-                    websocket.query_params.get("anima"),
-                    session_id,
-                )
-        except InvalidIdentity as exc:
-            await writer.event(
-                "error",
-                payload={"code": "invalid_identity", "message": str(exc)},
-            )
-            await websocket.close(code=1008, reason="invalid identity")
-            await connection.release()
-            return
         turns: TurnController | None = None
         asr_session: StreamingAsrSession | None = None
         vision_scheduler: VisualSemanticScheduler | None = None
@@ -474,12 +514,30 @@ def create_app(services: AppServices) -> FastAPI:
             if turns:
                 await turns.cancel()
             await connection.release()
+            await handshake.release()
             raise
         connected_at = time.monotonic()
         last_client_activity = connected_at
+        next_maintenance = connected_at + min(
+            services.realtime_reauth_seconds,
+            services.realtime_lease_renew_seconds,
+        )
         try:
             while True:
                 now = time.monotonic()
+                if handshake.access_token and now >= next_maintenance:
+                    try:
+                        await handshake.maintain(services)
+                    except RealtimeHandshakeError as exc:
+                        await websocket.close(
+                            code=exc.close_code,
+                            reason=exc.reason,
+                        )
+                        break
+                    next_maintenance = time.monotonic() + min(
+                        services.realtime_reauth_seconds,
+                        services.realtime_lease_renew_seconds,
+                    )
                 idle_remaining = (
                     services.admission.idle_timeout_seconds
                     - (now - last_client_activity)
@@ -487,7 +545,16 @@ def create_app(services: AppServices) -> FastAPI:
                 session_remaining = (
                     services.admission.max_session_seconds - (now - connected_at)
                 )
-                receive_timeout = min(idle_remaining, session_remaining)
+                maintenance_remaining = (
+                    max(0.0, next_maintenance - now)
+                    if handshake.access_token
+                    else float("inf")
+                )
+                receive_timeout = min(
+                    idle_remaining,
+                    session_remaining,
+                    maintenance_remaining,
+                )
                 if receive_timeout <= 0:
                     await websocket.close(code=1001, reason="session expired")
                     break
@@ -497,6 +564,15 @@ def create_app(services: AppServices) -> FastAPI:
                         timeout=receive_timeout,
                     )
                 except asyncio.TimeoutError:
+                    timed_out_at = time.monotonic()
+                    if (
+                        handshake.access_token
+                        and timed_out_at - last_client_activity
+                        < services.admission.idle_timeout_seconds
+                        and timed_out_at - connected_at
+                        < services.admission.max_session_seconds
+                    ):
+                        continue
                     await websocket.close(code=1001, reason="session expired")
                     break
                 last_client_activity = time.monotonic()
@@ -522,6 +598,16 @@ def create_app(services: AppServices) -> FastAPI:
                     break
                 try:
                     event = _parse_client_event(raw_text)
+                except InvalidIdentity:
+                    await writer.event(
+                        "error",
+                        payload={
+                            "code": "identity_forgery",
+                            "message": "用户身份只能由已认证的握手确定",
+                        },
+                    )
+                    await websocket.close(code=1008, reason="identity forgery")
+                    break
                 except ValueError as exc:
                     await writer.event("error", payload={"code": "invalid_event", "message": str(exc)})
                     continue
@@ -622,6 +708,11 @@ def create_app(services: AppServices) -> FastAPI:
             if turns:
                 await turns.cancel()
             await connection.release()
+            await handshake.release()
+
+    if services.auth_router is not None and services.toc_router is not None:
+        app.include_router(services.auth_router)
+        app.include_router(services.toc_router)
 
     if services.web_dist is not None:
         web_dist = services.web_dist.resolve()
@@ -958,6 +1049,152 @@ async def _cancel_task(task: asyncio.Task[None] | None) -> None:
         await task
 
 
+async def _authenticate_realtime_handshake(
+    websocket: WebSocket,
+    services: AppServices,
+    admission: AdmissionGate,
+) -> RealtimeHandshake:
+    """Resolve a server-authenticated actor before allocating tenant runtime state."""
+
+    authenticator = services.realtime_authenticator
+    identity_service = services.identity_service
+    raw_session = websocket.query_params.get("session")
+    if authenticator is not None and identity_service is not None:
+        forbidden_query = {
+            "user",
+            "user_id",
+            "userId",
+            "token",
+            "access_token",
+            "accessToken",
+        }
+        if forbidden_query.intersection(websocket.query_params.keys()):
+            raise RealtimeHandshakeError(4403, "identity query parameters are forbidden")
+        token, credential_source = _realtime_access_token(
+            websocket, services.realtime_access_cookie_name
+        )
+        if not token:
+            raise RealtimeHandshakeError(4401, "authentication required")
+        _validate_authenticated_realtime_origin(
+            websocket,
+            services.realtime_allowed_origins,
+            cookie_authenticated=credential_source == "cookie",
+        )
+        try:
+            principal = await asyncio.to_thread(authenticator, token)
+        except (AuthenticationError, ValueError):
+            raise RealtimeHandshakeError(4401, "invalid or expired authentication") from None
+        if not isinstance(principal, AuthPrincipal):
+            raise RealtimeHandshakeError(1011, "authentication service unavailable")
+        if principal.expires_at_ms <= int(time.time() * 1000):
+            raise RealtimeHandshakeError(4401, "invalid or expired authentication")
+        try:
+            session_id = (
+                validate_session_hint(raw_session)
+                if raw_session is not None
+                else uuid.uuid4().hex
+            )
+            anima_id = AnimaId.parse(
+                websocket.query_params.get("anima") or AnimaId.default().value
+            )
+        except InvalidIdentity:
+            raise RealtimeHandshakeError(4403, "requested session is not available") from None
+        lease = identity_service.active_anima_lease(principal.user_id, anima_id)
+        try:
+            await asyncio.to_thread(lease.__enter__)
+        except CatalogError:
+            raise RealtimeHandshakeError(4403, "requested Anima is not available") from None
+        return RealtimeHandshake(
+            session_id=session_id,
+            identity=SessionIdentity(
+                user_id=principal.user_id,
+                anima_id=anima_id,
+                anonymous=False,
+                assurance="authenticated",
+            ),
+            anima_lease=lease,
+            access_token=token,
+            auth_session_id=principal.session_id,
+            auth_expires_at_ms=principal.expires_at_ms,
+        )
+
+    if not services.allow_anonymous_realtime:
+        raise RealtimeHandshakeError(4401, "authentication required")
+
+    try:
+        if services.admission.required:
+            device_user = admission.device_identity(
+                websocket.cookies.get(AdmissionGate.DEVICE_COOKIE_NAME)
+            )
+            if device_user is None:
+                raise InvalidIdentity("设备会话无效")
+            if websocket.query_params.get("user") is not None:
+                raise InvalidIdentity("公网匿名会话的 user 身份由服务端签发")
+            if websocket.query_params.get("anima") not in {None, "default"}:
+                raise InvalidIdentity("公网匿名会话只能使用默认 Anima")
+            return RealtimeHandshake(
+                session_id=f"session_{device_user.removeprefix('device_')}",
+                identity=SessionIdentity(
+                    user_id=UserId.parse(device_user),
+                    anima_id=AnimaId.default(),
+                    anonymous=True,
+                    assurance="admission_device",
+                ),
+            )
+        session_id = (
+            validate_session_hint(raw_session)
+            if raw_session is not None
+            else uuid.uuid4().hex
+        )
+        resolver = services.identity_resolver or _parse_session_identity
+        identity = resolver(
+            websocket.query_params.get("user"),
+            websocket.query_params.get("anima"),
+            session_id,
+        )
+        return RealtimeHandshake(session_id=session_id, identity=identity)
+    except InvalidIdentity:
+        raise RealtimeHandshakeError(4403, "requested session is not available") from None
+
+
+def _realtime_access_token(
+    websocket: WebSocket, cookie_name: str
+) -> tuple[str, str]:
+    cookie_token = str(websocket.cookies.get(cookie_name) or "").strip()
+    authorization_values = websocket.headers.getlist("authorization")
+    if len(authorization_values) > 1:
+        return "", ""
+    authorization = (
+        str(authorization_values[0]).strip() if authorization_values else ""
+    )
+    header_token = ""
+    if authorization:
+        scheme, separator, credential = authorization.partition(" ")
+        if separator != " " or scheme.casefold() != "bearer" or not credential.strip():
+            return "", ""
+        header_token = credential.strip()
+    if cookie_token and header_token:
+        return "", ""
+    if header_token:
+        return header_token, "bearer"
+    if cookie_token:
+        return cookie_token, "cookie"
+    return "", ""
+
+
+def _validate_authenticated_realtime_origin(
+    websocket: WebSocket,
+    allowed_origins: tuple[str, ...],
+    *,
+    cookie_authenticated: bool,
+) -> None:
+    origin = str(websocket.headers.get("origin") or "").strip().rstrip("/").lower()
+    if cookie_authenticated and not origin:
+        raise RealtimeHandshakeError(4403, "WebSocket Origin is required")
+    if origin and origin not in allowed_origins:
+        raise RealtimeHandshakeError(4403, "WebSocket Origin is not allowed")
+
+
 def _parse_client_event(raw: str) -> dict[str, Any]:
     if len(raw) > _MAX_CONTROL_EVENT_CHARS:
         raise ValueError("控制事件超过 64 KiB")
@@ -970,6 +1207,16 @@ def _parse_client_event(raw: str) -> dict[str, Any]:
     payload = event.get("payload") or {}
     if not isinstance(payload, dict):
         raise ValueError("事件 payload 必须是对象")
+    identity_fields = {
+        "user",
+        "userId",
+        "user_id",
+        "anima",
+        "animaId",
+        "anima_id",
+    }
+    if identity_fields.intersection(payload):
+        raise InvalidIdentity("身份字段不能由客户端事件覆盖")
     return {"type": event["type"], "payload": payload}
 
 

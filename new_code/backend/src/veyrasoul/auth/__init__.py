@@ -1,5 +1,6 @@
 """ToC 认证领域公开接口。"""
 
+from .http import HttpSessionBoundary, SessionCookieConfig
 from .model import (
     AuthenticationError,
     AuthPrincipal,
@@ -20,8 +21,10 @@ __all__ = [
     "AuthenticationError",
     "CsrfValidationError",
     "IssuedSession",
+    "HttpSessionBoundary",
     "OidcVerifier",
     "SessionCredentials",
+    "SessionCookieConfig",
     "SqliteAuthRepository",
     "VerifiedOidcIdentity",
 ]

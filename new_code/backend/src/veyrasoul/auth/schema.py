@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def migrate(connection: sqlite3.Connection) -> None:
@@ -26,6 +26,10 @@ def migrate(connection: sqlite3.Connection) -> None:
     if current < 1:
         _migration_1(connection)
         connection.execute("INSERT INTO auth_schema_versions(version) VALUES(1)")
+        current = 1
+    if current < 2:
+        _migration_2(connection)
+        connection.execute("INSERT INTO auth_schema_versions(version) VALUES(2)")
 
 
 def _migration_1(connection: sqlite3.Connection) -> None:
@@ -55,5 +59,24 @@ def _migration_1(connection: sqlite3.Connection) -> None:
 
         CREATE INDEX auth_sessions_user_idx
             ON auth_sessions(user_id, expires_at_ms);
+        """
+    )
+
+
+def _migration_2(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE auth_login_attempts (
+            state_hash BLOB PRIMARY KEY,
+            nonce_hash BLOB NOT NULL,
+            nonce_ciphertext BLOB NOT NULL,
+            verifier_ciphertext BLOB NOT NULL,
+            created_at_ms INTEGER NOT NULL,
+            expires_at_ms INTEGER NOT NULL,
+            consumed_at_ms INTEGER
+        );
+
+        CREATE INDEX auth_login_attempts_expiry_idx
+            ON auth_login_attempts(expires_at_ms);
         """
     )

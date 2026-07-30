@@ -4,9 +4,28 @@ import hashlib
 import logging
 from pathlib import Path
 
+import httpx
 import uvicorn
 
+from veyrasoul.auth import OidcVerifier, SqliteAuthRepository
+from veyrasoul.auth.login import (
+    HttpxAuthorizationCodeExchanger,
+    LoginFlowConfig,
+    SqliteLoginAttemptStore,
+)
+from veyrasoul.auth.maintenance import (
+    AuthExpiryMaintenance,
+    PeriodicAuthExpiryMaintenance,
+)
+from veyrasoul.auth.oidc import OidcVerifierConfig, PyJwtOidcVerifier
+from veyrasoul.auth.routes import create_auth_router
 from veyrasoul.gateway import AppServices, create_app
+from veyrasoul.gateway.toc_composition import (
+    TocComposition,
+    create_toc_composition,
+    create_toc_oidc_login_flow,
+)
+from veyrasoul.identity import AnimaId, UserId
 from veyrasoul.integrations import (
     DeepSeekConfig,
     DeepSeekStreamClient,
@@ -16,6 +35,18 @@ from veyrasoul.integrations import (
     SherpaStreamingAsr,
     SherpaTtsConfig,
     SherpaTtsSynthesizer,
+)
+from veyrasoul.memory import (
+    DocumentIngestor,
+    HashingEmbeddingProvider,
+    MemoryNamespace,
+    MemoryStore,
+    bind_store,
+)
+from veyrasoul.personalization import (
+    DataLayout,
+    IdentityService,
+    SqliteIdentityRepository,
 )
 from veyrasoul.telemetry import (
     JsonLogTraceSink,
@@ -65,7 +96,12 @@ def _server_options(settings: RuntimeSettings) -> dict[str, object]:
     }
 
 
-def build_app(settings: RuntimeSettings | None = None):
+def build_app(
+    settings: RuntimeSettings | None = None,
+    *,
+    oidc_verifier: OidcVerifier | None = None,
+    oidc_token_transport: httpx.BaseTransport | None = None,
+):
     config = settings or RuntimeSettings.from_environment()
     llm_selection = config.provider_snapshot.resolve("llm")
     tts_selection = config.provider_snapshot.resolve("tts")
@@ -114,12 +150,85 @@ def build_app(settings: RuntimeSettings | None = None):
                 timeout_seconds=config.vision_timeout_seconds,
             )
         )
-    startup = tuple(
+    startup = list(
         callback for callback in (asr.warmup if asr else None, tts.warmup) if callback is not None
     )
-    shutdown = tuple(
+    shutdown = list(
         callback for callback in (llm.aclose, vlm.aclose if vlm else None) if callback is not None
     )
+    stable_system_prompt = config.persona_path.read_text(encoding="utf-8")
+    embedding_provider = HashingEmbeddingProvider()
+    toc_composition: TocComposition | None = None
+    auth_router = None
+    if config.toc.enabled:
+        layout = DataLayout(config.data_root, config.memory_path)
+        identity_service = IdentityService(
+            SqliteIdentityRepository(layout.identity_database()),
+            layout,
+            stable_system_prompt,
+        )
+
+        def document_ingestor_factory(
+            user_id: UserId,
+            anima_id: AnimaId,
+        ) -> DocumentIngestor:
+            namespace = MemoryNamespace(user_id, anima_id)
+            memory = MemoryStore(layout.state_database(user_id, anima_id))
+            bind_store(memory, namespace)
+            return DocumentIngestor(
+                memory,
+                namespace,
+                embedding_provider,
+            )
+
+        resolved_verifier = oidc_verifier or PyJwtOidcVerifier(
+            OidcVerifierConfig(
+                issuer=config.toc.issuer,
+                audience=config.toc.audience,
+                client_id=config.toc.client_id,
+                jwks_url=config.toc.jwks_url,
+            )
+        )
+        assert config.toc.auth_database is not None
+        auth_repository = SqliteAuthRepository(config.toc.auth_database)
+        login_attempt_store = SqliteLoginAttemptStore(
+            config.toc.auth_database,
+            config.toc.login_fernet_key.encode("ascii"),
+        )
+        toc_composition = create_toc_composition(
+            oidc_verifier=resolved_verifier,
+            auth_repository=auth_repository,
+            identity_service=identity_service,
+            document_ingestor_factory=document_ingestor_factory,
+        )
+        login_config = LoginFlowConfig(
+            authorization_endpoint=config.toc.authorization_endpoint,
+            token_endpoint=config.toc.token_endpoint,
+            client_id=config.toc.client_id,
+            redirect_uri=config.toc.redirect_uri,
+        )
+        login_flow = create_toc_oidc_login_flow(
+            toc_composition,
+            config=login_config,
+            store=login_attempt_store,
+            exchanger=HttpxAuthorizationCodeExchanger(
+                login_config,
+                transport=oidc_token_transport,
+            ),
+        )
+        auth_maintenance = PeriodicAuthExpiryMaintenance(
+            AuthExpiryMaintenance(auth_repository, login_attempt_store),
+            on_error=lambda exc: trace_logger.warning(
+                "Auth expiry cleanup failed (%s)",
+                type(exc).__name__,
+            ),
+        )
+        startup.append(auth_maintenance.start)
+        shutdown.append(auth_maintenance.aclose)
+        auth_router = create_auth_router(
+            login_flow,
+            toc_composition.session_boundary,
+        )
     services = AppServices(
         memory_path=config.memory_path,
         llm=llm,
@@ -127,9 +236,9 @@ def build_app(settings: RuntimeSettings | None = None):
         asr=asr,
         vision=vlm,
         vision_refresh_seconds=config.vision_refresh_seconds,
-        stable_system_prompt=config.persona_path.read_text(encoding="utf-8"),
-        startup=startup,
-        shutdown=shutdown,
+        stable_system_prompt=stable_system_prompt,
+        startup=tuple(startup),
+        shutdown=tuple(shutdown),
         web_dist=config.web_dist,
         data_root=config.data_root,
         trace=TraceSettings(
@@ -152,6 +261,30 @@ def build_app(settings: RuntimeSettings | None = None):
         admission=config.admission,
         release_digest=_release_digest(config.root),
         provider_snapshot=config.provider_snapshot,
+        allow_anonymous_realtime=config.realtime_allow_anonymous,
+        embedding_provider=embedding_provider,
+        realtime_authenticator=(
+            toc_composition.auth_service.authenticate
+            if toc_composition is not None
+            else None
+        ),
+        identity_service=(
+            toc_composition.identity_service
+            if toc_composition is not None
+            else None
+        ),
+        realtime_access_cookie_name=(
+            toc_composition.access_cookie_name
+            if toc_composition is not None
+            else "__Host-anima_session"
+        ),
+        realtime_allowed_origins=config.realtime_allowed_origins,
+        realtime_reauth_seconds=config.realtime_reauth_seconds,
+        realtime_lease_renew_seconds=config.realtime_lease_renew_seconds,
+        auth_router=auth_router,
+        toc_router=(
+            toc_composition.router if toc_composition is not None else None
+        ),
     )
     return create_app(services)
 

@@ -7,7 +7,11 @@ from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit
 
+from fastapi import APIRouter
+
+from veyrasoul.auth import AuthPrincipal
 from veyrasoul.avatar import AvatarDirector
 from veyrasoul.identity import AnimaId, IdentityResolver, SessionIdentity, UserId
 from veyrasoul.memory import (
@@ -31,6 +35,7 @@ from veyrasoul.orchestration.turn_service import TurnService
 from veyrasoul.personalization import (
     AnimaProfileRepository,
     DataLayout,
+    IdentityService,
     SqliteAnimaProfileStore,
 )
 from veyrasoul.perception import VisionAnalyzer
@@ -71,6 +76,56 @@ class AppServices:
         default_factory=HashingEmbeddingProvider,
         repr=False,
     )
+    realtime_authenticator: Callable[[str], AuthPrincipal] | None = field(
+        default=None,
+        repr=False,
+    )
+    identity_service: IdentityService | None = field(default=None, repr=False)
+    allow_anonymous_realtime: bool = False
+    realtime_access_cookie_name: str = "__Host-anima_session"
+    realtime_allowed_origins: tuple[str, ...] = ()
+    realtime_reauth_seconds: float = 30.0
+    realtime_lease_renew_seconds: float = 60.0
+    auth_router: APIRouter | None = field(default=None, repr=False)
+    toc_router: APIRouter | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        if (self.realtime_authenticator is None) != (self.identity_service is None):
+            raise ValueError(
+                "realtime_authenticator and identity_service must be configured together"
+            )
+        if not self.realtime_access_cookie_name.strip():
+            raise ValueError("realtime_access_cookie_name must not be empty")
+        normalized_origins: list[str] = []
+        for origin in self.realtime_allowed_origins:
+            normalized = origin.strip().rstrip("/").lower()
+            parsed = urlsplit(normalized)
+            if (
+                parsed.scheme not in {"http", "https"}
+                or not parsed.netloc
+                or parsed.username
+                or parsed.password
+                or parsed.path not in {"", "/"}
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError("realtime_allowed_origins must contain exact HTTP(S) origins")
+            normalized_origins.append(normalized)
+        object.__setattr__(
+            self,
+            "realtime_allowed_origins",
+            tuple(dict.fromkeys(normalized_origins)),
+        )
+        if self.realtime_authenticator is not None and not normalized_origins:
+            raise ValueError("authenticated realtime requires exact allowed origins")
+        if self.realtime_reauth_seconds <= 0:
+            raise ValueError("realtime_reauth_seconds must be positive")
+        if not 0 < self.realtime_lease_renew_seconds <= 240:
+            raise ValueError(
+                "realtime_lease_renew_seconds must be positive and below the lease TTL"
+            )
+        if (self.auth_router is None) != (self.toc_router is None):
+            raise ValueError("auth_router and toc_router must be configured together")
 
     def capabilities(self) -> dict[str, str]:
         if self.provider_snapshot is None:
