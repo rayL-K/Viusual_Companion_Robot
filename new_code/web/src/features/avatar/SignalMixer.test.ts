@@ -101,4 +101,70 @@ describe("SignalMixer", () => {
     expect(thinking.eyeOpen).toBeLessThan(neutral.eyeOpen);
     expect(thinking.headY).toBeGreaterThan(neutral.headY);
   });
+
+  it("turns real speech energy rises into a short embodied beat", () => {
+    const quietMixer = new SignalMixer(() => 0.5);
+    const beatMixer = new SignalMixer(() => 0.5);
+    const speakingIntent = { ...neutralIntent, phase: "speaking" as const };
+    quietMixer.update({
+      elapsedMs: 0,
+      deltaMs: 16,
+      intent: speakingIntent,
+      audioRms: 0.05,
+      gaze: { x: 0.4, y: 0 },
+    });
+    beatMixer.update({
+      elapsedMs: 0,
+      deltaMs: 16,
+      intent: speakingIntent,
+      audioRms: 0.05,
+      gaze: { x: 0.4, y: 0 },
+    });
+    const quiet = quietMixer.update({
+      elapsedMs: 180,
+      deltaMs: 180,
+      intent: speakingIntent,
+      audioRms: 0.06,
+      gaze: { x: 0.4, y: 0 },
+    });
+    const beat = beatMixer.update({
+      elapsedMs: 180,
+      deltaMs: 180,
+      intent: speakingIntent,
+      audioRms: 0.72,
+      gaze: { x: 0.4, y: 0 },
+    });
+
+    expect(beat.headY).toBeLessThan(quiet.headY);
+    expect(beat.bodyX).toBeLessThan(quiet.bodyX);
+  });
+
+  it("adds irregular idle micro-saccades but yields to directed gaze", () => {
+    const samples = [0, 0, 0.25, 1, 0, 0, 0, 0];
+    const mixer = new SignalMixer(() => samples.shift() ?? 0);
+    mixer.update({
+      elapsedMs: 0,
+      deltaMs: 16,
+      intent: neutralIntent,
+      audioRms: 0,
+      gaze: { x: 0, y: 0 },
+    });
+    const saccade = mixer.update({
+      elapsedMs: 701,
+      deltaMs: 32,
+      intent: neutralIntent,
+      audioRms: 0,
+      gaze: { x: 0, y: 0 },
+    });
+    const directed = mixer.update({
+      elapsedMs: 720,
+      deltaMs: 32,
+      intent: neutralIntent,
+      audioRms: 0,
+      gaze: { x: 0.8, y: 0 },
+    });
+
+    expect(Math.abs(saccade.eyeX) + Math.abs(saccade.eyeY)).toBeGreaterThan(0);
+    expect(directed.eyeX).toBeGreaterThan(saccade.eyeX);
+  });
 });

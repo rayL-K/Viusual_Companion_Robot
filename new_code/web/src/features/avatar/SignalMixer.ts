@@ -76,6 +76,15 @@ const smooth = (current: number, target: number, deltaMs: number, responseMs: nu
 };
 
 export class SignalMixer {
+  private nextSaccadeAtMs = Number.NaN;
+  private saccadeUntilMs = 0;
+  private saccade = { x: 0, y: 0 };
+  private previousAudioRms = 0;
+  private speechBeat = 0;
+  private lastSpeechBeatAtMs = Number.NEGATIVE_INFINITY;
+
+  constructor(private readonly random: () => number = Math.random) {}
+
   private frame: AvatarFrame = {
     headX: 0,
     headY: 0,
@@ -112,15 +121,22 @@ export class SignalMixer {
     const microY = Math.sin(elapsedMs / 4_210 + 0.7) * (0.55 + tension * 0.35);
     const motionX = Math.sin(motionPhase) * motion.headX * tension;
     const motionY = Math.sin(motionPhase * 0.58 + 0.8) * motion.headY * tension;
-    const targetHeadX = clamp(gaze.x * 24 * gazeWeight + microX + motionX + reflex.headXOffset, -28, 28);
+    const speechBeat = this.updateSpeechBeat(elapsedMs, deltaMs, intent.phase, audioRms);
+    const saccade = this.updateSaccade(elapsedMs, gaze);
+    const targetHeadX = clamp(
+      gaze.x * 24 * gazeWeight + microX + motionX + reflex.headXOffset + speechBeat * 0.8,
+      -28,
+      28,
+    );
     const targetHeadY = clamp(
-      gaze.y * 15 * gazeWeight + microY + motionY + affect.dominance * 1.5 + reflex.headYOffset,
+      gaze.y * 15 * gazeWeight + microY + motionY + affect.dominance * 1.5
+        + reflex.headYOffset - speechBeat * 1.8,
       -18,
       18,
     );
     const targetBodyX = clamp(
       targetHeadX * 0.1 + Math.sin(motionPhase * 0.72) * motion.bodyX * (0.35 + tension)
-        + reflex.bodyXOffset,
+        + reflex.bodyXOffset - speechBeat * 0.55,
       -10,
       10,
     );
@@ -143,13 +159,68 @@ export class SignalMixer {
       headX: smooth(this.frame.headX, targetHeadX, deltaMs, postureResponseMs),
       headY: smooth(this.frame.headY, targetHeadY, deltaMs, postureResponseMs + 30),
       bodyX: smooth(this.frame.bodyX, targetBodyX, deltaMs, postureResponseMs + 80),
-      eyeX: smooth(this.frame.eyeX, clamp(gaze.x * gazeWeight, -1, 1), deltaMs, 90),
-      eyeY: smooth(this.frame.eyeY, clamp(gaze.y * gazeWeight, -1, 1), deltaMs, 90),
+      eyeX: smooth(this.frame.eyeX, clamp(gaze.x * gazeWeight + saccade.x, -1, 1), deltaMs, 38),
+      eyeY: smooth(this.frame.eyeY, clamp(gaze.y * gazeWeight + saccade.y, -1, 1), deltaMs, 42),
       eyeOpen: smooth(this.frame.eyeOpen, targetEyeOpen, deltaMs, 120),
       mouthOpen: smooth(this.frame.mouthOpen, clamp(audioRms * 2.4, 0, 1), deltaMs, 55),
       smile: smooth(this.frame.smile, targetSmile, deltaMs, 260),
       breath,
     };
     return this.frame;
+  }
+
+  private updateSpeechBeat(
+    elapsedMs: number,
+    deltaMs: number,
+    phase: AvatarRenderIntent["phase"],
+    audioRms: number,
+  ): number {
+    const risingEnergy = audioRms - this.previousAudioRms;
+    const beatReady = elapsedMs - this.lastSpeechBeatAtMs >= 150;
+    if (phase === "speaking" && audioRms >= 0.12 && risingEnergy >= 0.055 && beatReady) {
+      this.speechBeat = clamp(0.25 + risingEnergy * 1.8 + audioRms * 0.35, 0, 1);
+      this.lastSpeechBeatAtMs = elapsedMs;
+    } else {
+      this.speechBeat *= Math.exp(-Math.max(0, deltaMs) / 135);
+    }
+    if (phase !== "speaking") this.speechBeat = 0;
+    this.previousAudioRms = audioRms;
+    return this.speechBeat;
+  }
+
+  private updateSaccade(
+    elapsedMs: number,
+    gaze: { x: number; y: number },
+  ): { x: number; y: number } {
+    const userDirectedGaze = Math.hypot(gaze.x, gaze.y) > 0.075;
+    if (userDirectedGaze) {
+      this.saccadeUntilMs = 0;
+      this.saccade = { x: 0, y: 0 };
+      this.nextSaccadeAtMs = elapsedMs + this.saccadeIntervalMs();
+      return this.saccade;
+    }
+    if (!Number.isFinite(this.nextSaccadeAtMs)) {
+      this.nextSaccadeAtMs = elapsedMs + this.saccadeIntervalMs();
+    }
+    if (elapsedMs >= this.nextSaccadeAtMs) {
+      const direction = this.random() * Math.PI * 2;
+      const radius = 0.025 + this.random() * 0.07;
+      this.saccade = {
+        x: Math.cos(direction) * radius,
+        y: Math.sin(direction) * radius * 0.62,
+      };
+      this.saccadeUntilMs = elapsedMs + 85 + this.random() * 95;
+      this.nextSaccadeAtMs = this.saccadeUntilMs + this.saccadeIntervalMs();
+    } else if (elapsedMs >= this.saccadeUntilMs) {
+      this.saccade = { x: 0, y: 0 };
+    }
+    return this.saccade;
+  }
+
+  private saccadeIntervalMs(): number {
+    const sample = this.random();
+    if (sample < 0.58) return 700 + this.random() * 1_050;
+    if (sample < 0.9) return 1_750 + this.random() * 1_900;
+    return 3_650 + this.random() * 3_250;
   }
 }

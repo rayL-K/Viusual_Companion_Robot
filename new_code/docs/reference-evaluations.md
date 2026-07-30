@@ -1,8 +1,8 @@
 # 外部参考方案事实核查与架构决策
 
-> 核查日期：2026-07-13
+> 核查日期：2026-07-30
 >
-> 范围：`Soul-AILab/SoulX-Podcast`、`kimjammer/Neuro` 及 Neuro 明确链接的控制台仓库。
+> 范围：`Soul-AILab/SoulX-Podcast`、`kimjammer/Neuro`、`moeru-ai/airi` 及其明确链接的子项目。
 > 状态约定：本文区分“上游事实”“本项目现状”“候选试验”和“已验收结果”。候选试验不得写入已实现能力清单。
 
 ## 1. 决策摘要
@@ -11,8 +11,9 @@
 |---|---|---|---|
 | SoulX-Podcast | 中英 TTS、zero-shot 声音克隆、长文本/多说话人、副语言标签 | 当前无流式推理；CUDA/vLLM 依赖；没有 RK3588/RKNN 路径 | **否决进入默认实时主链路**；仅允许在独立 x86_64 NVIDIA 主机上做隔离的高质量 GPU sidecar 试验 |
 | Neuro | VTube Studio 动作队列、能力枚举、人工动作控制台的交互模式 | VTube Studio、Steam、虚拟音频线、Windows/NVIDIA 桌面运行时、全局共享 Signals | **不引入其运行时或代码架构**；离散动作思想已 clean-room 落为浏览器 `AvatarActionScheduler` 最小纵切片，仍需真机性能与全资产验收 |
+| AIRI | Web/桌面/移动共享领域包、来源分桶的即时上下文、控制面/高频数据面分离、VAD Worklet、Live2D 资产工具和 Provider 路由 | Vue/Electron/Capacitor 整体迁移；仍处于设计中的通用插件平台；当前近乎空壳的 `memory-pgvector`；计费、游戏和桌面专用模块 | **选择性 clean-room 吸收，不整体迁移**；优先吸收上下文生命周期、模态能力声明和 Live2D 验收方法，保留 Anima 的 Python 实时内核与轻量 Preact 客户端 |
 
-这两个结论不改变 Anima v0.0.1 的当前边界：ELF2 可作为受控测试服务器，但 SoulX 仍不进入默认链路；所有公网能力必须经过独立发布门禁。
+这些结论不改变 Anima v0.0.1 的当前边界：ELF2 可作为受控测试服务器，但 SoulX 仍不进入默认链路；所有公网能力必须经过独立发布门禁。
 
 ## 2. 证据等级
 
@@ -323,7 +324,51 @@ flowchart LR
 
 ---
 
-## 5. 最终架构约束
+## 5. AIRI
+
+### 5.1 固定版本与事实边界
+
+- GitHub 仓库：<https://github.com/moeru-ai/airi>
+- 本次核查 commit：[`269de5b9e1c1e2bcb384cf9b88ba21ed778f54a7`](https://github.com/moeru-ai/airi/tree/269de5b9e1c1e2bcb384cf9b88ba21ed778f54a7)
+- commit 时间：2026-07-30；
+- 代码许可证：[MIT](https://github.com/moeru-ai/airi/blob/269de5b9e1c1e2bcb384cf9b88ba21ed778f54a7/LICENSE)。
+
+AIRI 是成熟度明显高于普通演示项目的多应用 monorepo，但“仓库规模大、Release 多”不等于其中每个子系统都已生产完成。例如该 commit 的 `packages/memory-pgvector` 仍主要是模块连接骨架；插件平台文档也明确把若干生命周期和跨语言远程插件列为后续工作。因此只依据真实代码采用能力，不能依据 README 能力列表替换 Anima 已经通过测试的模块。
+
+### 5.2 值得吸收的设计
+
+1. **即时上下文按来源分桶。** `core-agent` 的 context registry 支持 `replace-self` 和 `append-self`：摄像头、屏幕、位置等“当前状态”覆盖自己的旧值，对话事件或观察日志才追加。这比把所有模态文本堆进聊天历史更准确，也能稳定控制 prompt 大小。
+2. **近期对话与反应成对保留。** AIRI 的 compaction 会保留最近 turn/reaction，对较早窗口生成摘要。Anima 应在现有 RAG 长期记忆之外保留独立的短期情境层，不能让向量检索代替连续对话。
+3. **控制面与高频数据面职责分离。** AIRI 插件设计把配置、权限、能力声明与音频、视觉等高频流分开。Anima 当前同一 WebSocket 可以继续复用，但协议命名空间、背压预算和权限必须按这两个平面分治。
+4. **浏览器 VAD 放入 Worklet/Worker。** AIRI Web 与 Pocket 的音频采集把实时检测移出 UI 主线程，方向与 Anima 的视频通话式体验一致；后续不能把 VAD、重采样或口型分析重新塞回渲染循环。
+5. **Live2D 工具链以模型能力为准。** AIRI 已拆出眼神跟随、动作管理、表达混合、模型适配、ZIP/OPFS 校验和基于 `wlipsync` 的音素口型。Anima 可借鉴其验收维度，但只有当前模型暴露对应参数时才启用；不为不存在的 AEIOU 参数增加无效依赖。
+6. **多端共享领域能力、外壳按平台拆分。** AIRI 的 Web、Pocket 与 Desktop 共享包，但保留各自权限和原生桥。Anima 继续以响应式 Web 为当前主入口，未来 App 复用协议与领域类型，而不是把浏览器页面原封不动包一层。
+
+### 5.3 不整体引入 AIRI 的原因
+
+- AIRI 主前端是 Vue/Pinia/UnoCSS，桌面使用 Electron，移动端使用 Capacitor；Anima 当前 Preact 客户端更小，且已经具备 60 FPS Live2D、命中区域交互、动作调度和移动端资源档位。整体迁移会制造双框架与重复状态源。
+- AIRI 通用插件 SDK 涵盖宿主、远程传输、UI 注入、权限和多设备编排。Anima v0.0.1 当前只需要稳定的 ASR/Vision/LLM/TTS Port；提前复制完整插件平台会扩大攻击面和维护面。
+- AIRI 的服务器包含计费、Stripe、游戏、桌面桥和大量运营模块。Anima 只吸收清晰的路由/服务/事务边界，不复制未进入当前产品范围的目录。
+- AIRI 的 pgvector 模块在固定 commit 中不足以替换 Anima 已有的租户命名空间、混合检索、摄取边界和 prompt 注入防护。
+- AIRI 的 Live2D Vue 组件不能直接用于 Preact；MIT 许可允许参考和复用，但若未来复制实质代码，必须记录来源并保留许可证声明，模型和美术资产另行核权。
+
+### 5.4 Anima 的落地决策
+
+| AIRI 思想 | Anima 对应落点 | 决策 |
+|---|---|---|
+| source-scoped context registry | `orchestration` 的短期感知上下文层 | 引入 `replace`/`append` 生命周期；视觉语义默认 `replace`，不写死到聊天历史 |
+| context compaction | 短期对话窗口 + 长期 RAG | 保留最近成对轮次；摘要与长期记忆分开存储和追踪 |
+| capability model | 现有 `ProviderRegistry` | 扩充 health、data policy、streaming/cancel 能力，不复制插件宿主 |
+| control/data planes | `/v2` REST + realtime WS 命名空间 | 逻辑分离、共享认证；音视频仍使用有界背压 |
+| VAD worker | 浏览器 MediaSession | 作为语音低时延阶段验收项，不改变服务端 ASR Port |
+| Live2D eye/expression/lipsync tools | `SignalMixer`、`AvatarActionScheduler`、模型能力清单 | 已以 clean-room 方式加入真实语音能量峰驱动的头身节拍和非固定周期微扫视；当前 RMS 口型保留，模型支持音素参数后再评估 `wlipsync` |
+| Web/Pocket/Desktop shells | Web 主入口 + 未来 App | 共享协议和 API SDK，不共享平台权限实现 |
+
+这意味着 AIRI 会影响 Anima 的内部边界和验收方法，但不会以 vendored 源码、第二套前端框架或一批复制目录的形式进入仓库。每次引入都必须删除被替换实现，避免“参考方案”和“原方案”长期并存。
+
+---
+
+## 6. 最终架构约束
 
 1. **实时路径优先：**高自然度模型不能以牺牲打断、首音频和稳定性为代价进入默认链路；
 2. **算力隔离：**GPU 高质量 TTS 必须是可关闭的 sidecar，不与 ELF2 核心服务共进程；
