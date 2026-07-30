@@ -1,4 +1,9 @@
-# Anima v0.0.1：ELF2 / Linux Server 安全部署
+# Anima v0.0.1：ELF2 历史部署参考
+
+> **Legacy/reference：不是新部署主路径。** 当前通用服务器、systemd、密钥和备份要求以[通用 Linux Server 部署与迁移](./portable-server-migration.md)为准。本页仅用于理解既有 ELF2 历史包和恢复旧测试节点；不要把 `/home/wenkang`、板端共享 venv 或匿名验证配置复制到新服务器。
+>
+> 本页后续命令对应已生成的 ELF2 历史包/当时 commit；当前 `deploy/systemd`
+> 是 `/opt/anima` 通用服务器模板，不应交给旧 `start-elf2.sh` 安装。
 
 ELF2（Ubuntu 22.04 aarch64 / RK3588）目前作为 Anima 的边缘实时服务器：浏览器只承担 Live2D、摄像头预览和音频采集；语音、视觉语义、对话、记忆、TTS 与同源 Web 入口都运行在板端。公网入口固定为 `https://anima.veyralux.org`，由专用 Cloudflare Tunnel 回源到 `127.0.0.1:8875`。
 

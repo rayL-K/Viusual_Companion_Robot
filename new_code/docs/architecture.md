@@ -1,6 +1,6 @@
 # Anima v0.0.1 系统架构
 
-> 本文以 `new_code/` 当前实现为准。ELF2（RK3588）现在可作为 Anima 的单机测试服务器；产品入口是 `https://anima.veyralux.org`。未来迁移到普通低端 Linux Server 时，浏览器/App 协议、用户数据和模态 Port 不变。
+> 本文以 `new_code/` 当前实现为准。产品入口是 `https://anima.veyralux.org`，生产目标为可替换的 Linux Server。ELF2 只保留历史验证和可复现部署资料，不再是主运行平台。
 
 ## 1. 产品边界
 
@@ -8,8 +8,8 @@ Anima 是一个“浏览器/App 作为交互终端，Linux 主机作为会话与
 
 - **客户端**：直接呈现 Live2D、本地摄像头预览、麦克风采集、音频播放和触控。
 - **Gateway**：拥有会话代际、打断、上下文组装、供应商调度和用户数据边界。
-- **模态运行时**：ASR、视觉、LLM、TTS 通过稳定 Port 接入。当前仓库实际接入 DeepSeek 云 LLM、本地 sherpa ASR/TTS 和 loopback `local-vlm`；其他云 Provider 仍是后续 Adapter 目标。
-- **部署主机**：ELF2 是当前测试节点，不是协议中的隐式前提。之后可用 aarch64/x86_64 Linux Server 替换。
+- **模态运行时**：ASR、视觉、LLM、TTS 通过稳定 Port 接入。生产优先选择支持取消、流式返回和明确数据策略的 API Provider；本地模型保留为可选 Adapter，而非默认前提。
+- **部署主机**：普通 x86_64/aarch64 Linux Server 承担认证、编排、记忆、RAG、Provider Broker 和同源 Web；不要求服务器具有本地 GPU。
 
 ## 2. 运行拓扑
 
@@ -23,26 +23,30 @@ flowchart LR
 
   Edge["Cloudflare Tunnel\nHTTPS / WSS"]
 
-  subgraph Host["ELF2 现在 / 低端 Linux Server 未来"]
+  subgraph Host["Anima Linux Server"]
     Gateway["Anima Gateway\nSession / Context / Orchestration"]
-    ASR["Streaming ASR"]
-    Vision["Perception / VLM"]
+    Broker["Provider Broker\nCatalog / Policy / Health / Fallback"]
     Memory["Per User / Anima Store + RAG"]
-    TTS["Streaming TTS"]
   end
 
-  LLM["LLM Provider"]
+  subgraph Providers["Server-selected local / cloud Providers"]
+    ASR["Streaming ASR API"]
+    Vision["Vision API"]
+    LLM["Streaming LLM API"]
+    TTS["Streaming TTS API"]
+  end
 
   Media <--> Edge <--> Gateway
-  Gateway --> ASR
-  Gateway --> Vision
   Gateway <--> Memory
-  Gateway <--> LLM
-  Gateway --> TTS --> Gateway
+  Gateway <--> Broker
+  Broker <--> ASR
+  Broker <--> Vision
+  Broker <--> LLM
+  Broker <--> TTS
   Gateway --> Edge --> Playback --> Live2D
 ```
 
-公网只暴露 Cloudflare 管理的 HTTPS/WSS 入口。Gateway 默认仅监听 `127.0.0.1:8875`；候选发布实例仅监听 `127.0.0.1:8876`。ASR/TTS/VLM 端口不向公网路由。
+公网只暴露反向代理或 Cloudflare 管理的 HTTPS/WSS 入口。Gateway 默认仅监听 loopback；候选发布实例使用独立 loopback 端口。Provider 密钥、真实上游地址和本地 sidecar 端口不向客户端或公网暴露。
 
 ## 3. 稳定契约与供应商解耦
 
@@ -50,12 +54,12 @@ flowchart LR
 
 | 模态 | 稳定能力 | 当前仓库实现 | 尚未实现的替换方向（目标） |
 | --- | --- | --- | --- |
-| ASR | `StreamingAsrProvider` | sherpa-onnx streaming；可显式禁用 | 云实时 ASR、其他本地适配器 |
-| Vision | `VisionProvider` | 可选的同机 `local-vlm` HTTP；可显式禁用 | 结构化快路、云 VLM、RKNN 快路 |
-| LLM | `ChatProvider` | DeepSeek 非思考 SSE | 其他流式 LLM 接口 |
-| TTS | `StreamingTtsProvider` | sherpa-onnx 本地 TTS | 云 TTS、其他本地适配器 |
+| ASR | `StreamingAsrProvider` | sherpa-onnx streaming；可显式禁用 | **优先补齐云实时 ASR API**，本地 sherpa 作为隐私/降本选项 |
+| Vision | `VisionProvider` | 可选的同机 `local-vlm` HTTP；可显式禁用 | **优先补齐云视觉 API**，再接结构化快路或本地 VLM |
+| LLM | `ChatProvider` | DeepSeek 非思考 SSE | 增加 OpenAI-compatible 与其他流式 LLM Adapter |
+| TTS | `StreamingTtsProvider` | sherpa-onnx 本地 TTS | **优先补齐流式云 TTS API**，本地音色作为可选方案 |
 
-组合根根据服务级配置和 Anima 设置选择 Adapter。供应商 URL、密钥、数据库路径不由客户端 payload 指定；一轮对话使用固定的 Provider Registry snapshot，中途不切换。
+组合根根据服务级 Provider Catalog 和 Anima 的已授权别名选择 Adapter。Catalog 借鉴 AIRI 的“用户只看到能力别名、运维配置拥有真实路由”边界：供应商 URL、密钥、并发池和回退链只存在服务器侧；客户端只能选择被公开且已启用的别名。一轮对话冻结不可变 Provider snapshot，中途不切换；失败只按服务器策略进入下一上游，不能由用户 payload 注入地址或密钥。
 
 Python 包/导入路径 `veyrasoul` 与 `VEYRASOUL_*` 环境变量仅作为已存在的内部兼容名；新部署使用 `ANIMA_*`。这些标识符不是对外产品名，也不代表另一个产品版本。
 
@@ -118,19 +122,18 @@ Live2D SDK 许可和具体模型的 Web 托管/再分发授权是两件事。公
 
 日志不记录 API key、Authorization、prompt/回复正文、原始音视频、`Anima.md` 或用户绝对路径。详细口径见 [latency-slo.md](./latency-slo.md)。
 
-## 10. 可迁移部署
+## 10. 服务器部署
 
-ELF2 和低端 Linux Server 使用相同目录合同：
+Linux Server 使用与硬件无关的目录合同：
 
 ```text
-/home/wenkang/anima/source                 # 精简待发布输入（源码、web/dist、脚本、unit）
-/home/wenkang/anima/.venv                  # ELF2 共享 Linux 运行时，不进入 release
-/home/wenkang/anima/releases/<release-id>  # 只读源码、web/dist 与部署工具
-/home/wenkang/anima/current               # 原子指向活跃 release
-/home/wenkang/anima/candidate             # 仅 loopback 候选实例
-/opt/anima/models                          # 共享只读模型，不进入 release
-/etc/anima/anima.env                       # 0600，主机级配置/引用的密钥
-/var/lib/anima                             # 用户数据与发布状态
+/opt/anima/releases/<release-id>  # 只读源码、web/dist 与部署工具
+/opt/anima/current                # 原子指向活跃 release
+/opt/anima/candidate              # 仅 loopback 候选实例
+/opt/anima/models                 # 可选本地模型，不进入 release
+/etc/anima/anima.env              # 非敏感运行参数，root:anima 0640
+/etc/anima/credentials/           # Provider 密钥或 systemd credentials，禁止进仓库
+/var/lib/anima                    # 用户数据、目录库、RAG 与发布状态
 ```
 
-发布严格按 `stage -> candidate health -> atomic activate -> health -> tunnel`。候选实例失败不改变当前服务；激活失败恢复上一 release。发布器只管理 `anima*.service` 和 `/home/wenkang/anima` 命名空间，不停止、删除或覆盖主机上的其他服务。Cloudflare remote-config ingress 固定把 `anima.veyralux.org` 转发到 loopback `8875`，本机 Tunnel unit 只持有专用 token，不用 `--url` 覆盖控制面配置。`/home/wenkang/anima/data` 等旧路径必须在首次激活前显式迁移到 `/var/lib/anima`；脚本不会静默搬运。未来的独立 Linux Server 可把同一结构迁到 `/opt/anima` 并改用专用服务用户。
+发布严格按 `stage -> candidate health -> atomic activate -> health -> ingress`。候选实例失败不改变当前服务；激活失败恢复上一 release。服务使用专用低权限账号，Provider 出站仅允许 Catalog 中的 HTTPS 主机；密钥通过 systemd credential、主机 Secret Store 或 root-only 文件注入，不进入环境模板、日志、数据库或浏览器。多实例上线前必须把认证、租约、限流和任务协调从单机 SQLite/内存实现迁到具有明确一致性语义的共享基础设施。

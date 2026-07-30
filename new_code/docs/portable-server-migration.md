@@ -1,6 +1,6 @@
-# Anima v0.0.1：从 ELF2 到低配 Linux Server 的可执行迁移
+# Anima v0.0.1：通用 Linux Server 部署与迁移
 
-本方案将 ELF2 看作当前的 **边缘实时服务器**，而不是客户端协议的一部分。迁移的目标不是复制一块板子的全部环境，而是把同一套 Gateway、角色资源、Provider 配置与经验证的数据快照，迁到一台可替换的 Ubuntu 主机；Web 与未来 App 仍是 thin client。
+本文是 Anima 的**生产部署主路径**。目标主机是可替换的 Ubuntu 22.04/24.04 x86_64 或 aarch64 Server；Web 与未来 App 只连接同源 HTTPS/WSS Gateway，不感知服务器型号。ELF2 不再是部署前提，其旧流程仅见[历史部署参考](./deployment-elf2.md)。
 
 > 本文只陈述当前仓库实际实现的能力。DeepSeek 是唯一已接入的 LLM；TTS 当前必须是本地 `sherpa-onnx`；ASR 是可选的本地 `sherpa-onnx` streaming Zipformer；视觉是可选的、独立运行并且仅允许 loopback 回源的 `local-vlm`。云 ASR、云 TTS、云 VLM 都只是 `ports` 后的下一步适配目标，**尚不能靠改环境变量启用**。
 >
@@ -17,7 +17,7 @@
           Cloudflare Tunnel（可换宿主）
                  │
                  ▼
-  Anima Gateway（ELF2 或 Ubuntu x86_64/aarch64）
+  Anima Gateway（Ubuntu x86_64/aarch64）
   ├─ 会话代际、取消、背压、准入、TurnTrace
   ├─ 每 User / Anima 独立 state、persona、RAG/记忆
   └─ Provider ports：ASR | Chat | TTS | Vision
@@ -28,7 +28,7 @@
   sherpa ASR（可选）
 ```
 
-因此，浏览器/App 只需要稳定域名、HTTPS 与实时协议；不需要知道底层是 RK3588、x86_64 VPS 还是后续多节点服务。Live2D 模型始终由客户端加载和渲染，不把角色视频流推到服务器，迁移不会牺牲前端 60 FPS 的目标。
+因此，浏览器/App 只需要稳定域名、HTTPS 与实时协议。Live2D 始终在客户端渲染；Gateway、模型 worker 和第三方 API Provider 都可以在不改客户端协议的前提下替换。
 
 ## 2. 当前能力与真实边界
 
@@ -70,9 +70,9 @@
 
 生产服务应以专用无登录用户运行；发布、模型、数据、密钥各自有最小可写权限。未来改成容器或编排环境时保持这四个独立卷/secret，不把它们重新混入镜像。
 
-## 4. 迁移前清单（在 ELF2 上完成）
+## 4. 首次部署或迁移前清单
 
-1. **冻结可变状态**：停止 Anima 的写入流量或进入维护窗口；不要停止、删除或改写旧项目服务。
+1. **首次部署**直接建立空数据根；**已有主机迁移**才需要冻结写流量进入维护窗口。
 2. **记录来源版本**：记录 Git commit、release SHA-256、当前 Provider 组合、模型目录与模型 hash；记录时不输出 `.env` 内容或 token。
 3. **生成一致性数据库备份**：对每个 SQLite 数据库先 checkpoint，再使用 SQLite `.backup` 生成新文件；不要直接拷贝 WAL 正在写入的 `*.db`。
 4. **校验备份**：在副本上执行 `PRAGMA quick_check;`，并计算 `sha256sum`。保留原始数据为只读，直到新主机长时验收通过。
@@ -133,6 +133,78 @@ anima-portable-preflight \
    再从独立的 secret store 写入 LLM key、admission secret、telemetry HMAC key、Turnstile key/secret；它们不应出现在该文档、命令历史、release、日志或 Git。
 4. 绑定 Gateway 到 `127.0.0.1:8875`，先通过 candidate 端口、`/v2/health`、真实文本/TTS、Live2D 资源、RAG 读取与恢复的用户数据抽样，再切生产入口。
 5. 若开启 ASR，验证 audio partial/final、打断与 16 kHz PCM 背压；若开启视觉，验证摄像头预览仍保持浏览器端流畅且语义 scheduler 只在 latest-only 采样后回填上下文。
+
+### 5.1 systemd 主路径
+
+仓库中的 `deploy/systemd/anima.service`、`anima-candidate.service` 与
+`anima-cloudflared.service` 是通用服务器模板，路径合同如下：
+
+```text
+/opt/anima/releases/<release-id>   root-owned 不可变 release
+/opt/anima/current                 原子指向 active release
+/opt/anima/candidate               原子指向候选 release
+/opt/anima/runtime/.venv           与主机 ABI 匹配的共享运行时
+/opt/anima/models                  root-owned 只读模型
+/var/lib/anima                     唯一生产可变数据根
+/etc/anima/anima.env               非敏感配置，root:root 0640
+/etc/anima/anima.secret.env        secret env credential，root:root 0600
+```
+
+安装前先审阅 unit，并执行：
+
+```bash
+sudo install -o root -g root -m 0644 deploy/systemd/anima*.service /etc/systemd/system/
+sudo install -o root -g root -m 0640 deploy/anima.env.example /etc/anima/anima.env
+sudo install -o root -g root -m 0600 deploy/anima.secret.env.example /etc/anima/anima.secret.env
+sudo systemctl daemon-reload
+sudo systemd-analyze verify /etc/systemd/system/anima*.service
+sudo systemctl enable --now anima.service anima-cloudflared.service
+```
+
+`anima.service` 通过 `LoadCredential=` 将 secret env 投递到私有
+`/run/credentials`，不从用户 home、release 或命令行读取密钥。若平台提供
+Vault、云 Secret Manager 或 systemd encrypted credentials，应由部署作业原子生成同一
+credential 内容；禁止在 CI 日志中展开 secret。
+
+反向代理部署可以替代 Cloudflare Tunnel，但必须保持同源 `/v2/*` 与
+`/v2/realtime`、WebSocket upgrade、精确 Origin allowlist、请求体/连接速率上限和
+TLS。Gateway 仍只监听 loopback 或受控私网，不直接绑定公网地址。
+
+### 5.2 Provider 出站与密钥轮换
+
+- 主机/容器的 egress firewall 或代理只允许已启用 Provider 的固定 HTTPS 域名、
+  OIDC issuer/JWKS/token endpoint、Cloudflare edge、DNS/NTP 和受控软件源；
+  `local-vlm` 只能访问 loopback。禁止让 Anima 设置、RAG 文档或用户输入决定目标 URL。
+- API key、OIDC/Fernet、Admission/HMAC、Turnstile 与 Tunnel token 使用不同密钥域；
+  不复用、不写数据库、不进入备份、release、浏览器或崩溃转储。
+- 每个 Provider 至少支持“新旧短暂并存 → candidate 验证 → active 切换 → 撤销旧值”
+  的轮换顺序。轮换后验证旧 key 已失效；紧急泄漏时先撤销、隔离日志和审计，再恢复服务。
+- 建议 90 天常规轮换；人员离组、供应商告警、仓库/日志误传时立即轮换。Fernet 或会话签名
+  密钥的轮换会影响未完成登录/现有会话，必须明确维护窗口，不能静默复制旧 secret。
+
+### 5.3 日志、审计和脱敏
+
+生产日志仅保留 request/trace ID、租户的不可逆伪名、Provider/模型标识、状态码、
+分阶段耗时、字节数与错误类别。默认禁止记录：
+
+- Authorization、Cookie、CSRF、API key、Tunnel token、Fernet/HMAC；
+- prompt、回复正文、Anima.md、RAG 文档、原始音频/图像和向量；
+- email、外部 subject、绝对用户路径、完整 Provider 请求/响应。
+
+反向代理、systemd journal、APM 与 Provider SDK 必须使用同一脱敏规则；验证时用 canary
+secret 扫描日志，而不是拿真实 key 做测试。日志有大小、保留期和访问审计，不能让磁盘被
+无限写满。
+
+### 5.4 备份、恢复与多实例前置条件
+
+- 对 SQLite 使用 Online Backup API/`.backup` 或受控 `VACUUM INTO`；先 checkpoint，
+  再对副本执行 `PRAGMA quick_check` 和 SHA-256。禁止热拷贝单个 `.db` 丢失 WAL。
+- 每日加密增量、定期完整备份到不同故障域；备份 DEK 与在线 secret 分离。至少每月在
+  隔离环境恢复演练，并记录实际 RPO/RTO。release、模型和可重建缓存不混入用户数据备份。
+- 删除/保留策略必须覆盖在线数据、对象存储、日志和备份；恢复前重新校验租户归属与 schema。
+- **在完成共享身份/会话、跨实例 rate limit、WebSocket 粘性路由、集中队列/观测以及
+  User/Anima 单写者或数据库迁移前，只允许运行一个 Gateway 写实例。** 不得把 SQLite/WAL
+  放到 NFS/SMB 后让多个实例并发写。多实例 candidate 只能使用隔离数据根。
 
 ## 6. Cloudflare Tunnel 无停机迁移
 

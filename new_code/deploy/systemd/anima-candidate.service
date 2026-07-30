@@ -2,7 +2,8 @@
 Description=Anima v0.0.1 candidate health-check instance
 After=network-online.target
 Wants=network-online.target
-ConditionPathIsDirectory=/home/wenkang/anima/candidate/backend
+ConditionPathIsDirectory=/opt/anima/candidate/backend
+ConditionPathIsDirectory=/opt/anima/runtime/.venv
 
 [Service]
 Type=simple
@@ -35,9 +36,6 @@ CapabilityBoundingSet=
 ReadWritePaths=/var/lib/anima-candidate /var/cache/anima-candidate /run/anima-candidate
 ReadOnlyPaths=/opt/anima/candidate /opt/anima/runtime/.venv /opt/anima/models
 InaccessiblePaths=/var/lib/anima /var/cache/anima /run/anima
-BindReadOnlyPaths=/home/wenkang/anima/candidate:/opt/anima/candidate
-BindReadOnlyPaths=/home/wenkang/anima/.venv:/opt/anima/runtime/.venv
-BindReadOnlyPaths=/home/wenkang/anima/models:/opt/anima/models
 StateDirectory=anima-candidate
 CacheDirectory=anima-candidate
 RuntimeDirectory=anima-candidate

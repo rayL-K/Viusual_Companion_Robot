@@ -119,10 +119,12 @@ Assert-NoMatch -Text $ActiveUnit -Pattern 'current/backend/\.venv' -Message "Act
 Assert-NoMatch -Text $CandidateUnit -Pattern 'candidate/backend/\.venv' -Message "Candidate unit must not require a per-release venv."
 Assert-Match -Text $ActiveUnit -Pattern 'User=anima-gateway' -Message "Active Gateway must use its dedicated service user."
 Assert-Match -Text $CandidateUnit -Pattern 'User=anima-candidate' -Message "Candidate Gateway must use its own dedicated service user."
-Assert-Match -Text $ActiveUnit -Pattern 'BindReadOnlyPaths=/home/wenkang/anima/current:/opt/anima/current' -Message "Active release must be mounted read-only into the service sandbox."
-Assert-Match -Text $CandidateUnit -Pattern 'BindReadOnlyPaths=/home/wenkang/anima/candidate:/opt/anima/candidate' -Message "Candidate release must be mounted read-only into its sandbox."
-Assert-Match -Text $ActiveUnit -Pattern 'BindReadOnlyPaths=/home/wenkang/anima/models:/opt/anima/models' -Message "Active model assets must be a read-only bind mount."
-Assert-Match -Text $CandidateUnit -Pattern 'BindReadOnlyPaths=/home/wenkang/anima/models:/opt/anima/models' -Message "Candidate model assets must be a read-only bind mount."
+Assert-Match -Text $ActiveUnit -Pattern 'ConditionPathIsDirectory=/opt/anima/current/backend' -Message "Active unit must use the portable server release path."
+Assert-Match -Text $CandidateUnit -Pattern 'ConditionPathIsDirectory=/opt/anima/candidate/backend' -Message "Candidate unit must use the portable server candidate path."
+Assert-NoMatch -Text $ActiveUnit -Pattern '/home/wenkang' -Message "Primary server unit must not depend on an ELF2 home directory."
+Assert-NoMatch -Text $CandidateUnit -Pattern '/home/wenkang' -Message "Primary candidate unit must not depend on an ELF2 home directory."
+Assert-Match -Text $ActiveUnit -Pattern 'LoadCredential=anima-secret-env:/etc/anima/anima\.secret\.env' -Message "Active unit must inject secrets through a systemd credential."
+Assert-Match -Text $ActiveUnit -Pattern 'EnvironmentFile=/run/credentials/anima\.service/anima-secret-env' -Message "Active unit must read the private credential environment."
 Assert-Match -Text $CandidateUnit -Pattern 'InaccessiblePaths=/var/lib/anima /var/cache/anima /run/anima' -Message "Candidate must not see production state."
 Assert-Match -Text $ActiveUnit -Pattern 'ANIMA_DATA_ROOT=/var/lib/anima' -Message "Active data must live outside the read-only home tree."
 Assert-Match -Text $CandidateUnit -Pattern 'ANIMA_DATA_ROOT=/var/lib/anima-candidate' -Message "Candidate data must be isolated from production."
@@ -146,19 +148,28 @@ Assert-Match -Text $DeployText -Pattern 'releaseDigest' -Message "Health accepta
 Assert-Match -Text $DeployText -Pattern 'payload\.get\("service"\) == "anima-gateway"' -Message "Health acceptance must require the Anima gateway identity."
 
 $EnvTemplate = Get-Content -LiteralPath (Join-Path $Root "deploy\anima.env.example") -Raw -Encoding UTF8
-Assert-Match -Text $EnvTemplate -Pattern '(?m)^ANIMA_LLM_API_KEY=\r?$' -Message "The environment template must leave the API key empty."
-Assert-Match -Text $EnvTemplate -Pattern '(?m)^ANIMA_ADMISSION_SECRET=\r?$' -Message "The environment template must leave the admission secret empty."
-Assert-Match -Text $EnvTemplate -Pattern '(?m)^ANIMA_TELEMETRY_HMAC_KEY=\r?$' -Message "The environment template must leave the telemetry HMAC key empty."
 Assert-Match -Text $EnvTemplate -Pattern '(?m)^ANIMA_TURNSTILE_SITE_KEY=\r?$' -Message "The environment template must leave the Turnstile site key empty."
-Assert-Match -Text $EnvTemplate -Pattern '(?m)^ANIMA_TURNSTILE_SECRET=\r?$' -Message "The environment template must leave the Turnstile secret empty."
 Assert-Match -Text $EnvTemplate -Pattern '(?m)^ANIMA_ADMISSION_TTL_SECONDS=86400\r?$' -Message "The environment template must use the recommended admission TTL."
 Assert-Match -Text $EnvTemplate -Pattern '(?m)^ANIMA_DEVICE_TTL_SECONDS=2592000\r?$' -Message "The environment template must use the 30-day device identity TTL."
-Assert-Match -Text $EnvTemplate -Pattern '(?m)^ANIMA_TOC_ENABLED=false\r?$' -Message "The ELF2 template must explicitly select non-ToC validation mode."
-Assert-Match -Text $EnvTemplate -Pattern '(?m)^ANIMA_REALTIME_ALLOW_ANONYMOUS=true\r?$' -Message "The current ELF2 validation template must explicitly enable anonymous realtime."
+Assert-Match -Text $EnvTemplate -Pattern '(?m)^ANIMA_TOC_ENABLED=true\r?$' -Message "The primary server template must enable fail-closed ToC mode."
+Assert-Match -Text $EnvTemplate -Pattern '(?m)^ANIMA_REALTIME_ALLOW_ANONYMOUS=false\r?$' -Message "The primary server template must disable anonymous realtime."
+Assert-Match -Text $EnvTemplate -Pattern '(?m)^ANIMA_REALTIME_ALLOWED_ORIGINS=https://anima\.veyralux\.org\r?$' -Message "The primary server template must define the exact browser Origin."
 Assert-Match -Text $EnvTemplate -Pattern '(?m)^ANIMA_AUTH_DATABASE=/var/lib/anima/auth\.sqlite3\r?$' -Message "The ToC auth database must live in the writable production state directory."
-Assert-Match -Text $EnvTemplate -Pattern '(?m)^ANIMA_LOGIN_FERNET_KEY=\r?$' -Message "The environment template must leave the login-state encryption key empty."
+Assert-NoMatch -Text $EnvTemplate -Pattern '(?m)^ANIMA_(?:LLM_API_KEY|ADMISSION_SECRET|TELEMETRY_HMAC_KEY|TURNSTILE_SECRET|LOGIN_FERNET_KEY)=' -Message "The non-secret environment template must not contain secret fields."
 Assert-NoMatch -Text $EnvTemplate -Pattern '(?i)sk-[A-Za-z0-9]|replace-me|password\s*=' -Message "The environment template contains a secret-like placeholder or credential."
 Assert-NoMatch -Text $EnvTemplate -Pattern '(?m)^\s*(ANIMA_HOST|ANIMA_PORT|ANIMA_WEB_DIST|ANIMA_DATA_ROOT|ANIMA_MEMORY_PATH|ANIMA_PERSONA_PATH|ANIMA_ADMISSION_REQUIRED|ANIMA_ALLOWED_ORIGINS|PYTHONPATH)\s*=' -Message "The environment template must not define deployment-reserved keys."
+
+$SecretEnvTemplate = Get-Content -LiteralPath (Join-Path $Root "deploy\anima.secret.env.example") -Raw -Encoding UTF8
+foreach ($SecretName in @(
+    "ANIMA_LLM_API_KEY",
+    "ANIMA_ADMISSION_SECRET",
+    "ANIMA_TELEMETRY_HMAC_KEY",
+    "ANIMA_TURNSTILE_SECRET",
+    "ANIMA_LOGIN_FERNET_KEY"
+)) {
+    Assert-Match -Text $SecretEnvTemplate -Pattern "(?m)^$SecretName=`r?$" -Message "$SecretName must be listed empty in the secret credential template."
+}
+Assert-NoMatch -Text $SecretEnvTemplate -Pattern '(?i)sk-[A-Za-z0-9]|replace-me|password\s*=' -Message "The secret credential template contains a credential-like value."
 
 $BenchmarkOutput = Join-Path (
     [System.IO.Path]::GetTempPath()

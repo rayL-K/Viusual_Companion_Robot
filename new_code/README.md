@@ -1,6 +1,6 @@
 # Anima v0.0.1
 
-`new_code/` 是 Anima 的独立产品代码：面向浏览器与后续 App 的低时延多模态虚拟陪伴系统。产品以 **Anima v0.0.1** 对外发布；ELF2 目前作为开发和测试服务器，后续可将同一套服务迁移到低端 Linux 服务器，而客户端无需随硬件迁移重写。
+`new_code/` 是 Anima 的独立产品代码：面向浏览器与后续 App 的低时延多模态虚拟陪伴系统。产品以 **Anima v0.0.1** 对外发布；生产主路径是可替换的 Linux Server 与 API Provider，ELF2 仅保留为兼容性和边缘实验节点。
 
 ## 当前架构
 
@@ -10,7 +10,7 @@ Web / App
   └─ HTTPS + WSS
           │
           ▼
-Anima Gateway（当前 ELF2，后续任意 Linux Server）
+Anima Gateway（Ubuntu x86_64 / aarch64）
   ├─ 会话代际、打断、背压、TurnTrace
   ├─ Anima.md / 用户设置 / 独立数据目录
   ├─ 上下文预算、短期对话、长期记忆与 RAG
@@ -22,7 +22,7 @@ Anima Gateway（当前 ELF2，后续任意 Linux Server）
 
 核心边界：
 
-1. **客户端不依赖 ELF2**：网页和 App 只依赖稳定的实时协议与鉴权；迁移服务器只需替换部署与 Provider 配置。
+1. **API-first、硬件无关**：网页和 App 只依赖稳定的 HTTPS/WSS 协议与鉴权；服务器、GPU worker 和 Provider 可以独立替换。
 2. **Live2D 在客户端渲染**：服务器发送语义化表情、动作、情绪与音频事件，不传输角色视频流，节省带宽并保持 60 FPS。
 3. **媒体与推理解耦**：摄像头预览保持高帧；视觉语义采用 latest-only 低频采样，默认每 5 秒刷新，不让积压帧拖慢交互。
 4. **Provider 可替换但不虚报实现**：ASR、LLM、视觉、TTS 通过接口隔离；当前只有 DeepSeek 是已接入的云 Provider，云 ASR、云 TTS、云 VLM 仍需新增 Adapter、配置校验与验收后才能启用。
@@ -50,7 +50,7 @@ Anima Gateway（当前 ELF2，后续任意 Linux Server）
 ## 当前验收边界
 
 - 本机自动化已经验证真实 Live2D 资源请求、画布渲染、桌面与移动布局；仍需在目标手机浏览器验证 GPU 帧耗、媒体权限和触控误触率。
-- ELF2 上已有 RK3588 本地视觉服务与模型资产；Anima Gateway 正按旁路部署、健康检查、回滚后切换入口的顺序接入。
+- 通用服务器使用 systemd、同源 Gateway 与 Cloudflare Tunnel/受信反向代理；Gateway 仅监听 loopback，ASR/TTS/VLM worker 不直接暴露公网。
 - 当前板端 ASR 资产是离线 SenseVoice，新的 streaming Zipformer 适配器不能直接复用；正式链路需要安装兼容流式模型。云端实时 ASR 目前没有 Adapter，不能只靠配置启用。
 - Live2D 运行库许可与角色模型的公开再分发授权是两件事；公开部署前需保留模型授权证据。
 - 目标时延与 60 FPS 都是实测 SLO，不以配置项或桌面模拟结果代替真机数据。
@@ -100,9 +100,9 @@ npm run dev
 
 浏览器媒体权限要求安全上下文：电脑本机可使用 `http://localhost:5174`，手机和公网入口必须使用 HTTPS。前端默认连接同源 `/v2/realtime`。
 
-## 迁移原则
+## 服务器部署原则
 
-ELF2 不是客户端协议的一部分。迁移到低端服务器时只移动 Gateway、Provider 配置和用户数据卷：
+服务器只承载 Gateway、Provider Adapter 与受控用户数据卷；模型 worker 可按资源独立部署：
 
 - DeepSeek + 本地 sherpa TTS、ASR/VLM 显式禁用的最小路线：建议从 4 vCPU / 8 GB RAM / 80 GB NVMe 起步；
 - DeepSeek + 本地 sherpa ASR/TTS：建议 8 vCPU / 16 GB RAM；
@@ -115,9 +115,9 @@ ELF2 不是客户端协议的一部分。迁移到低端服务器时只移动 Ga
 - [架构](docs/architecture.md)
 - [实时协议](docs/protocol.md)
 - [延迟 SLO](docs/latency-slo.md)
-- [ELF2 部署](docs/deployment-elf2.md)
-- [迁移到低配 Linux Server](docs/portable-server-migration.md)
-- [2026 推理节点选型与采购门槛](docs/server-sizing-2026.md)
+- [通用 Linux Server 部署与迁移](docs/portable-server-migration.md)
+- [服务器采购与容量规划](docs/server-buying-guide.md)
+- [ELF2 历史部署参考](docs/deployment-elf2.md)
 - [Live2D 身体交互](docs/live2d-interaction.md)
 - [视频通话式 UX](docs/video-call-ux.md)
 - [用户数据隔离](docs/user-data-isolation.md)

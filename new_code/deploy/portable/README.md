@@ -1,6 +1,6 @@
-# Portable deployment helpers
+# 通用服务器部署预检
 
-这些工具面向 **新的 Ubuntu 22.04/24.04 x86_64 或 aarch64 主机**，不依赖 ELF2 的目录、用户名或 systemd unit。
+这是 Anima 的默认部署预检，面向 **Ubuntu 22.04/24.04 x86_64 或 aarch64 Server**，不依赖 ELF2 的目录或用户名。
 
 ```bash
 chmod +x deploy/portable/portable-preflight.sh
