@@ -9,15 +9,27 @@ from .contracts import (
     ProviderSnapshot,
 )
 from .registry import ProviderRegistration, ProviderRegistry, default_provider_registry
+from .runtime import (
+    AvailableProvider,
+    ProviderFactory,
+    ProviderResolutionError,
+    ProviderResolver,
+    ResolvedProviderSnapshot,
+)
 
 __all__ = [
+    "AvailableProvider",
     "Capability",
     "Locality",
     "ProviderConfigError",
     "ProviderDescriptor",
+    "ProviderFactory",
     "ProviderRegistration",
     "ProviderRegistry",
+    "ProviderResolutionError",
+    "ProviderResolver",
     "ProviderSelection",
     "ProviderSnapshot",
+    "ResolvedProviderSnapshot",
     "default_provider_registry",
 ]

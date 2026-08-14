@@ -1,4 +1,4 @@
-"""访问 ELF2 板内常驻 Qwen3-VL 服务，并转换为统一视觉快照。"""
+"""访问 loopback 视觉 sidecar，并转换为统一视觉快照。"""
 
 from __future__ import annotations
 

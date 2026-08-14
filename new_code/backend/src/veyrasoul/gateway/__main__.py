@@ -51,6 +51,7 @@ from veyrasoul.personalization import (
     IdentityService,
     SqliteIdentityRepository,
 )
+from veyrasoul.providers import ProviderResolver, default_provider_registry
 from veyrasoul.telemetry import (
     JsonLogTraceSink,
     ProviderModel,
@@ -131,6 +132,7 @@ def build_app(
             max_response_bytes=config.audio_max_response_bytes,
             max_connections=config.audio_max_connections,
             max_keepalive_connections=config.audio_max_keepalive_connections,
+            tts_streaming_enabled=config.tts_streaming_enabled,
         )
     if tts_selection.name == "sherpa":
         if config.tts_model_dir is None:
@@ -183,19 +185,43 @@ def build_app(
                 timeout_seconds=config.vision_timeout_seconds,
             )
         )
-    startup = list(
-        callback for callback in (asr.warmup if asr else None, tts.warmup) if callback is not None
+    provider_resolver = ProviderResolver(default_provider_registry())
+    provider_resolver.register_instance(
+        "llm",
+        llm_selection.name,
+        llm,
+        models=(config.llm_model,),
     )
-    shutdown = list(
-        callback
-        for callback in (
-            llm.aclose,
-            vlm.aclose if vlm else None,
-            tts.aclose if isinstance(tts, OpenAiCompatibleTts) else None,
-            asr.aclose if isinstance(asr, OpenAiCompatibleAsr) else None,
+    provider_resolver.register_instance(
+        "tts",
+        tts_selection.name,
+        tts,
+        models=(
+            (config.tts_model_dir.name,)
+            if tts_selection.name == "sherpa"
+            else (config.tts_cloud_model,)
+        ),
+        voices=(
+            ("default", str(config.tts_sid), f"sid:{config.tts_sid}")
+            if tts_selection.name == "sherpa"
+            else ("default", config.tts_cloud_voice)
+        ),
+    )
+    if asr is not None:
+        provider_resolver.register_instance(
+            "asr",
+            asr_selection.name,
+            asr,
+            models=(
+                (config.asr_model_dir.name,)
+                if asr_selection.name == "sherpa"
+                else (config.asr_cloud_model,)
+            ),
         )
-        if callback is not None
-    )
+    if vlm is not None:
+        provider_resolver.register_instance("vision", vision_selection.name, vlm)
+    startup = [provider_resolver.warmup]
+    shutdown = [provider_resolver.aclose]
     stable_system_prompt = config.persona_path.read_text(encoding="utf-8")
     embedding_provider = HashingEmbeddingProvider()
     toc_composition: TocComposition | None = None
@@ -206,6 +232,12 @@ def build_app(
             SqliteIdentityRepository(layout.identity_database()),
             layout,
             stable_system_prompt,
+            provider_resolver.registry,
+            default_provider_snapshot=config.provider_snapshot,
+            profile_validator=lambda profile: provider_resolver.validate_snapshot(
+                profile.provider_snapshot,
+                voice_id=profile.voice_id,
+            ),
         )
 
         def document_ingestor_factory(
@@ -240,6 +272,7 @@ def build_app(
             auth_repository=auth_repository,
             identity_service=identity_service,
             document_ingestor_factory=document_ingestor_factory,
+            provider_catalog_provider=provider_resolver.available_providers,
         )
         login_config = LoginFlowConfig(
             authorization_endpoint=config.toc.authorization_endpoint,
@@ -276,6 +309,7 @@ def build_app(
         asr=asr,
         vision=vlm,
         vision_refresh_seconds=config.vision_refresh_seconds,
+        websocket_send_timeout_seconds=config.websocket_send_timeout_seconds,
         stable_system_prompt=stable_system_prompt,
         startup=tuple(startup),
         shutdown=tuple(shutdown),
@@ -311,6 +345,7 @@ def build_app(
         admission=config.admission,
         release_digest=_release_digest(config.root),
         provider_snapshot=config.provider_snapshot,
+        provider_resolver=provider_resolver,
         allow_anonymous_realtime=config.realtime_allow_anonymous,
         embedding_provider=embedding_provider,
         realtime_authenticator=(

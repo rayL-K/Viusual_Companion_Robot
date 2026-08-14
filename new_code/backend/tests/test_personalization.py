@@ -57,7 +57,7 @@ def test_profile_persists_to_sqlite_and_anima_markdown(tmp_path) -> None:
             "personaMarkdown": "# 月兔\n\n说话温柔但不造作。",
             "maxReplyChars": 88,
             "replyDelayMs": 120,
-            "voiceId": "sid:3",
+            "voiceId": "warm.zh",
             "providers": {
                 "asr": {"provider": "sherpa", "config": {"model": "zipformer-zh-en"}},
                 "vision": {"provider": "local-vlm", "config": {"model": "qwen-vl"}},
@@ -84,7 +84,57 @@ def test_profile_persists_to_sqlite_and_anima_markdown(tmp_path) -> None:
         row = connection.execute(
             "SELECT max_reply_chars, reply_delay_ms, voice_id FROM anima_settings"
         ).fetchone()
-    assert row == (88, 120, "sid:3")
+    assert row == (88, 120, "warm.zh")
+
+
+def test_profile_rejects_conflicting_tts_voice_sources(tmp_path) -> None:
+    store = SqliteAnimaProfileStore(
+        DataLayout(tmp_path / "data", tmp_path / "legacy.db"),
+        UserId.parse("alice"),
+        AnimaId.default(),
+        "默认人设",
+    )
+
+    with pytest.raises(ProfileValidationError, match="必须与"):
+        store.update(
+            {
+                "expectedRevision": 1,
+                "voiceId": "sid:3",
+                "providers": {
+                    "tts": {
+                        "provider": "sherpa",
+                        "config": {"voice": "warm.zh"},
+                    }
+                },
+            }
+        )
+
+
+def test_legacy_voice_patch_keeps_provider_snapshot_in_sync(tmp_path) -> None:
+    store = SqliteAnimaProfileStore(
+        DataLayout(tmp_path / "data", tmp_path / "legacy.db"),
+        UserId.parse("alice"),
+        AnimaId.default(),
+        "默认人设",
+    )
+    configured = store.update(
+        {
+            "expectedRevision": 1,
+            "providers": {
+                "tts": {
+                    "provider": "sherpa",
+                    "config": {"model": "matcha", "voice": "warm.zh"},
+                }
+            },
+        }
+    )
+
+    updated = store.update(
+        {"expectedRevision": configured.revision, "voiceId": "sid:3"}
+    )
+
+    assert updated.voice_id == "sid:3"
+    assert updated.provider_snapshot.resolve("tts").config["voice"] == "sid:3"
 
 
 @pytest.mark.parametrize("field", ["api_key", "base_url", "endpoint", "token"])

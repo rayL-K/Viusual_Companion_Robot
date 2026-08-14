@@ -18,6 +18,9 @@ class FakeStreamingRecognizer:
             return "你", False
         return "你好", True
 
+    async def reset(self, stream: object) -> None:
+        del stream
+
 
 def test_streaming_session_emits_partial_then_endpoint_final() -> None:
     async def scenario() -> None:
@@ -106,5 +109,53 @@ def test_streaming_session_rejects_invalid_pcm_and_submission_before_start() -> 
         else:
             raise AssertionError("odd-length PCM16 must fail")
         await session.close()
+
+    asyncio.run(scenario())
+
+
+def test_invalidation_drops_stale_native_decode_and_resets_stream() -> None:
+    class ControlledRecognizer:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+            self.decode_calls = 0
+            self.reset_calls = 0
+
+        async def decode(self, stream: object, pcm16: bytes) -> tuple[str, bool]:
+            del stream, pcm16
+            self.decode_calls += 1
+            if self.decode_calls == 1:
+                self.started.set()
+                await self.release.wait()
+                return "stale", True
+            return "fresh", True
+
+        async def reset(self, stream: object) -> None:
+            del stream
+            self.reset_calls += 1
+
+    async def scenario() -> None:
+        owner = ControlledRecognizer()
+        updates: list[AsrUpdate] = []
+        fresh_final = asyncio.Event()
+
+        async def handler(update: AsrUpdate) -> None:
+            updates.append(update)
+            if update.final and update.text == "fresh":
+                fresh_final.set()
+
+        session = SherpaAsrSession(owner, object(), queue_frames=10)  # type: ignore[arg-type]
+        await session.start(handler)
+        session.submit_pcm16(b"\x01\x00" * 320)
+        await asyncio.wait_for(owner.started.wait(), 1)
+        await asyncio.wait_for(session.invalidate(), 0.1)
+        session.submit_pcm16(b"\x02\x00" * 320)
+        owner.release.set()
+        await asyncio.wait_for(fresh_final.wait(), 1)
+        await session.close()
+
+        assert owner.reset_calls >= 1
+        assert [update.text for update in updates] == ["fresh", "fresh"]
+        assert all(update.epoch == 1 for update in updates)
 
     asyncio.run(scenario())

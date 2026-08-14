@@ -9,8 +9,10 @@ from fastapi import WebSocketDisconnect
 from fastapi.testclient import TestClient
 
 from veyrasoul.gateway import AppServices, create_app
+from veyrasoul.gateway.app import RealtimeConnectionResources, _handle_asr_update
 from veyrasoul.gateway.admission import AdmissionGate, AdmissionPolicy
 from veyrasoul.identity import AnimaId, SessionIdentity, UserId
+from veyrasoul.integrations.openai_audio import AsrErrorUpdate, AsrSessionError
 from veyrasoul.orchestration.ports import (
     AsrUpdate,
     AsrUpdateHandler,
@@ -116,8 +118,13 @@ class FakeAsrSession:
     def __init__(self, transcripts: list[str]) -> None:
         self.transcripts = iter(transcripts)
         self.handler: AsrUpdateHandler | None = None
-        self.queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+        self.queue: asyncio.Queue[tuple[int, bytes] | None] = asyncio.Queue()
         self.task: asyncio.Task[None] | None = None
+        self._epoch = 0
+
+    @property
+    def epoch(self) -> int:
+        return self._epoch
 
     async def start(self, handler: AsrUpdateHandler) -> None:
         self.handler = handler
@@ -126,7 +133,15 @@ class FakeAsrSession:
     def submit_pcm16(self, pcm16: bytes) -> None:
         if self.task is None or self.task.done():
             raise RuntimeError("fake ASR session is not running")
-        self.queue.put_nowait(pcm16)
+        self.queue.put_nowait((self._epoch, pcm16))
+
+    async def invalidate(self) -> None:
+        self._epoch += 1
+        while True:
+            try:
+                self.queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
 
     async def close(self) -> None:
         task = self.task
@@ -138,13 +153,14 @@ class FakeAsrSession:
 
     async def _run(self) -> None:
         while True:
-            pcm16 = await self.queue.get()
-            if pcm16 is None:
+            item = await self.queue.get()
+            if item is None:
                 return
+            epoch, pcm16 = item
             text = next(self.transcripts)
             assert self.handler is not None
-            await self.handler(AsrUpdate(text=text[:-1], final=False))
-            await self.handler(AsrUpdate(text=text, final=True))
+            await self.handler(AsrUpdate(text=text[:-1], final=False, epoch=epoch))
+            await self.handler(AsrUpdate(text=text, final=True, epoch=epoch))
 
 
 class FakeAsrFactory:
@@ -152,7 +168,8 @@ class FakeAsrFactory:
         self.transcripts = transcripts
         self.sessions: list[FakeAsrSession] = []
 
-    def create_session(self) -> FakeAsrSession:
+    def create_session(self, *, admit=None) -> FakeAsrSession:
+        del admit
         session = FakeAsrSession(self.transcripts.copy())
         self.sessions.append(session)
         return session
@@ -312,7 +329,7 @@ def test_oversized_pcm_and_user_text_are_rejected_before_inference(tmp_path) -> 
     with client.websocket_connect("/v2/realtime?session=bounded-input") as websocket:
         websocket.receive_json()
         websocket.send_bytes(
-            build_binary_frame(BinaryKind.PCM16, 8, 1000, b"\x00\x00" * 6_401)
+            build_binary_frame(BinaryKind.PCM16, 8, 1000, b"\x00\x00" * 3_201)
         )
         pcm_error = websocket.receive_json()
         assert pcm_error["payload"]["code"] == "invalid_pcm_frame"
@@ -388,12 +405,14 @@ def test_visual_failure_returns_stable_error_without_internal_details(tmp_path) 
 
 
 def test_new_turn_cancels_slow_previous_generation(tmp_path) -> None:
+    asr = FakeAsrFactory([])
     app = create_app(
         AppServices(
             allow_anonymous_realtime=True,
             memory_path=tmp_path / "memory.db",
             llm=InterruptibleLlm(),
             tts=FakeTts(),
+            asr=asr,
             stable_system_prompt="你是草莓兔兔。",
         )
     )
@@ -424,6 +443,8 @@ def test_new_turn_cancels_slow_previous_generation(tmp_path) -> None:
         assert_avatar_intent(
             websocket.receive_json(), "idle", turn_id="second", generation=second_phase["generation"]
         )
+
+    assert asr.sessions[0].epoch == 2
 
     from veyrasoul.identity import AnimaId, UserId
     from veyrasoul.memory import MemoryStore
@@ -497,13 +518,83 @@ def test_pcm_asr_updates_start_turn_and_cancel_previous_generation(tmp_path) -> 
     assert turns[0]["user_text"] == "第二问"
 
 
+def test_structured_asr_error_is_not_emitted_as_empty_transcript() -> None:
+    class Writer:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, dict[str, object]]] = []
+
+        async def event(self, event_type: str, **kwargs) -> None:
+            self.events.append((event_type, kwargs["payload"]))
+
+    class Turns:
+        async def start_from_asr(self, *_args, **_kwargs) -> None:
+            raise AssertionError("ASR errors must not start a turn")
+
+        async def listen(self) -> None:
+            raise AssertionError("ASR errors must not enter listening state")
+
+    async def scenario() -> None:
+        writer = Writer()
+        await _handle_asr_update(
+            AsrErrorUpdate(
+                text="",
+                final=False,
+                error=AsrSessionError(
+                    code="asr_queue_full",
+                    message="云端语音识别队列已满，本句已丢弃",
+                    details={"maxPendingUtterances": 2},
+                ),
+            ),
+            writer,  # type: ignore[arg-type]
+            Turns(),  # type: ignore[arg-type]
+        )
+        assert writer.events == [
+            (
+                "error",
+                {
+                    "code": "asr_queue_full",
+                    "message": "云端语音识别队列已满，本句已丢弃",
+                },
+            )
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_gateway_drops_an_asr_update_from_an_invalidated_epoch() -> None:
+    class Writer:
+        async def event(self, *_args, **_kwargs) -> None:
+            raise AssertionError("a stale ASR result must not reach the socket")
+
+    class Turns:
+        async def start_from_asr(self, *_args, **_kwargs) -> None:
+            raise AssertionError("a stale ASR result must not start a turn")
+
+        async def listen(self) -> None:
+            raise AssertionError("a stale ASR result must not change avatar state")
+
+    class Session:
+        epoch = 2
+
+    asyncio.run(
+        _handle_asr_update(
+            AsrUpdate(text="old cloud final", final=True, epoch=1),
+            Writer(),  # type: ignore[arg-type]
+            Turns(),  # type: ignore[arg-type]
+            Session(),  # type: ignore[arg-type]
+        )
+    )
+
+
 def test_explicit_cancel_emits_generation_bound_idle_intent(tmp_path) -> None:
+    asr = FakeAsrFactory([])
     app = create_app(
         AppServices(
             allow_anonymous_realtime=True,
             memory_path=tmp_path / "memory.db",
             llm=InterruptibleLlm(),
             tts=FakeTts(),
+            asr=asr,
             stable_system_prompt="你是草莓兔兔。",
         )
     )
@@ -525,6 +616,7 @@ def test_explicit_cancel_emits_generation_bound_idle_intent(tmp_path) -> None:
             turn_id="cancel-me",
             generation=cancelled["generation"],
         )
+    assert asr.sessions[0].epoch == 2
 
 
 def test_settings_events_persist_profile_and_constrain_next_turn(tmp_path) -> None:
@@ -730,6 +822,74 @@ def test_distinct_anonymous_sessions_use_distinct_owners_and_databases(tmp_path)
     second = layout.state_database(UserId.parse(owners[1]), AnimaId.default())
     assert first != second
     assert first.is_file() and second.is_file()
+
+
+def test_disconnect_releases_runtime_capacity_for_the_next_session(tmp_path) -> None:
+    app = create_app(
+        AppServices(
+            allow_anonymous_realtime=True,
+            memory_path=tmp_path / "memory.db",
+            llm=FakeLlm(),
+            tts=FakeTts(),
+            stable_system_prompt="默认人设",
+            max_sessions=1,
+        )
+    )
+    client = TestClient(app)
+
+    with client.websocket_connect("/v2/realtime?session=session-a") as first:
+        assert first.receive_json()["type"] == "session.ready"
+        with client.websocket_connect("/v2/realtime?session=session-b") as rejected:
+            with pytest.raises(WebSocketDisconnect) as closed:
+                rejected.receive_json()
+        assert closed.value.code == 1013
+
+    with client.websocket_connect("/v2/realtime?session=session-b") as admitted:
+        assert admitted.receive_json()["type"] == "session.ready"
+
+
+def test_cleanup_failure_cannot_strand_runtime_or_admission_leases() -> None:
+    async def scenario() -> None:
+        calls: list[str] = []
+
+        class _Resource:
+            def __init__(self, label: str, *, fail: bool = False) -> None:
+                self.label = label
+                self.fail = fail
+
+            async def close(self) -> None:
+                calls.append(self.label)
+                if self.fail:
+                    raise RuntimeError(f"{self.label} failed")
+
+            async def cancel(self) -> None:
+                await self.close()
+
+            async def release(self) -> None:
+                await self.close()
+
+        resources = RealtimeConnectionResources(
+            connection=_Resource("connection"),  # type: ignore[arg-type]
+            handshake=_Resource("handshake"),  # type: ignore[arg-type]
+            runtime_lease=_Resource("runtime"),  # type: ignore[arg-type]
+            turns=_Resource("turns", fail=True),  # type: ignore[arg-type]
+            asr_session=_Resource("asr", fail=True),  # type: ignore[arg-type]
+            vision_scheduler=_Resource("vision", fail=True),  # type: ignore[arg-type]
+        )
+
+        await resources.close()
+        await resources.close()
+
+        assert calls == [
+            "vision",
+            "asr",
+            "turns",
+            "runtime",
+            "connection",
+            "handshake",
+        ]
+
+    asyncio.run(scenario())
 
 
 def test_public_gateway_verifies_challenge_then_accepts_exact_origin(tmp_path) -> None:

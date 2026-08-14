@@ -2,20 +2,30 @@
 
 from __future__ import annotations
 
-import os
 import json
+import os
 import sqlite3
 import threading
 import time
 from contextlib import contextmanager, suppress
+from dataclasses import replace
 from pathlib import Path
-from typing import Any, Iterator, Mapping
+from typing import Any, Callable, Iterator, Mapping
 
 from veyrasoul.identity import AnimaId, UserId
-from veyrasoul.providers import ProviderRegistry, default_provider_registry
+from veyrasoul.providers import (
+    ProviderRegistry,
+    ProviderSnapshot,
+    default_provider_registry,
+)
 
 from .layout import DataLayout
-from .model import AnimaProfile, ProfileValidationError
+from .model import (
+    AnimaProfile,
+    ProfileValidationError,
+    _tts_voice,
+    _with_tts_voice,
+)
 
 
 class SqliteAnimaProfileStore:
@@ -26,14 +36,25 @@ class SqliteAnimaProfileStore:
         anima_id: AnimaId,
         default_persona: str,
         provider_registry: ProviderRegistry | None = None,
+        *,
+        default_provider_snapshot: ProviderSnapshot | None = None,
+        profile_validator: Callable[[AnimaProfile], None] | None = None,
     ) -> None:
         self.layout = layout
         self.user_id = user_id
         self.anima_id = anima_id
         self.database_path = layout.state_database(user_id, anima_id)
         self.persona_path = layout.persona_file(user_id, anima_id)
-        self.default_profile = AnimaProfile(default_persona)
+        self.default_profile = (
+            AnimaProfile(default_persona)
+            if default_provider_snapshot is None
+            else AnimaProfile(
+                default_persona,
+                provider_snapshot=default_provider_snapshot,
+            )
+        )
         self.provider_registry = provider_registry or default_provider_registry()
+        self.profile_validator = profile_validator
         self._lock = threading.RLock()
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self.persona_path.parent.mkdir(parents=True, exist_ok=True)
@@ -54,6 +75,7 @@ class SqliteAnimaProfileStore:
             with self._lock, self._connection(immediate=True) as connection:
                 current = self._get_or_create(connection)
                 updated = current.apply_patch(payload, self.provider_registry)
+                self._validate_profile(updated)
                 # The human-readable Anima.md is part of the public settings contract,
                 # not a best-effort afterthought. Write it before committing SQLite so
                 # a filesystem failure rolls the database transaction back as well.
@@ -88,10 +110,23 @@ class SqliteAnimaProfileStore:
     def _initial_profile(self) -> AnimaProfile:
         if self.persona_path.is_file():
             try:
-                return AnimaProfile(self.persona_path.read_text(encoding="utf-8"))
+                return replace(
+                    self.default_profile,
+                    persona_markdown=self.persona_path.read_text(encoding="utf-8"),
+                )
             except (OSError, UnicodeError, ValueError) as exc:
                 raise RuntimeError(f"无法导入 {self.persona_path}: {exc}") from exc
         return self.default_profile
+
+    def _validate_profile(self, profile: AnimaProfile) -> None:
+        if self.profile_validator is None:
+            return
+        try:
+            self.profile_validator(profile)
+        except ProfileValidationError:
+            raise
+        except (TypeError, ValueError) as exc:
+            raise ProfileValidationError(str(exc)) from exc
 
     @contextmanager
     def _connection(self, *, immediate: bool = False) -> Iterator[sqlite3.Connection]:
@@ -205,11 +240,20 @@ def _row_to_profile(
         )
     except (json.JSONDecodeError, ValueError) as exc:
         raise ProfileValidationError("持久化的 providers 快照无效") from exc
+    voice_id = str(row["voice_id"])
+    if (
+        (provider_voice := _tts_voice(provider_snapshot)) is not None
+        and provider_voice != voice_id
+    ):
+        # Keep historical runtime behaviour: voice_id was the field actually
+        # sent to TTS.  Rewrite only the public snapshot mirror in memory; the
+        # next settings update persists the canonical pair.
+        provider_snapshot = _with_tts_voice(provider_snapshot, voice_id, registry)
     return AnimaProfile(
         persona_markdown=str(row["persona_markdown"]),
         max_reply_chars=int(row["max_reply_chars"]),
         reply_delay_ms=int(row["reply_delay_ms"]),
-        voice_id=str(row["voice_id"]),
+        voice_id=voice_id,
         provider_snapshot=provider_snapshot,
         revision=int(row["revision"]),
     )

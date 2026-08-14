@@ -31,7 +31,22 @@ def test_settings_support_a_portable_text_first_server_profile(tmp_path) -> None
     }
     assert settings.data_root == (tmp_path / "data").resolve()
     assert settings.realtime_allow_anonymous is False
+    assert settings.admission.max_concurrent_asr_requests == 2
+    assert settings.admission.max_asr_requests_per_client_per_minute == 12
+    assert settings.admission.max_asr_requests_global_per_minute == 48
+    assert settings.admission.pcm_bytes_per_second == 32_000
+    assert settings.admission.pcm_burst_bytes == 32_000
+    assert settings.websocket_send_timeout_seconds == 5.0
     assert "unit-test-secret" not in repr(settings)
+
+
+def test_pcm_burst_cannot_exceed_one_second_of_media_time(tmp_path) -> None:
+    environment = _minimum_environment(tmp_path)
+    environment["ANIMA_PCM_BYTES_PER_SECOND"] = "32000"
+    environment["ANIMA_PCM_BURST_BYTES"] = "32001"
+
+    with pytest.raises(ValueError, match="PCM burst"):
+        RuntimeSettings.from_environment(environment, root=tmp_path)
 
 
 def test_anonymous_realtime_requires_explicit_development_opt_in(tmp_path) -> None:
@@ -57,8 +72,38 @@ def test_cloud_audio_needs_no_local_models_and_hides_server_key(tmp_path) -> Non
     settings = RuntimeSettings.from_environment(environment, root=tmp_path)
     assert settings.tts_model_dir is None
     assert settings.asr_model_dir is None
+    assert settings.tts_streaming_enabled is False
     assert settings.capabilities()["asr"] == "openai-compatible"
     assert "server-audio-secret" not in repr(settings)
+
+
+def test_cloud_audio_read_timeout_matches_adapter_limit(tmp_path) -> None:
+    environment = _minimum_environment(tmp_path)
+    environment["ANIMA_AUDIO_READ_TIMEOUT_SECONDS"] = "121"
+
+    with pytest.raises(ValueError, match="ANIMA_AUDIO_READ_TIMEOUT_SECONDS"):
+        RuntimeSettings.from_environment(environment, root=tmp_path)
+
+
+def test_cloud_tts_streaming_requires_explicit_validated_binding_opt_in(tmp_path) -> None:
+    environment = _minimum_environment(tmp_path)
+    environment.pop("ANIMA_TTS_MODEL_DIR")
+    environment.update(
+        {
+            "ANIMA_TTS_PROVIDER": "openai-compatible",
+            "ANIMA_AUDIO_API_KEY": "server-audio-secret",
+            "ANIMA_TTS_STREAMING_ENABLED": "true",
+        }
+    )
+    settings = RuntimeSettings.from_environment(environment, root=tmp_path)
+    assert settings.tts_streaming_enabled is True
+
+
+def test_streaming_flag_cannot_be_applied_to_unvalidated_local_binding(tmp_path) -> None:
+    environment = _minimum_environment(tmp_path)
+    environment["ANIMA_TTS_STREAMING_ENABLED"] = "true"
+    with pytest.raises(ValueError, match="openai-compatible"):
+        RuntimeSettings.from_environment(environment, root=tmp_path)
 
 
 def test_cloud_audio_rejects_missing_key(tmp_path) -> None:

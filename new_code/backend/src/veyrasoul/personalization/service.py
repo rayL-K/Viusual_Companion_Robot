@@ -5,9 +5,14 @@ from __future__ import annotations
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 from veyrasoul.identity import AnimaId, UserId
-from veyrasoul.providers import ProviderRegistry, default_provider_registry
+from veyrasoul.providers import (
+    ProviderRegistry,
+    ProviderSnapshot,
+    default_provider_registry,
+)
 
 from .catalog import (
     ACTIVE,
@@ -18,6 +23,7 @@ from .catalog import (
     User,
 )
 from .layout import DataLayout
+from .model import AnimaProfile
 from .store import SqliteAnimaProfileStore
 
 
@@ -30,6 +36,9 @@ class IdentityService:
         layout: DataLayout,
         default_persona: str,
         provider_registry: ProviderRegistry | None = None,
+        *,
+        default_provider_snapshot: ProviderSnapshot | None = None,
+        profile_validator: Callable[[AnimaProfile], None] | None = None,
     ) -> None:
         if repository.database_path != layout.identity_database():
             raise ValueError("目录数据库必须位于同一 DataLayout")
@@ -37,6 +46,8 @@ class IdentityService:
         self.layout = layout
         self.default_persona = default_persona
         self.provider_registry = provider_registry or default_provider_registry()
+        self.default_provider_snapshot = default_provider_snapshot
+        self.profile_validator = profile_validator
 
     def create_user(self, user_id: UserId, display_name: str) -> User:
         return self.repository.create_user(user_id, display_name)
@@ -81,6 +92,8 @@ class IdentityService:
             anima_id,
             self.default_persona,
             self.provider_registry,
+            default_provider_snapshot=self.default_provider_snapshot,
+            profile_validator=self.profile_validator,
         )
 
     def require_active_anima(self, actor_id: UserId, anima_id: AnimaId) -> Anima:

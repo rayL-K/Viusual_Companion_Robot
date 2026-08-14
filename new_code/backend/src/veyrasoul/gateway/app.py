@@ -16,6 +16,7 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from veyrasoul import __version__
 from veyrasoul.affect import AffectState
 from veyrasoul.auth import AuthenticationError, AuthPrincipal
 from veyrasoul.avatar import AvatarIntent, AvatarPhase
@@ -41,16 +42,33 @@ from veyrasoul.telemetry import (
     TurnTrace,
     TurnTraceDimensions,
 )
-from veyrasoul.transport import BinaryKind, build_binary_frame, parse_binary_frame
+from veyrasoul.transport import BinaryKind, parse_binary_frame
 
-from .admission import AdmissionGate, ConnectionLease, TurnLease, client_key
-from .runtime import AppServices, RuntimeSession, SessionRegistry
+from .admission import (
+    AdmissionGate,
+    ConnectionBudget,
+    ConnectionLease,
+    TurnLease,
+    client_key,
+)
+from .realtime_writer import (
+    ConnectionWriter,
+    RealtimeClientTooSlowError,
+    ReplyWriteResult,
+)
+from .runtime import (
+    AppServices,
+    RuntimeSession,
+    RuntimeSessionLease,
+    SessionCapacityError,
+    SessionRegistry,
+)
 
 
 _LOGGER = logging.getLogger(__name__)
 _MAX_CONTROL_EVENT_CHARS = 64 * 1024
 _MAX_USER_TEXT_CHARS = 2_000
-_MAX_PCM_FRAME_BYTES = 12_800
+_MAX_PCM_FRAME_BYTES = 6_400
 _MAX_ADMISSION_BODY_BYTES = 4_096
 
 
@@ -132,83 +150,6 @@ class RealtimeHandshakeError(RuntimeError):
         super().__init__(reason)
         self.close_code = close_code
         self.reason = reason
-
-
-class ConnectionWriter:
-    def __init__(self, websocket: WebSocket, session_id: str) -> None:
-        self.websocket = websocket
-        self.session_id = session_id
-        self._sequence = 0
-        self._lock = asyncio.Lock()
-
-    def _next_sequence(self) -> int:
-        self._sequence += 1
-        return self._sequence
-
-    async def event(
-        self,
-        event_type: str,
-        *,
-        turn_id: str = "",
-        generation: int = 0,
-        payload: dict[str, Any] | None = None,
-    ) -> None:
-        async with self._lock:
-            await self.websocket.send_json(
-                {
-                    "v": 2,
-                    "type": event_type,
-                    "sessionId": self.session_id,
-                    "turnId": turn_id,
-                    "generation": generation,
-                    "seq": self._next_sequence(),
-                    "sentAtMs": int(time.time() * 1000),
-                    "payload": payload or {},
-                }
-            )
-
-    async def reply_segment(
-        self,
-        *,
-        turn_id: str,
-        generation: int,
-        index: int,
-        text: str,
-        audio: bytes,
-        content_type: str,
-    ) -> int:
-        """Send audio first, then expose its text; WebSocket ordering keeps them synchronized."""
-
-        async with self._lock:
-            audio_sequence = self._next_sequence()
-            await self.websocket.send_bytes(
-                build_binary_frame(
-                    BinaryKind.AUDIO,
-                    audio_sequence,
-                    int(time.time() * 1000),
-                    audio,
-                )
-            )
-            first_frame_sent_ns = time.monotonic_ns()
-            await self.websocket.send_json(
-                {
-                    "v": 2,
-                    "type": "reply.segment.ready",
-                    "sessionId": self.session_id,
-                    "turnId": turn_id,
-                    "generation": generation,
-                    "seq": self._next_sequence(),
-                    "sentAtMs": int(time.time() * 1000),
-                    "payload": {
-                        "index": index,
-                        "text": text,
-                        "audioSeq": audio_sequence,
-                        "contentType": content_type,
-                    },
-                }
-            )
-            return first_frame_sent_ns
-
 
 class TurnController:
     def __init__(
@@ -348,6 +289,62 @@ class TurnController:
             trace.cancel()
         self.current = None
         self.current_trace = None
+        self.writer.reset_audio_timeline()
+
+
+@dataclass(slots=True)
+class RealtimeConnectionResources:
+    """Own and deterministically close every resource allocated by one socket."""
+
+    connection: ConnectionLease
+    handshake: RealtimeHandshake
+    runtime_lease: RuntimeSessionLease | None = None
+    turns: TurnController | None = None
+    asr_session: StreamingAsrSession | None = None
+    vision_scheduler: VisualSemanticScheduler | None = None
+    _closed: bool = field(default=False, init=False, repr=False)
+
+    async def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        cancelled: asyncio.CancelledError | None = None
+        closers = (
+            (
+                "visual scheduler",
+                self.vision_scheduler.close
+                if self.vision_scheduler is not None
+                else None,
+            ),
+            (
+                "ASR session",
+                self.asr_session.close if self.asr_session is not None else None,
+            ),
+            ("turn controller", self.turns.cancel if self.turns is not None else None),
+            (
+                "runtime session lease",
+                self.runtime_lease.release
+                if self.runtime_lease is not None
+                else None,
+            ),
+            ("connection lease", self.connection.release),
+            ("Anima lease", self.handshake.release),
+        )
+        for label, close in closers:
+            if close is None:
+                continue
+            try:
+                await close()
+            except asyncio.CancelledError as exc:
+                cancelled = cancelled or exc
+            except Exception as exc:
+                _LOGGER.warning(
+                    "Realtime %s cleanup failed (%s)",
+                    label,
+                    type(exc).__name__,
+                )
+        if cancelled is not None:
+            raise cancelled
 
 
 def create_app(services: AppServices) -> FastAPI:
@@ -362,7 +359,7 @@ def create_app(services: AppServices) -> FastAPI:
                 await close()
             await admission.aclose()
 
-    app = FastAPI(title="Anima Realtime Gateway", version="0.0.1", lifespan=lifespan)
+    app = FastAPI(title="Anima Realtime Gateway", version=__version__, lifespan=lifespan)
     registry = SessionRegistry(services)
     admission = AdmissionGate(services.admission)
     app.state.registry = registry
@@ -374,9 +371,16 @@ def create_app(services: AppServices) -> FastAPI:
             "ok": True,
             "protocol": 2,
             "service": "anima-gateway",
-            "version": "0.0.1",
+            "version": __version__,
             "releaseDigest": services.release_digest,
-            "streaming_asr": services.asr is not None,
+            "streaming_asr": (
+                any(
+                    item.capability.value == "asr"
+                    for item in services.provider_resolver.available_providers()
+                )
+                if services.provider_resolver is not None
+                else services.asr is not None
+            ),
             "tocEnabled": (
                 services.toc_router is not None
                 and services.realtime_authenticator is not None
@@ -465,56 +469,77 @@ def create_app(services: AppServices) -> FastAPI:
                 ),
             )
             return
+        resources = RealtimeConnectionResources(connection, handshake)
         try:
             await websocket.accept()
         except Exception:
-            await connection.release()
-            await handshake.release()
+            await resources.close()
             raise
         session_id = handshake.session_id
         identity = handshake.identity
-        writer = ConnectionWriter(websocket, session_id)
-        turns: TurnController | None = None
-        asr_session: StreamingAsrSession | None = None
-        vision_scheduler: VisualSemanticScheduler | None = None
+        writer = ConnectionWriter(
+            websocket,
+            session_id,
+            send_timeout_seconds=services.websocket_send_timeout_seconds,
+        )
         try:
-            runtime = await registry.get(session_id, identity)
+            runtime_lease = await registry.acquire(session_id, identity)
+            resources.runtime_lease = runtime_lease
+            runtime = runtime_lease.runtime
+            writer.configure_streaming_audio(runtime.turn_service.tts)
             turns = TurnController(runtime, writer, admission, connection)
-            asr_session = services.asr.create_session() if services.asr else None
-            vision_scheduler = (
-                VisualSemanticScheduler(
-                    services.vision,
-                    refresh_seconds=services.vision_refresh_seconds,
+            resources.turns = turns
+            asr_session = (
+                runtime.asr.create_session(
+                    admit=lambda: admission.try_asr(connection),
                 )
-                if services.vision
+                if runtime.asr
                 else None
             )
+            resources.asr_session = asr_session
+            vision_scheduler = (
+                VisualSemanticScheduler(
+                    runtime.vision,
+                    refresh_seconds=services.vision_refresh_seconds,
+                )
+                if runtime.vision
+                else None
+            )
+            resources.vision_scheduler = vision_scheduler
             if asr_session:
-                await asr_session.start(lambda update: _handle_asr_update(update, writer, turns))
+                await asr_session.start(
+                    lambda update: _handle_asr_update(
+                        update,
+                        writer,
+                        turns,
+                        asr_session,
+                    )
+                )
             if vision_scheduler:
                 await vision_scheduler.start(
                     lambda snapshot: _handle_visual_snapshot(snapshot, runtime, writer),
                     lambda error: _handle_perception_error(error, writer),
                 )
-            await writer.event(
-                "session.ready",
-                payload={
-                    "protocol": 2,
-                    "userId": identity.user_id.value,
-                    "animaId": identity.anima_id.value,
-                    "anonymous": identity.anonymous,
-                    "identityAssurance": identity.assurance,
-                },
-            )
+            ready_payload: dict[str, Any] = {
+                "protocol": 2,
+                "userId": identity.user_id.value,
+                "animaId": identity.anima_id.value,
+                "anonymous": identity.anonymous,
+                "identityAssurance": identity.assurance,
+            }
+            if writer.server_capabilities:
+                ready_payload["serverCapabilities"] = list(writer.server_capabilities)
+            await writer.event("session.ready", payload=ready_payload)
+        except SessionCapacityError:
+            with contextlib.suppress(Exception):
+                await websocket.close(code=1013, reason="realtime session capacity reached")
+            await resources.close()
+            return
+        except RealtimeClientTooSlowError:
+            await resources.close()
+            return
         except Exception:
-            if vision_scheduler:
-                await vision_scheduler.close()
-            if asr_session:
-                await asr_session.close()
-            if turns:
-                await turns.cancel()
-            await connection.release()
-            await handshake.release()
+            await resources.close()
             raise
         connected_at = time.monotonic()
         last_client_activity = connected_at
@@ -588,7 +613,13 @@ def create_app(services: AppServices) -> FastAPI:
                             },
                         )
                         continue
-                    await _handle_binary(raw_bytes, writer, asr_session, vision_scheduler)
+                    await _handle_binary(
+                        raw_bytes,
+                        writer,
+                        asr_session,
+                        vision_scheduler,
+                        connection.budget,
+                    )
                     continue
                 raw_text = message.get("text")
                 if raw_text is None:
@@ -614,7 +645,14 @@ def create_app(services: AppServices) -> FastAPI:
                 event_type = event["type"]
                 payload = event["payload"]
                 if event_type == "session.hello":
-                    await writer.event("session.hello.ack", payload={"protocol": 2})
+                    negotiated = writer.negotiate(payload.get("capabilities"))
+                    await writer.event(
+                        "session.hello.ack",
+                        payload={
+                            "protocol": 2,
+                            "capabilities": list(negotiated),
+                        },
+                    )
                     continue
                 if event_type == "session.heartbeat":
                     await writer.event("session.heartbeat.ack")
@@ -659,6 +697,8 @@ def create_app(services: AppServices) -> FastAPI:
                     )
                     continue
                 if event_type == "turn.cancel":
+                    if asr_session:
+                        await asr_session.invalidate()
                     cancelled = await turns.cancel()
                     await writer.event(
                         "turn.cancelled",
@@ -692,23 +732,18 @@ def create_app(services: AppServices) -> FastAPI:
                         )
                         continue
                     turn_id = _clean_identifier(payload.get("turnId")) or uuid.uuid4().hex
+                    if asr_session:
+                        await asr_session.invalidate()
                     await turns.start(text, turn_id)
                     continue
                 await writer.event(
                     "error",
                     payload={"code": "unsupported_event", "message": f"不支持事件 {event_type}"},
                 )
-        except WebSocketDisconnect:
+        except (WebSocketDisconnect, RealtimeClientTooSlowError):
             pass
         finally:
-            if vision_scheduler:
-                await vision_scheduler.close()
-            if asr_session:
-                await asr_session.close()
-            if turns:
-                await turns.cancel()
-            await connection.release()
-            await handshake.release()
+            await resources.close()
 
     if services.auth_router is not None and services.toc_router is not None:
         app.include_router(services.auth_router)
@@ -770,7 +805,7 @@ async def _run_turn(
 ) -> None:
     generation = 0
     try:
-        profile = runtime.profiles.get()
+        profile = runtime.profile_for_turn()
         generation, context = await runtime.kernel.begin_turn(user_text)
         trace.bind_generation(generation)
         trace.mark(
@@ -798,41 +833,48 @@ async def _run_turn(
             context,
             profile,
             trace=trace,
+            stream_audio=writer.streaming_audio_enabled,
         ):
-            if generation != runtime.kernel.generation:
-                trace.cancel()
-                return
-            await _emit_avatar_intent(
-                runtime,
-                writer,
-                turn_id,
-                generation,
-                "speaking",
-                segment_index=segment.index,
-            )
-            if generation != runtime.kernel.generation:
-                trace.cancel()
-                return
-            frame_sent_ns = await writer.reply_segment(
-                turn_id=turn_id,
-                generation=generation,
-                index=segment.index,
-                text=segment.text,
-                audio=segment.audio,
-                content_type=segment.content_type,
-            )
-            if not first_frame_sent:
-                first_frame_sent = True
-                trace.mark_at(
-                    TracePoint.FIRST_REPLY_FRAME_SENT,
-                    frame_sent_ns,
-                    attributes=TraceAttributes(
-                        segment_index=segment.index,
-                        audio_bytes=len(segment.audio),
-                        content_type=segment.content_type,
-                    ),
+            try:
+                if generation != runtime.kernel.generation:
+                    trace.cancel()
+                    return
+                await _emit_avatar_intent(
+                    runtime,
+                    writer,
+                    turn_id,
+                    generation,
+                    "speaking",
+                    segment_index=segment.index,
                 )
-            texts.append(segment.text)
+                if generation != runtime.kernel.generation:
+                    trace.cancel()
+                    return
+                write_result = await writer.reply_segment(
+                    turn_id=turn_id,
+                    generation=generation,
+                    index=segment.index,
+                    text=segment.text,
+                    audio=segment.audio,
+                    content_type=segment.content_type,
+                    audio_stream=segment.audio_stream,
+                )
+                if not first_frame_sent:
+                    first_frame_sent = True
+                    trace.mark_at(
+                        TracePoint.FIRST_REPLY_FRAME_SENT,
+                        write_result.first_frame_sent_ns,
+                        attributes=TraceAttributes(
+                            segment_index=segment.index,
+                            audio_bytes=write_result.audio_bytes,
+                            content_type=segment.content_type,
+                        ),
+                    )
+                texts.append(segment.text)
+            finally:
+                if segment.audio_stream is not None:
+                    with contextlib.suppress(Exception):
+                        await segment.audio_stream.aclose()
         reply = "".join(texts).strip()
         if not reply:
             raise RuntimeError("模型没有生成可播放回复")
@@ -862,6 +904,9 @@ async def _run_turn(
     except asyncio.CancelledError:
         trace.cancel()
         raise
+    except RealtimeClientTooSlowError as exc:
+        trace.fail(exc)
+        _LOGGER.warning("Realtime client stopped draining output")
     except Exception as exc:
         trace.fail(exc)
         _LOGGER.warning("Reply generation failed (%s)", type(exc).__name__)
@@ -942,6 +987,7 @@ async def _handle_binary(
     writer: ConnectionWriter,
     asr_session: StreamingAsrSession | None,
     vision_scheduler: VisualSemanticScheduler | None,
+    budget: ConnectionBudget | None = None,
 ) -> None:
     try:
         frame = parse_binary_frame(raw)
@@ -957,6 +1003,16 @@ async def _handle_binary(
             },
         )
         return
+    if frame.kind is BinaryKind.PCM16:
+        if budget is not None and not budget.accept_pcm(len(frame.payload)):
+            await writer.event(
+                "error",
+                payload={
+                    "code": "pcm_rate_limited",
+                    "message": "PCM16 上传快于实时音频，已丢弃当前帧",
+                },
+            )
+            return
     if frame.kind is BinaryKind.PCM16 and asr_session is not None:
         try:
             asr_session.submit_pcm16(frame.payload)
@@ -981,10 +1037,24 @@ async def _handle_asr_update(
     update: AsrUpdate,
     writer: ConnectionWriter,
     turns: TurnController,
+    session: StreamingAsrSession | None = None,
 ) -> None:
+    if session is not None and update.epoch != session.epoch:
+        return
+    error = getattr(update, "error", None)
+    if error is not None:
+        code = _clean_identifier(getattr(error, "code", "")) or "asr_failed"
+        message = str(getattr(error, "message", "") or "语音识别暂时不可用")
+        await writer.event(
+            "error",
+            payload={"code": code, "message": message[:300]},
+        )
+        return
     final_monotonic_ns = time.monotonic_ns() if update.final and update.text else 0
     event_type = "asr.final" if update.final else "asr.partial"
     await writer.event(event_type, payload={"text": update.text})
+    if session is not None and update.epoch != session.epoch:
+        return
     if update.final and update.text:
         await turns.start_from_asr(
             update.text,

@@ -30,6 +30,7 @@ from veyrasoul.personalization.catalog_model import (
 )
 from veyrasoul.personalization.model import ProfileConflictError, ProfileValidationError
 from veyrasoul.personalization.service import IdentityService
+from veyrasoul.providers import AvailableProvider
 
 
 MAX_JSON_BYTES = 2_100_000
@@ -39,6 +40,7 @@ _ETAG_REVISION = re.compile(r'^(?:W/)?"([1-9][0-9]*)"$|^([1-9][0-9]*)$')
 IdentityServiceProvider: TypeAlias = Callable[[], IdentityService]
 DocumentIngestorFactory: TypeAlias = Callable[[UserId, AnimaId], DocumentIngestor]
 PrincipalDependency: TypeAlias = Callable[..., AuthPrincipal]
+ProviderCatalogProvider: TypeAlias = Callable[[], tuple[AvailableProvider, ...]]
 
 
 def create_toc_router(
@@ -47,6 +49,7 @@ def create_toc_router(
     mutation_principal_dependency: PrincipalDependency,
     identity_service_provider: IdentityServiceProvider,
     document_ingestor_factory: DocumentIngestorFactory,
+    provider_catalog_provider: ProviderCatalogProvider | None = None,
 ) -> APIRouter:
     """Build a mountable router without importing the gateway composition root.
 
@@ -57,6 +60,8 @@ def create_toc_router(
     """
 
     router = APIRouter(prefix="/v2", tags=["toc"])
+    catalog_provider = provider_catalog_provider or (lambda: ())
+
     @router.get("/me")
     async def get_me(principal: AuthPrincipal = Depends(principal_dependency)) -> Response:
         return await _execute(
@@ -89,6 +94,18 @@ def create_toc_router(
                     _anima_wire(anima)
                     for anima in identity_service_provider().list_animas(principal.user_id)
                 ]
+            }
+        )
+
+    @router.get("/providers")
+    async def list_providers(
+        principal: AuthPrincipal = Depends(principal_dependency),
+    ) -> Response:
+        del principal
+        return JSONResponse(
+            {
+                "revision": 1,
+                "items": [provider.as_dict() for provider in catalog_provider()],
             }
         )
 

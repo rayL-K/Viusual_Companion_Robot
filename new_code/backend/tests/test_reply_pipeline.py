@@ -2,8 +2,20 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
+from veyrasoul.orchestration.ports import SpeechAudioFormat, SpeechSynthesisStream
 from veyrasoul.orchestration.reply_pipeline import ReplyPipeline, SentenceSegmenter
 from veyrasoul.orchestration.turn_service import _limit_stream
+
+
+PCM_FORMAT = SpeechAudioFormat(
+    content_type="audio/pcm",
+    encoding="pcm_s16le",
+    sample_rate_hz=24_000,
+    channels=1,
+    sample_width_bytes=2,
+)
 
 
 def test_sentence_segmenter_handles_streamed_chinese_punctuation() -> None:
@@ -54,6 +66,112 @@ def test_pipeline_reads_ahead_while_first_segment_is_synthesizing() -> None:
         allow_first_tts.set()
         segments = await asyncio.wait_for(task, 1)
         assert [segment.text for segment in segments] == ["第一句话。", "第二句话。"]
+
+    asyncio.run(scenario())
+
+
+def test_pipeline_prefetches_next_stream_first_chunk_while_current_plays() -> None:
+    async def scenario() -> None:
+        first_playing = asyncio.Event()
+        release_first_tail = asyncio.Event()
+        second_requested = asyncio.Event()
+        second_primed = asyncio.Event()
+        third_requested = asyncio.Event()
+
+        async def text_stream():
+            yield "第一句话。第二句话。第三句话。"
+
+        async def synthesize(text: str) -> SpeechSynthesisStream:
+            if text == "第一句话。":
+
+                async def first_chunks():
+                    yield b"first-head"
+                    first_playing.set()
+                    await release_first_tail.wait()
+                    yield b"first-tail"
+
+                return SpeechSynthesisStream(PCM_FORMAT, first_chunks())
+
+            if text == "第二句话。":
+                second_requested.set()
+
+            async def second_chunks():
+                yield b""
+                if text == "第二句话。":
+                    second_primed.set()
+                    yield b"second-head"
+                    yield b"second-tail"
+                else:
+                    third_requested.set()
+                    yield b"third-head"
+
+            return SpeechSynthesisStream(PCM_FORMAT, second_chunks())
+
+        pipeline = ReplyPipeline(synthesize)
+        segments = pipeline.run(text_stream())
+        first = await asyncio.wait_for(anext(segments), 1)
+        assert first.audio_stream is not None
+
+        async def collect_current() -> list[bytes]:
+            return [chunk async for chunk in first.audio_stream.chunks]
+
+        playing = asyncio.create_task(collect_current())
+        await asyncio.wait_for(first_playing.wait(), 1)
+        await asyncio.wait_for(second_requested.wait(), 1)
+        await asyncio.wait_for(second_primed.wait(), 1)
+        assert not playing.done()
+        assert not third_requested.is_set()
+
+        release_first_tail.set()
+        assert await asyncio.wait_for(playing, 1) == [b"first-head", b"first-tail"]
+
+        second = await asyncio.wait_for(anext(segments), 1)
+        assert second.audio_stream is not None
+        await asyncio.wait_for(third_requested.wait(), 1)
+        assert [chunk async for chunk in second.audio_stream.chunks] == [
+            b"second-head",
+            b"second-tail",
+        ]
+        third = await asyncio.wait_for(anext(segments), 1)
+        assert third.audio_stream is not None
+        assert [chunk async for chunk in third.audio_stream.chunks] == [b"third-head"]
+        with pytest.raises(StopAsyncIteration):
+            await anext(segments)
+
+    asyncio.run(scenario())
+
+
+def test_pipeline_cancel_closes_current_and_prefetched_streams() -> None:
+    async def scenario() -> None:
+        closed: list[str] = []
+        second_primed = asyncio.Event()
+
+        async def text_stream():
+            yield "第一句话。第二句话。"
+
+        async def synthesize(text: str) -> SpeechSynthesisStream:
+            label = "first" if text == "第一句话。" else "second"
+
+            async def chunks():
+                try:
+                    if label == "second":
+                        second_primed.set()
+                    yield f"{label}-head".encode()
+                    await asyncio.Event().wait()
+                finally:
+                    closed.append(label)
+
+            return SpeechSynthesisStream(PCM_FORMAT, chunks())
+
+        pipeline = ReplyPipeline(synthesize)
+        segments = pipeline.run(text_stream())
+        first = await asyncio.wait_for(anext(segments), 1)
+        assert first.audio_stream is not None
+        assert await anext(first.audio_stream.chunks) == b"first-head"
+        await asyncio.wait_for(second_primed.wait(), 1)
+
+        await asyncio.wait_for(segments.aclose(), 1)
+        assert sorted(closed) == ["first", "second"]
 
     asyncio.run(scenario())
 

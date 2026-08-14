@@ -96,6 +96,7 @@ class RuntimeSettings:
     audio_max_keepalive_connections: int = 10
     tts_cloud_model: str = "gpt-4o-mini-tts"
     tts_cloud_voice: str = "alloy"
+    tts_streaming_enabled: bool = False
     asr_cloud_model: str = "gpt-4o-mini-transcribe"
     vision_provider: str | None = None
     vision_url: str = "http://127.0.0.1:8767"
@@ -105,6 +106,7 @@ class RuntimeSettings:
     realtime_allowed_origins: tuple[str, ...] = ()
     realtime_reauth_seconds: float = 30.0
     realtime_lease_renew_seconds: float = 60.0
+    websocket_send_timeout_seconds: float = 5.0
     toc: TocRuntimeSettings = field(default_factory=TocRuntimeSettings, repr=False)
 
     def __post_init__(self) -> None:
@@ -145,6 +147,15 @@ class RuntimeSettings:
         tts_model = read.get("ANIMA_TTS_MODEL_DIR", "VEYRASOUL_TTS_MODEL_DIR")
         if tts_provider == "sherpa" and not tts_model:
             raise ValueError("ANIMA_TTS_MODEL_DIR is required for the sherpa TTS provider")
+        tts_streaming_enabled = read.boolean(
+            "ANIMA_TTS_STREAMING_ENABLED",
+            default=False,
+        )
+        if tts_streaming_enabled and tts_provider != "openai-compatible":
+            raise ValueError(
+                "ANIMA_TTS_STREAMING_ENABLED requires an explicitly validated "
+                "openai-compatible TTS binding"
+            )
 
         asr_provider = _provider(read.get("ANIMA_ASR_PROVIDER", default="sherpa"))
         asr_model: str | None = None
@@ -219,6 +230,24 @@ class RuntimeSettings:
                 minimum=1,
                 maximum=10_000,
             ),
+            max_concurrent_asr_requests=read.integer(
+                "ANIMA_MAX_CONCURRENT_ASR_REQUESTS",
+                default=2,
+                minimum=1,
+                maximum=64,
+            ),
+            max_asr_requests_per_client_per_minute=read.integer(
+                "ANIMA_MAX_ASR_REQUESTS_PER_CLIENT_PER_MINUTE",
+                default=12,
+                minimum=1,
+                maximum=600,
+            ),
+            max_asr_requests_global_per_minute=read.integer(
+                "ANIMA_MAX_ASR_REQUESTS_GLOBAL_PER_MINUTE",
+                default=48,
+                minimum=1,
+                maximum=10_000,
+            ),
             binary_bytes_per_second=read.integer(
                 "ANIMA_BINARY_BYTES_PER_SECOND",
                 default=512 * 1024,
@@ -230,6 +259,18 @@ class RuntimeSettings:
                 default=2 * 1024 * 1024,
                 minimum=32 * 1024,
                 maximum=32 * 1024 * 1024,
+            ),
+            pcm_bytes_per_second=read.integer(
+                "ANIMA_PCM_BYTES_PER_SECOND",
+                default=16_000 * 2,
+                minimum=16_000 * 2,
+                maximum=64_000,
+            ),
+            pcm_burst_bytes=read.integer(
+                "ANIMA_PCM_BURST_BYTES",
+                default=16_000 * 2,
+                minimum=6_400,
+                maximum=64_000,
             ),
             control_events_per_second=read.integer(
                 "ANIMA_CONTROL_EVENTS_PER_SECOND",
@@ -338,7 +379,7 @@ class RuntimeSettings:
                 "ANIMA_AUDIO_CONNECT_TIMEOUT_SECONDS", default=5.0, minimum=0.1, maximum=60.0
             ),
             audio_read_timeout_seconds=read.number(
-                "ANIMA_AUDIO_READ_TIMEOUT_SECONDS", default=30.0, minimum=0.1, maximum=300.0
+                "ANIMA_AUDIO_READ_TIMEOUT_SECONDS", default=30.0, minimum=0.1, maximum=120.0
             ),
             audio_max_response_bytes=read.integer(
                 "ANIMA_AUDIO_MAX_RESPONSE_BYTES",
@@ -356,6 +397,7 @@ class RuntimeSettings:
                 "ANIMA_TTS_CLOUD_MODEL", default="gpt-4o-mini-tts"
             ),
             tts_cloud_voice=read.get("ANIMA_TTS_CLOUD_VOICE", default="alloy"),
+            tts_streaming_enabled=tts_streaming_enabled,
             asr_cloud_model=read.get(
                 "ANIMA_ASR_CLOUD_MODEL", default="gpt-4o-mini-transcribe"
             ),
@@ -398,6 +440,12 @@ class RuntimeSettings:
                 default=60.0,
                 minimum=1.0,
                 maximum=240.0,
+            ),
+            websocket_send_timeout_seconds=read.number(
+                "ANIMA_WEBSOCKET_SEND_TIMEOUT_SECONDS",
+                default=5.0,
+                minimum=0.1,
+                maximum=60.0,
             ),
             toc=toc,
         )

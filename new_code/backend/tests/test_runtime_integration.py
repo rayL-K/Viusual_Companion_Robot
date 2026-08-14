@@ -96,7 +96,8 @@ def test_production_session_binds_one_user_anima_namespace(tmp_path) -> None:
             assurance="authenticated",
         )
 
-        runtime = await registry.get("session-1", identity)
+        lease = await registry.acquire("session-1", identity)
+        runtime = lease.runtime
 
         assert services.capabilities() == _snapshot().capabilities()
         with runtime.kernel.memory.connection() as connection:
@@ -108,6 +109,7 @@ def test_production_session_binds_one_user_anima_namespace(tmp_path) -> None:
         assert runtime.kernel.memory_pipeline.namespace == MemoryNamespace(
             UserId("alice"), AnimaId("strawberry")
         )
+        await lease.release()
 
     asyncio.run(scenario())
 
@@ -141,7 +143,8 @@ def test_production_retrieval_reuses_ingestion_embeddings_without_lexical_match(
             source="user-upload",
         )
 
-        runtime = await registry.get("session-1", identity)
+        lease = await registry.acquire("session-1", identity)
+        runtime = lease.runtime
         _, context = await runtime.kernel.begin_turn("seaside dusk")
 
         assert len(context.memories) == 1
@@ -149,6 +152,7 @@ def test_production_retrieval_reuses_ingestion_embeddings_without_lexical_match(
         assert memory.entry.title == "旅行记录"
         assert memory.lexical_rank is None
         assert memory.vector_rank == 1
+        await lease.release()
 
     asyncio.run(scenario())
 

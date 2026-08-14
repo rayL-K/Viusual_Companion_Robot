@@ -16,6 +16,8 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from veyrasoul.orchestration.ports import AsrAdmissionFailure
+
 
 class WebSocketHandshake(Protocol):
     headers: object
@@ -37,8 +39,13 @@ class AdmissionPolicy:
     max_concurrent_turns: int = 2
     max_turns_per_client_per_minute: int = 20
     max_turns_global_per_minute: int = 60
+    max_concurrent_asr_requests: int = 2
+    max_asr_requests_per_client_per_minute: int = 12
+    max_asr_requests_global_per_minute: int = 48
     binary_bytes_per_second: int = 512 * 1024
     binary_burst_bytes: int = 2 * 1024 * 1024
+    pcm_bytes_per_second: int = 16_000 * 2
+    pcm_burst_bytes: int = 16_000 * 2
     control_events_per_second: int = 10
     control_burst_events: int = 20
     idle_timeout_seconds: int = 90
@@ -63,8 +70,13 @@ class AdmissionPolicy:
             "max_concurrent_turns",
             "max_turns_per_client_per_minute",
             "max_turns_global_per_minute",
+            "max_concurrent_asr_requests",
+            "max_asr_requests_per_client_per_minute",
+            "max_asr_requests_global_per_minute",
             "binary_bytes_per_second",
             "binary_burst_bytes",
+            "pcm_bytes_per_second",
+            "pcm_burst_bytes",
             "control_events_per_second",
             "control_burst_events",
             "idle_timeout_seconds",
@@ -76,6 +88,10 @@ class AdmissionPolicy:
             raise ValueError("per-client connection limit cannot exceed the global limit")
         if self.binary_burst_bytes < self.binary_bytes_per_second:
             raise ValueError("binary burst must be at least one second of the configured rate")
+        if self.pcm_burst_bytes > self.pcm_bytes_per_second:
+            raise ValueError("PCM burst must not exceed one second of the configured rate")
+        if self.pcm_burst_bytes < 6_400:
+            raise ValueError("PCM burst must accept at least one 200 millisecond frame")
         if self.control_burst_events < self.control_events_per_second:
             raise ValueError("control burst must be at least one second of the configured rate")
         if self.max_session_seconds < self.idle_timeout_seconds:
@@ -100,6 +116,10 @@ class ConnectionBudget:
         self._control_capacity = float(policy.control_burst_events)
         self._control_tokens = self._control_capacity
         self._control_updated_at = time.monotonic()
+        self._pcm_rate = float(policy.pcm_bytes_per_second)
+        self._pcm_capacity = float(policy.pcm_burst_bytes)
+        self._pcm_tokens = self._pcm_capacity
+        self._pcm_updated_at = time.monotonic()
 
     def accept_binary(self, size: int, now: float | None = None) -> bool:
         amount = max(0, int(size))
@@ -123,6 +143,22 @@ class ConnectionBudget:
         if self._control_tokens < 1.0:
             return False
         self._control_tokens -= 1.0
+        return True
+
+    def accept_pcm(self, size: int, now: float | None = None) -> bool:
+        """Limit mono 16 kHz PCM16 independently from JPEG/binary traffic."""
+
+        amount = max(0, int(size))
+        timestamp = time.monotonic() if now is None else float(now)
+        elapsed = max(0.0, timestamp - self._pcm_updated_at)
+        self._pcm_tokens = min(
+            self._pcm_capacity,
+            self._pcm_tokens + elapsed * self._pcm_rate,
+        )
+        self._pcm_updated_at = timestamp
+        if amount > self._pcm_tokens:
+            return False
+        self._pcm_tokens -= amount
         return True
 
 
@@ -152,6 +188,18 @@ class TurnLease:
         await self._gate._release_turn()
 
 
+class AsrLease:
+    def __init__(self, gate: "AdmissionGate") -> None:
+        self._gate = gate
+        self._released = False
+
+    async def release(self) -> None:
+        if self._released:
+            return
+        self._released = True
+        await self._gate._release_asr()
+
+
 class AdmissionGate:
     COOKIE_NAME = "anima_admission"
     DEVICE_COOKIE_NAME = "anima_device"
@@ -166,6 +214,9 @@ class AdmissionGate:
         self._active_turns = 0
         self._global_turns: deque[float] = deque()
         self._turns_by_client: dict[str, deque[float]] = {}
+        self._active_asr_requests = 0
+        self._global_asr_requests: deque[float] = deque()
+        self._asr_requests_by_client: dict[str, deque[float]] = {}
 
     def issue_token(self, now: int | None = None) -> str:
         return self._issue_signed_token("admission", now)
@@ -320,6 +371,55 @@ class AdmissionGate:
     async def _release_turn(self) -> None:
         async with self._lock:
             self._active_turns = max(0, self._active_turns - 1)
+
+    async def try_asr(
+        self,
+        connection: ConnectionLease,
+        now: float | None = None,
+    ) -> tuple[AsrLease | None, AsrAdmissionFailure | None]:
+        """Admit one paid ASR HTTP request without consuming turn quotas."""
+
+        timestamp = time.monotonic() if now is None else float(now)
+        cutoff = timestamp - 60.0
+        async with self._lock:
+            _prune(self._global_asr_requests, cutoff)
+            for key, values in tuple(self._asr_requests_by_client.items()):
+                _prune(values, cutoff)
+                if not values:
+                    self._asr_requests_by_client.pop(key, None)
+            client_requests = self._asr_requests_by_client.get(connection.client_key)
+            if client_requests is None:
+                client_requests = deque()
+            if (
+                len(client_requests)
+                >= self.policy.max_asr_requests_per_client_per_minute
+            ):
+                return None, AsrAdmissionFailure(
+                    "asr_rate_limited",
+                    "语音识别请求过于频繁，请稍后再试",
+                )
+            if (
+                len(self._global_asr_requests)
+                >= self.policy.max_asr_requests_global_per_minute
+            ):
+                return None, AsrAdmissionFailure(
+                    "server_busy",
+                    "语音识别服务繁忙，请稍后再试",
+                )
+            if self._active_asr_requests >= self.policy.max_concurrent_asr_requests:
+                return None, AsrAdmissionFailure(
+                    "server_busy",
+                    "语音识别服务繁忙，请稍后再试",
+                )
+            self._asr_requests_by_client[connection.client_key] = client_requests
+            client_requests.append(timestamp)
+            self._global_asr_requests.append(timestamp)
+            self._active_asr_requests += 1
+        return AsrLease(self), None
+
+    async def _release_asr(self) -> None:
+        async with self._lock:
+            self._active_asr_requests = max(0, self._active_asr_requests - 1)
 
 
 def client_key(websocket: WebSocketHandshake) -> str:

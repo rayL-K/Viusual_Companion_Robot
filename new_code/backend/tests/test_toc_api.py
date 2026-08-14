@@ -26,6 +26,7 @@ from veyrasoul.personalization import (
     ResourceBusyError,
     SqliteIdentityRepository,
 )
+from veyrasoul.providers import AvailableProvider, Capability, Locality
 
 
 @dataclass
@@ -52,7 +53,9 @@ class FakeIngestor:
 
 
 def api(
-    tmp_path, quota: ResourceQuotaConfig | None = None
+    tmp_path,
+    quota: ResourceQuotaConfig | None = None,
+    provider_catalog: tuple[AvailableProvider, ...] | None = None,
 ) -> tuple[TestClient, dict[str, UserId], list[tuple[UserId, AnimaId]]]:
     layout = DataLayout(tmp_path / "data", tmp_path / "legacy.db")
     service = IdentityService(
@@ -100,6 +103,7 @@ def api(
             mutation_principal_dependency=mutation_principal,
             identity_service_provider=lambda: service,
             document_ingestor_factory=ingestor_factory,
+            provider_catalog_provider=lambda: provider_catalog or (),
         )
     )
     app.state.auth_counts = auth_counts
@@ -189,6 +193,42 @@ def test_settings_preserve_profile_revision_contract(tmp_path) -> None:
         json={"expectedRevision": 1, "replyDelayMs": 100},
     )
     assert stale.status_code == 412
+
+
+def test_provider_catalog_exposes_only_injected_runtime_bindings(tmp_path) -> None:
+    available = (
+        AvailableProvider(
+            Capability.LLM,
+            "dialogue-fast",
+            Locality.CLOUD,
+            ("dialogue-v2",),
+        ),
+        AvailableProvider(
+            Capability.TTS,
+            "voice-warm",
+            Locality.LOCAL,
+            ("acoustic-v1",),
+            ("warm.zh",),
+        ),
+    )
+    client, _, _ = api(tmp_path, provider_catalog=available)
+
+    response = client.get("/v2/providers")
+    assert response.status_code == 200
+    assert response.json() == {
+        "revision": 1,
+        "items": [item.as_dict() for item in available],
+    }
+    assert "apiKey" not in response.text
+    assert "baseUrl" not in response.text
+
+
+def test_provider_catalog_is_empty_when_composition_does_not_inject_bindings(
+    tmp_path,
+) -> None:
+    client, _, _ = api(tmp_path)
+
+    assert client.get("/v2/providers").json() == {"revision": 1, "items": []}
 
 
 def test_settings_provider_selection_is_allowlisted_and_owner_scoped(tmp_path) -> None:
@@ -462,6 +502,7 @@ def test_reads_and_every_mutation_use_separate_auth_dependencies(
     for path in (
         "/v2/me",
         "/v2/animas",
+        "/v2/providers",
         "/v2/animas/rabbit",
         "/v2/animas/rabbit/settings",
     ):

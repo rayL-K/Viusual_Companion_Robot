@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
-from veyrasoul.gateway.admission import AdmissionGate, AdmissionPolicy
+from veyrasoul.gateway.admission import AdmissionGate, AdmissionPolicy, ConnectionBudget
 
 
 def secured_policy(**overrides) -> AdmissionPolicy:
@@ -95,6 +95,58 @@ def test_connection_turn_and_media_budgets_are_bounded() -> None:
         replacement, failure = await gate.try_connect("198.51.100.10")
         assert replacement is not None and failure is None
         await replacement.release()
+
+    asyncio.run(scenario())
+
+
+def test_pcm_budget_allows_realtime_frames_but_rejects_a_forged_burst() -> None:
+    gate = AdmissionGate(
+        secured_policy(
+            pcm_bytes_per_second=32_000,
+            pcm_burst_bytes=32_000,
+        )
+    )
+    burst = ConnectionBudget(gate.policy, "burst")
+    assert all(burst.accept_pcm(6_400, now=0.0) for _ in range(5))
+    assert not burst.accept_pcm(2, now=0.0)
+
+    realtime = ConnectionBudget(gate.policy, "realtime")
+    assert all(
+        realtime.accept_pcm(640, now=index * 0.02)
+        for index in range(100)
+    )
+
+
+def test_asr_admission_uses_independent_rate_and_concurrency_counters() -> None:
+    async def scenario() -> None:
+        gate = AdmissionGate(
+            secured_policy(
+                max_concurrent_asr_requests=1,
+                max_asr_requests_per_client_per_minute=1,
+                max_asr_requests_global_per_minute=2,
+            )
+        )
+        first, _ = await gate.try_connect("198.51.100.20")
+        second, _ = await gate.try_connect("198.51.100.21")
+        assert first is not None and second is not None
+
+        asr, failure = await gate.try_asr(first, now=10.0)
+        assert asr is not None and failure is None
+        busy, failure = await gate.try_asr(second, now=10.0)
+        assert busy is None and failure is not None
+        assert failure.code == "server_busy"
+        await asr.release()
+
+        limited, failure = await gate.try_asr(first, now=11.0)
+        assert limited is None and failure is not None
+        assert failure.code == "asr_rate_limited"
+
+        # ASR accounting must not consume the independent LLM-turn allowance.
+        turn, failure = await gate.try_turn(first, now=11.0)
+        assert turn is not None and failure is None
+        await turn.release()
+        await first.release()
+        await second.release()
 
     asyncio.run(scenario())
 

@@ -30,7 +30,11 @@ from veyrasoul.personalization import (
     ObjectNotFoundError,
 )
 
-from .toc_api import DocumentIngestorFactory, create_toc_router
+from .toc_api import (
+    DocumentIngestorFactory,
+    ProviderCatalogProvider,
+    create_toc_router,
+)
 
 
 class TocConfigurationError(RuntimeError):
@@ -59,6 +63,7 @@ def create_toc_composition(
     auth_repository: AuthRepository | None,
     identity_service: IdentityService | None,
     document_ingestor_factory: DocumentIngestorFactory | None,
+    provider_catalog_provider: ProviderCatalogProvider | None = None,
     auth_config: AuthConfig | None = None,
     cookie_config: SessionCookieConfig | None = None,
 ) -> TocComposition:
@@ -97,6 +102,7 @@ def create_toc_composition(
         mutation_principal_dependency=session_boundary.mutation_principal,
         identity_service_provider=lambda: identity_service,
         document_ingestor_factory=document_ingestor_factory,
+        provider_catalog_provider=provider_catalog_provider,
     )
     return TocComposition(
         auth_service=auth_service,

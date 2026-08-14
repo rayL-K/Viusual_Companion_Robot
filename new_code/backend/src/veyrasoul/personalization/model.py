@@ -81,6 +81,11 @@ class AnimaProfile:
             raise ProfileValidationError("voiceId 格式无效")
         if not isinstance(self.provider_snapshot, ProviderSnapshot):
             raise ProfileValidationError("providers 必须是不可变的 ProviderSnapshot")
+        provider_voice = _tts_voice(self.provider_snapshot)
+        if provider_voice is not None and provider_voice != self.voice_id:
+            raise ProfileValidationError(
+                "voiceId 必须与 providers.tts.config.voice 一致"
+            )
         if isinstance(self.revision, bool) or not isinstance(self.revision, int) or self.revision < 1:
             raise ProfileValidationError("revision 必须为正整数")
 
@@ -117,6 +122,7 @@ class AnimaProfile:
             values["reply_delay_ms"] = _integer_range(
                 payload["replyDelayMs"], "replyDelayMs", 0, MAX_REPLY_DELAY_MS
             )
+        registry = provider_registry or default_provider_registry()
         if "voiceId" in payload:
             voice_id = payload["voiceId"]
             if not isinstance(voice_id, str) or not _VOICE_ID.fullmatch(voice_id):
@@ -127,11 +133,28 @@ class AnimaProfile:
             if not isinstance(providers, Mapping):
                 raise ProfileValidationError("providers 必须是对象")
             _reject_server_managed_provider_values(providers)
-            registry = provider_registry or default_provider_registry()
             try:
                 values["provider_snapshot"] = registry.parse_snapshot(providers)
             except ValueError as exc:
                 raise ProfileValidationError(str(exc)) from exc
+        next_voice = str(values.get("voice_id", self.voice_id))
+        next_snapshot = values.get("provider_snapshot", self.provider_snapshot)
+        assert isinstance(next_snapshot, ProviderSnapshot)
+        provider_voice = _tts_voice(next_snapshot)
+        if "providers" in payload and "voiceId" not in payload and provider_voice is not None:
+            values["voice_id"] = provider_voice
+            next_voice = provider_voice
+        elif "voiceId" in payload and "providers" not in payload and provider_voice is not None:
+            try:
+                next_snapshot = _with_tts_voice(next_snapshot, next_voice, registry)
+            except ValueError as exc:
+                raise ProfileValidationError(str(exc)) from exc
+            values["provider_snapshot"] = next_snapshot
+            provider_voice = next_voice
+        if provider_voice is not None and provider_voice != next_voice:
+            raise ProfileValidationError(
+                "voiceId 必须与 providers.tts.config.voice 一致"
+            )
         return replace(self, **values)
 
     def to_wire(self) -> dict[str, object]:
@@ -191,3 +214,25 @@ def _reject_server_managed_provider_values(value: object) -> None:
     elif isinstance(value, (list, tuple)):
         for item in value:
             _reject_server_managed_provider_values(item)
+
+
+def _tts_voice(snapshot: ProviderSnapshot) -> str | None:
+    value = snapshot.resolve("tts").config.get("voice")
+    if value is None:
+        return None
+    if not isinstance(value, str) or not _VOICE_ID.fullmatch(value):
+        raise ProfileValidationError("providers.tts.config.voice 格式无效")
+    return value
+
+
+def _with_tts_voice(
+    snapshot: ProviderSnapshot,
+    voice_id: str,
+    registry: ProviderRegistry,
+) -> ProviderSnapshot:
+    wire = snapshot.as_dict()
+    tts = wire["tts"]
+    config = dict(tts.get("config", {}))
+    config["voice"] = voice_id
+    tts["config"] = config
+    return registry.parse_snapshot(wire)

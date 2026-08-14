@@ -10,7 +10,12 @@ from pathlib import Path
 
 import numpy as np
 
-from veyrasoul.orchestration.ports import AsrUpdate, AsrUpdateHandler
+from veyrasoul.orchestration.ports import (
+    AudioAdapterCapabilities,
+    AsrAdmissionHandler,
+    AsrUpdate,
+    AsrUpdateHandler,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +30,8 @@ class SherpaAsrConfig:
 
 
 class SherpaStreamingAsr:
+    capabilities = AudioAdapterCapabilities(asr_streaming=True)
+
     def __init__(self, config: SherpaAsrConfig) -> None:
         self.config = config
         self._recognizer = None
@@ -32,7 +39,14 @@ class SherpaStreamingAsr:
         self._decode_lock = threading.Lock()
         self._async_decode_lock = asyncio.Lock()
 
-    def create_session(self) -> "SherpaAsrSession":
+    def create_session(
+        self,
+        *,
+        admit: AsrAdmissionHandler | None = None,
+    ) -> "SherpaAsrSession":
+        # Local inference has no billable upstream request; admission is a
+        # gateway-wide factory contract and is intentionally not consumed.
+        del admit
         recognizer = self._load()
         return SherpaAsrSession(self, recognizer.create_stream(), self.config.queue_frames)
 
@@ -86,6 +100,16 @@ class SherpaStreamingAsr:
                         await asyncio.shield(worker)
                 raise
 
+    def _reset(self, stream) -> None:
+        with self._decode_lock:
+            self._recognizer.reset(stream)
+
+    async def reset(self, stream) -> None:
+        """Reset native stream state under the same locks used for decode."""
+
+        async with self._async_decode_lock:
+            await asyncio.to_thread(self._reset, stream)
+
     def _load(self):
         if self._recognizer is not None:
             return self._recognizer
@@ -125,10 +149,19 @@ class SherpaAsrSession:
     def __init__(self, owner: SherpaStreamingAsr, stream, queue_frames: int) -> None:
         self.owner = owner
         self.stream = stream
-        self.queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=max(10, queue_frames))
+        self.queue: asyncio.Queue[tuple[int, bytes] | None] = asyncio.Queue(
+            maxsize=max(10, queue_frames)
+        )
         self.task: asyncio.Task[None] | None = None
         self.handler: AsrUpdateHandler | None = None
         self.last_partial = ""
+        self._epoch = 0
+        self._reset_required = False
+        self._emit_task: asyncio.Task[None] | None = None
+
+    @property
+    def epoch(self) -> int:
+        return self._epoch
 
     async def start(self, handler: AsrUpdateHandler) -> None:
         if self.task is not None:
@@ -142,25 +175,48 @@ class SherpaAsrSession:
         if not pcm16 or len(pcm16) % 2:
             raise ValueError("PCM16 frame must contain complete int16 samples")
         try:
-            self.queue.put_nowait(bytes(pcm16))
+            self.queue.put_nowait((self._epoch, bytes(pcm16)))
         except asyncio.QueueFull as exc:
             raise RuntimeError("ASR input queue exceeded one second") from exc
+
+    async def invalidate(self) -> None:
+        """Drop queued audio immediately and stale-gate any native decode in flight."""
+
+        self._epoch += 1
+        self.last_partial = ""
+        self._reset_required = True
+        while True:
+            try:
+                self.queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+        emit_task = self._emit_task
+        if emit_task is not None and not emit_task.done():
+            emit_task.cancel()
 
     async def close(self) -> None:
         task = self.task
         if task is None:
             return
         self.task = None
+        await self.invalidate()
         if not task.done():
             await self.queue.put(None)
             await task
 
     async def _run(self) -> None:
+        deferred: tuple[int, bytes] | None = None
         while True:
-            first = await self.queue.get()
+            first = deferred if deferred is not None else await self.queue.get()
+            deferred = None
             if first is None:
                 return
-            frames = [first]
+            epoch, first_pcm = first
+            if self._reset_required:
+                await self._reset_stale_stream()
+            if epoch != self._epoch:
+                continue
+            frames = [first_pcm]
             stop_after_batch = False
             for _ in range(9):
                 try:
@@ -170,21 +226,55 @@ class SherpaAsrSession:
                 if value is None:
                     stop_after_batch = True
                     break
-                frames.append(value)
+                value_epoch, value_pcm = value
+                if value_epoch != epoch:
+                    deferred = value
+                    break
+                frames.append(value_pcm)
             text, endpoint = await self.owner.decode(self.stream, b"".join(frames))
+            if epoch != self._epoch:
+                await self._reset_stale_stream()
+                if stop_after_batch:
+                    return
+                continue
             if text and text != self.last_partial:
                 self.last_partial = text
-                await self._emit(AsrUpdate(text=text, final=False))
+                await self._emit(
+                    AsrUpdate(text=text, final=False, epoch=epoch),
+                    epoch,
+                )
             if endpoint:
                 if text:
-                    await self._emit(AsrUpdate(text=text, final=True))
+                    await self._emit(
+                        AsrUpdate(text=text, final=True, epoch=epoch),
+                        epoch,
+                    )
                 self.last_partial = ""
             if stop_after_batch:
                 return
 
-    async def _emit(self, update: AsrUpdate) -> None:
-        if self.handler is not None:
-            await self.handler(update)
+    async def _reset_stale_stream(self) -> None:
+        while self._reset_required:
+            reset_epoch = self._epoch
+            await self.owner.reset(self.stream)
+            if reset_epoch == self._epoch:
+                self._reset_required = False
+
+    async def _emit(self, update: AsrUpdate, epoch: int) -> None:
+        handler = self.handler
+        if handler is None or epoch != self._epoch:
+            return
+        task = asyncio.create_task(handler(update), name="sherpa-asr-emit")
+        self._emit_task = task
+        try:
+            await task
+        except asyncio.CancelledError:
+            if epoch != self._epoch:
+                return
+            raise
+        finally:
+            if self._emit_task is task:
+                self._emit_task = None
 
 
 def _preferred_model(root: Path, prefix: str) -> Path:

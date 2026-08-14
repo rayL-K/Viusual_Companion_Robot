@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import AsyncIterator
 
 from veyrasoul.personalization.model import AnimaProfile
@@ -14,7 +15,12 @@ from veyrasoul.telemetry import (
 )
 
 from .context import ContextBundle
-from .ports import SpeechSynthesisRequest, SpeechSynthesizer, StreamingLlm
+from .ports import (
+    SpeechSynthesisRequest,
+    SpeechSynthesisStream,
+    SpeechSynthesizer,
+    StreamingLlm,
+)
 from .prompt import build_messages
 from .reply_pipeline import ReadyReplySegment, ReplyPipeline
 
@@ -34,6 +40,7 @@ class TurnService:
         profile: AnimaProfile,
         *,
         trace: TurnTrace | None = None,
+        stream_audio: bool = False,
     ) -> AsyncIterator[ReadyReplySegment]:
         history: list[dict[str, str]] = []
         for turn in context.recent_turns:
@@ -62,7 +69,7 @@ class TurnService:
 
         segment_index = 0
 
-        async def synthesize(text: str) -> tuple[bytes, str]:
+        async def synthesize(text: str) -> tuple[bytes, str] | SpeechSynthesisStream:
             nonlocal segment_index
             current_index = segment_index
             segment_index += 1
@@ -77,14 +84,54 @@ class TurnService:
                         attributes=TraceAttributes(text_chars=len(text)),
                     )
                 trace.mark(TracePoint.TTS_SUBMIT, stage=TraceStage.TTS, attributes=common)
+            request = SpeechSynthesisRequest(text=text, voice_id=profile.voice_id)
+
+            def mark_completed(
+                status: str,
+                *,
+                audio_bytes: int = 0,
+                content_type: str = "",
+                error_type: str = "",
+            ) -> None:
+                if trace is not None:
+                    trace.mark(
+                        TracePoint.TTS_COMPLETED,
+                        stage=TraceStage.TTS,
+                        attributes=TraceAttributes(
+                            segment_index=current_index,
+                            text_chars=len(text),
+                            audio_bytes=audio_bytes,
+                            content_type=content_type,
+                            status=status,
+                            error_type=error_type,
+                        ),
+                    )
+
+            if stream_audio:
+                stream_synthesize = getattr(self.tts, "stream_synthesize", None)
+                if callable(stream_synthesize):
+                    try:
+                        stream = await stream_synthesize(request)
+                    except asyncio.CancelledError:
+                        mark_completed("cancelled", error_type="CancelledError")
+                        raise
+                    except Exception as exc:
+                        mark_completed("error", error_type=type(exc).__name__)
+                        raise
+                    if not isinstance(stream, SpeechSynthesisStream):
+                        mark_completed("error", error_type="TypeError")
+                        raise TypeError("stream_synthesize must return SpeechSynthesisStream")
+                    return SpeechSynthesisStream(
+                        stream.format,
+                        _trace_speech_stream(stream, mark_completed),
+                    )
+
             status = "closed"
             error_type = ""
             audio = b""
             content_type = ""
             try:
-                audio, content_type = await self.tts.synthesize(
-                    SpeechSynthesisRequest(text=text, voice_id=profile.voice_id)
-                )
+                audio, content_type = await self.tts.synthesize(request)
             except asyncio.CancelledError:
                 status = "cancelled"
                 error_type = "CancelledError"
@@ -97,19 +144,12 @@ class TurnService:
                 status = "completed"
                 return audio, content_type
             finally:
-                if trace is not None:
-                    trace.mark(
-                        TracePoint.TTS_COMPLETED,
-                        stage=TraceStage.TTS,
-                        attributes=TraceAttributes(
-                            segment_index=current_index,
-                            text_chars=len(text),
-                            audio_bytes=len(audio),
-                            content_type=content_type,
-                            status=status,
-                            error_type=error_type,
-                        ),
-                    )
+                mark_completed(
+                    status,
+                    audio_bytes=len(audio),
+                    content_type=content_type,
+                    error_type=error_type,
+                )
 
         pipeline = ReplyPipeline(synthesize)
         if trace is not None:
@@ -120,6 +160,41 @@ class TurnService:
         )
         async for segment in pipeline.run(limited_stream):
             yield segment
+
+
+async def _trace_speech_stream(
+    stream: SpeechSynthesisStream,
+    mark_completed,
+) -> AsyncIterator[bytes]:
+    status = "closed"
+    error_type = ""
+    audio_bytes = 0
+    try:
+        async for chunk in stream.chunks:
+            payload = bytes(chunk)
+            if not payload:
+                continue
+            audio_bytes += len(payload)
+            yield payload
+    except asyncio.CancelledError:
+        status = "cancelled"
+        error_type = "CancelledError"
+        raise
+    except Exception as exc:
+        status = "error"
+        error_type = type(exc).__name__
+        raise
+    else:
+        status = "completed"
+    finally:
+        with contextlib.suppress(Exception):
+            await stream.aclose()
+        mark_completed(
+            status,
+            audio_bytes=audio_bytes,
+            content_type=stream.format.content_type,
+            error_type=error_type,
+        )
 
 
 async def _trace_llm_stream(
