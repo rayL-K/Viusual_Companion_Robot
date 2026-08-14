@@ -11,6 +11,24 @@ export type TocAnima = {
   revision: number;
 };
 
+export const PROVIDER_CAPABILITIES = ["llm", "asr", "tts", "vision"] as const;
+export type ProviderCapability = typeof PROVIDER_CAPABILITIES[number];
+type ProviderLocality = "local" | "cloud";
+
+export type PublicProvider = {
+  capability: ProviderCapability;
+  alias: string;
+  locality: ProviderLocality;
+  models: readonly string[];
+  voices: readonly string[];
+  streaming: boolean;
+};
+
+export type ProviderCatalog = {
+  revision: number;
+  items: readonly PublicProvider[];
+};
+
 export type AccessBootstrap =
   | { mode: "toc"; user: TocUser; animas: TocAnima[] }
   | { mode: "anonymous"; anima: TocAnima }
@@ -30,7 +48,9 @@ export class TocApiError extends Error {
 type FetchLike = typeof fetch;
 
 export class TocApiClient {
-  constructor(private readonly fetcher: FetchLike = fetch) {}
+  constructor(
+    private readonly fetcher: FetchLike = globalThis.fetch.bind(globalThis),
+  ) {}
 
   async me(): Promise<TocUser> {
     return parseUser(await this.request("/v2/me"));
@@ -60,6 +80,25 @@ export class TocApiClient {
       throw new TocApiError("invalid-response", "Anima 列表响应格式无效");
     }
     return payload.items.map(parseAnima);
+  }
+
+  async providerCatalog(): Promise<ProviderCatalog> {
+    const payload = await this.request("/v2/providers");
+    if (!isObject(payload) || !Array.isArray(payload.items)) {
+      throw new TocApiError("invalid-response", "服务能力目录响应格式无效");
+    }
+    const revision = requiredRevision(payload.revision);
+    const seen = new Set<string>();
+    const items = payload.items.map((item) => {
+      const provider = parseProvider(item);
+      const identity = `${provider.capability}:${provider.alias}`;
+      if (seen.has(identity)) {
+        throw new TocApiError("invalid-response", "服务能力目录包含重复别名");
+      }
+      seen.add(identity);
+      return provider;
+    });
+    return { revision, items };
   }
 
   async mutate(path: string, init: RequestInit): Promise<unknown> {
@@ -159,6 +198,66 @@ function parseAnima(value: unknown): TocAnima {
     state: value.state,
     revision: requiredRevision(value.revision),
   };
+}
+
+function parseProvider(value: unknown): PublicProvider {
+  if (!isObject(value)) {
+    throw new TocApiError("invalid-response", "服务能力条目格式无效");
+  }
+  const unknown = Object.keys(value).filter(
+    (key) => !["capability", "alias", "locality", "models", "voices", "streaming"].includes(key),
+  );
+  if (unknown.length > 0) {
+    throw new TocApiError("invalid-response", "服务能力条目包含未公开字段");
+  }
+  if (!PROVIDER_CAPABILITIES.includes(value.capability as ProviderCapability)) {
+    throw new TocApiError("invalid-response", "服务能力类型无效");
+  }
+  if (value.locality !== "local" && value.locality !== "cloud") {
+    throw new TocApiError("invalid-response", "服务能力位置无效");
+  }
+  if (typeof value.streaming !== "boolean") {
+    throw new TocApiError("invalid-response", "服务流式能力无效");
+  }
+  return {
+    capability: value.capability as ProviderCapability,
+    alias: requiredProviderValue(value.alias, "服务别名"),
+    locality: value.locality,
+    models: parseProviderValues(value.models, "模型", 160),
+    voices: parseProviderValues(value.voices, "音色", 80),
+    streaming: value.streaming,
+  };
+}
+
+function parseProviderValues(
+  value: unknown,
+  label: string,
+  maximumLength: number,
+): readonly string[] {
+  if (!Array.isArray(value) || value.length > 64) {
+    throw new TocApiError("invalid-response", `${label}目录无效`);
+  }
+  const values = value.map((item) => requiredProviderValue(item, label, maximumLength));
+  if (new Set(values).size !== values.length) {
+    throw new TocApiError("invalid-response", `${label}目录包含重复值`);
+  }
+  return values;
+}
+
+function requiredProviderValue(
+  value: unknown,
+  label: string,
+  maximumLength = 160,
+): string {
+  if (
+    typeof value !== "string"
+    || !value.trim()
+    || value.length > maximumLength
+    || value.includes("\0")
+  ) {
+    throw new TocApiError("invalid-response", `${label}无效`);
+  }
+  return value.trim();
 }
 
 function requiredId(value: unknown, label: string): string {

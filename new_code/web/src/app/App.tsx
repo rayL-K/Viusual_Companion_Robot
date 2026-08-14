@@ -10,7 +10,7 @@ import {
 import { MediaSession } from "../core/media/MediaSession";
 import { ensureRealtimeAdmission } from "../core/realtime/admission";
 import { RealtimeClient, realtimeUrl } from "../core/realtime/RealtimeClient";
-import { parseAvatarIntentPayload } from "../core/realtime/protocol";
+import { parseAvatarIntentPayload, type ServerEvent } from "../core/realtime/protocol";
 import {
   applyAvatarIntent,
   assistantText,
@@ -28,6 +28,11 @@ import { CameraPreview } from "../features/call/CameraPreview";
 import { AnimaSettingsPanel } from "../features/settings/AnimaSettingsPanel";
 
 type DrawerView = "overview" | "settings";
+export type ReplyTextCursor = Readonly<{
+  sessionId: string;
+  generation: number;
+  nextIndex: number;
+}>;
 type AuthState =
   | { phase: "loading" }
   | { phase: "unauthenticated" }
@@ -54,6 +59,11 @@ export function App() {
   const [drawerView, setDrawerView] = useState<DrawerView>("overview");
   const videoRef = useRef<HTMLVideoElement>(null);
   const callStartedAtRef = useRef(0);
+  const replyTextCursorRef = useRef<ReplyTextCursor>({
+    sessionId: "",
+    generation: -1,
+    nextIndex: 0,
+  });
   const client = useMemo(
     () => new RealtimeClient(
       realtimeUrl(window.location, selectedAnimaId || undefined),
@@ -108,14 +118,30 @@ export function App() {
       || !selectedAnimaId
     ) return;
     const removeHandler = client.onEvent((event) => {
-      if (event.type === "session.ready") resetAvatarGenerationDomain(event.sessionId);
+      if (event.type === "session.ready") {
+        resetAvatarGenerationDomain(event.sessionId);
+        replyTextCursorRef.current = {
+          sessionId: event.sessionId,
+          generation: -1,
+          nextIndex: 0,
+        };
+      }
       if (event.type === "reply.phase") replyPhase.value = parseReplyPhase(event.payload.phase);
-      if (event.type === "reply.segment.ready") {
-        const text = String(event.payload.text ?? "");
-        assistantText.value = Number(event.payload.index) === 0 ? text : assistantText.value + text;
+      if (event.type === "reply.segment.ready" || event.type === "reply.segment.started") {
+        const update = mergeReplySegmentText(
+          assistantText.value,
+          replyTextCursorRef.current,
+          event,
+        );
+        if (!update) return;
+        assistantText.value = update.text;
+        replyTextCursorRef.current = update.cursor;
         replyPhase.value = "speaking";
       }
       if (event.type === "reply.completed") replyPhase.value = "idle";
+      if (event.type === "error" && event.payload.code === "reply_failed") {
+        replyPhase.value = "idle";
+      }
       if (event.type === "avatar.intent") {
         applyAvatarIntent({
           sessionId: event.sessionId,
@@ -159,6 +185,7 @@ export function App() {
     try {
       setCallStarting(true);
       setMediaError("");
+      await client.enableReplyAudioStream();
       await media.start(videoRef.current);
       setCameraEnabled(true);
       setMicrophoneEnabled(true);
@@ -193,9 +220,10 @@ export function App() {
     media.setMicrophoneEnabled(enabled);
   };
 
-  const submit = () => {
+  const submit = async () => {
     const text = draft.trim();
     if (!text) return;
+    await client.enableReplyAudioStream();
     if (client.send("turn.user_text", { text })) {
       replyPhase.value = "thinking";
       setDraft("");
@@ -275,13 +303,13 @@ export function App() {
                   value={draft}
                   onInput={(event) => setDraft(event.currentTarget.value)}
                   onKeyDown={(event) => {
-                    if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); submit(); }
+                    if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); }
                   }}
                   placeholder={transcript.value || "告诉我你正在想什么…"}
                   rows={1}
                 />
               </label>
-              <button class="send-button" type="button" onClick={submit} disabled={!draft.trim()}>发送</button>
+              <button class="send-button" type="button" onClick={() => void submit()} disabled={!draft.trim()}>发送</button>
             </section>
 
             <div class="call-actions">
@@ -305,11 +333,15 @@ export function App() {
         </section>
       </div>
 
-      <aside class={`drawer ${drawerOpen.value ? "drawer--open" : ""}`} aria-hidden={!drawerOpen.value}>
+      <aside class={`drawer ${drawerView === "settings" ? "drawer--settings" : ""} ${drawerOpen.value ? "drawer--open" : ""}`} aria-hidden={!drawerOpen.value}>
         <div class="drawer__header"><div><small>CONTROL ROOM</small><h2>感知与连接</h2></div><button type="button" aria-label="关闭控制台" onClick={() => (drawerOpen.value = false)}>×</button></div>
         <div class="drawer__body">
           {drawerView === "settings" ? (
-            <AnimaSettingsPanel client={client} onBack={() => setDrawerView("overview")} />
+            <AnimaSettingsPanel
+              api={authState.phase === "authenticated" ? api : null}
+              client={client}
+              onBack={() => setDrawerView("overview")}
+            />
           ) : (
             <>
               <article class="sense-card"><span>视觉上下文</span><p>{visualSummary.value}</p></article>
@@ -365,6 +397,41 @@ function SessionGate({
 
 function parseReplyPhase(value: unknown): typeof replyPhase.value {
   return value === "listening" || value === "thinking" || value === "speaking" ? value : "idle";
+}
+
+export function mergeReplySegmentText(
+  currentText: string,
+  cursor: ReplyTextCursor,
+  event: ServerEvent,
+): { text: string; cursor: ReplyTextCursor } | null {
+  if (event.type !== "reply.segment.ready" && event.type !== "reply.segment.started") return null;
+  const index = event.payload.index;
+  const text = event.payload.text;
+  if (
+    typeof index !== "number"
+    || !Number.isSafeInteger(index)
+    || index < 0
+    || typeof text !== "string"
+    || !text
+  ) return null;
+
+  const isNewSession = event.sessionId !== cursor.sessionId;
+  const isNewGeneration = !isNewSession && event.generation > cursor.generation;
+  if (!isNewSession && event.generation < cursor.generation) return null;
+  if ((isNewSession || isNewGeneration) && index !== 0) return null;
+
+  const activeCursor: ReplyTextCursor = isNewSession || isNewGeneration
+    ? { sessionId: event.sessionId, generation: event.generation, nextIndex: 0 }
+    : cursor;
+  if (event.generation !== activeCursor.generation || index !== activeCursor.nextIndex) return null;
+  return {
+    text: index === 0 ? text : currentText + text,
+    cursor: {
+      sessionId: activeCursor.sessionId,
+      generation: activeCursor.generation,
+      nextIndex: activeCursor.nextIndex + 1,
+    },
+  };
 }
 
 export function connectionLabel(phase: typeof connectionPhase.value): string {

@@ -1,13 +1,15 @@
 export const PROTOCOL_VERSION = 2;
-export const BINARY_MAGIC = "VSR2";
+const BINARY_MAGIC = "VSR2";
 export const BINARY_HEADER_BYTES = 24;
 export const BINARY_KIND_PCM16 = 1;
 export const BINARY_KIND_JPEG = 2;
 export const BINARY_KIND_AUDIO = 3;
+export const BINARY_FLAG_STREAM = 0b0000_0001;
+export const BINARY_FLAG_START = 0b0000_0010;
 
-export type AvatarPhase = "idle" | "listening" | "thinking" | "speaking";
+type AvatarPhase = "idle" | "listening" | "thinking" | "speaking";
 
-export type AvatarAffect = {
+type AvatarAffect = {
   valence: number;
   arousal: number;
   dominance: number;

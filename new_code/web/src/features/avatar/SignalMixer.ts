@@ -1,6 +1,6 @@
 import type { AvatarReflexFrame } from "./interaction/types";
 
-export type AffectFrame = {
+type AffectFrame = {
   valence: number;
   arousal: number;
   dominance: number;

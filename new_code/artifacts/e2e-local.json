@@ -1,5 +1,5 @@
 {
-  "checkedAt": "2026-07-23T16:50:56.008Z",
+  "checkedAt": "2026-08-14T10:10:30.121Z",
   "viewports": {
     "desktop": {
       "viewportWidth": 1440,
@@ -28,9 +28,9 @@
         }
       ],
       "drawerLayout": {
-        "left": 1048.072509765625,
+        "left": 1049.681640625,
         "top": 12,
-        "right": 1438.072509765625,
+        "right": 1439.681640625,
         "bottom": 888,
         "clientWidth": 388,
         "scrollWidth": 388,
@@ -38,15 +38,15 @@
         "scrollHeight": 874
       },
       "settingsLayout": {
-        "clientWidth": 340,
-        "scrollWidth": 340,
-        "clientHeight": 680,
-        "scrollHeight": 680
+        "clientWidth": 710,
+        "scrollWidth": 710,
+        "clientHeight": 759,
+        "scrollHeight": 759
       },
-      "cameraReadyMs": 2403,
-      "replyVisibleMs": 906,
-      "interruptionVisibleMs": 1238,
-      "reconnectRecoveredMs": 831,
+      "cameraReadyMs": 2167,
+      "replyVisibleMs": 890,
+      "interruptionVisibleMs": 995,
+      "reconnectRecoveredMs": 821,
       "avatarInteraction": {
         "tabIndex": 0,
         "label": "与 Anima 互动：可用鼠标或触摸轻触、按住或抚摸角色身体",
@@ -92,9 +92,9 @@
       ],
       "drawerLayout": {
         "left": 8,
-        "top": 125.0555648803711,
+        "top": 123.79492950439453,
         "right": 312,
-        "bottom": 568.086784362793,
+        "bottom": 566.8261795043945,
         "clientWidth": 302,
         "scrollWidth": 302,
         "clientHeight": 441,
@@ -103,12 +103,12 @@
       "settingsLayout": {
         "clientWidth": 262,
         "scrollWidth": 262,
-        "clientHeight": 778,
-        "scrollHeight": 778
+        "clientHeight": 946,
+        "scrollHeight": 946
       },
-      "cameraReadyMs": 1372,
-      "replyVisibleMs": 877,
-      "interruptionVisibleMs": 1224,
+      "cameraReadyMs": 803,
+      "replyVisibleMs": 853,
+      "interruptionVisibleMs": 1189,
       "reconnectRecoveredMs": null,
       "avatarInteraction": {
         "tabIndex": 0,
@@ -155,23 +155,23 @@
       ],
       "drawerLayout": {
         "left": 8,
-        "top": 343.71197509765625,
+        "top": 369.45965576171875,
         "right": 382,
-        "bottom": 841.2744750976562,
+        "bottom": 844.6315307617188,
         "clientWidth": 372,
         "scrollWidth": 372,
-        "clientHeight": 496,
-        "scrollHeight": 496
+        "clientHeight": 473,
+        "scrollHeight": 473
       },
       "settingsLayout": {
         "clientWidth": 332,
         "scrollWidth": 332,
-        "clientHeight": 680,
-        "scrollHeight": 680
+        "clientHeight": 789,
+        "scrollHeight": 789
       },
-      "cameraReadyMs": 920,
-      "replyVisibleMs": 925,
-      "interruptionVisibleMs": 1135,
+      "cameraReadyMs": 786,
+      "replyVisibleMs": 863,
+      "interruptionVisibleMs": 1155,
       "reconnectRecoveredMs": null,
       "avatarInteraction": {
         "tabIndex": 0,
@@ -217,9 +217,9 @@
         }
       ],
       "drawerLayout": {
-        "left": 377.7187194824219,
+        "left": 377.6978454589844,
         "top": 12,
-        "right": 767.71875,
+        "right": 767.6978759765625,
         "bottom": 1012,
         "clientWidth": 388,
         "scrollWidth": 388,
@@ -227,14 +227,14 @@
         "scrollHeight": 998
       },
       "settingsLayout": {
-        "clientWidth": 340,
-        "scrollWidth": 340,
-        "clientHeight": 680,
-        "scrollHeight": 680
+        "clientWidth": 694,
+        "scrollWidth": 694,
+        "clientHeight": 759,
+        "scrollHeight": 759
       },
-      "cameraReadyMs": 867,
-      "replyVisibleMs": 869,
-      "interruptionVisibleMs": 1221,
+      "cameraReadyMs": 810,
+      "replyVisibleMs": 843,
+      "interruptionVisibleMs": 1181,
       "reconnectRecoveredMs": null,
       "avatarInteraction": {
         "tabIndex": 0,
@@ -280,9 +280,9 @@
         }
       ],
       "drawerLayout": {
-        "left": 633.71240234375,
+        "left": 633.7052612304688,
         "top": 12,
-        "right": 1023.71240234375,
+        "right": 1023.7052612304688,
         "bottom": 756,
         "clientWidth": 388,
         "scrollWidth": 388,
@@ -290,14 +290,14 @@
         "scrollHeight": 742
       },
       "settingsLayout": {
-        "clientWidth": 340,
-        "scrollWidth": 340,
-        "clientHeight": 680,
-        "scrollHeight": 680
+        "clientWidth": 710,
+        "scrollWidth": 710,
+        "clientHeight": 759,
+        "scrollHeight": 759
       },
-      "cameraReadyMs": 1057,
-      "replyVisibleMs": 900,
-      "interruptionVisibleMs": 1176,
+      "cameraReadyMs": 1315,
+      "replyVisibleMs": 867,
+      "interruptionVisibleMs": 1173,
       "reconnectRecoveredMs": null,
       "avatarInteraction": {
         "tabIndex": 0,
@@ -343,9 +343,9 @@
         }
       ],
       "drawerLayout": {
-        "left": 504.3180236816406,
+        "left": 503.3444519042969,
         "top": 6,
-        "right": 844.3179931640625,
+        "right": 843.344482421875,
         "bottom": 384,
         "clientWidth": 338,
         "scrollWidth": 338,
@@ -353,14 +353,14 @@
         "scrollHeight": 376
       },
       "settingsLayout": {
-        "clientWidth": 302,
-        "scrollWidth": 302,
-        "clientHeight": 680,
-        "scrollHeight": 680
+        "clientWidth": 570,
+        "scrollWidth": 570,
+        "clientHeight": 759,
+        "scrollHeight": 759
       },
-      "cameraReadyMs": 899,
-      "replyVisibleMs": 875,
-      "interruptionVisibleMs": 1199,
+      "cameraReadyMs": 772,
+      "replyVisibleMs": 863,
+      "interruptionVisibleMs": 1178,
       "reconnectRecoveredMs": null,
       "avatarInteraction": {
         "tabIndex": 0,

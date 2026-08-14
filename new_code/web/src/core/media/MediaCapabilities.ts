@@ -1,4 +1,4 @@
-export type PcmCaptureMode = "audio-worklet" | "script-processor" | "unavailable";
+type PcmCaptureMode = "audio-worklet" | "script-processor" | "unavailable";
 
 export type MediaCapabilities = {
   secureContext: boolean;

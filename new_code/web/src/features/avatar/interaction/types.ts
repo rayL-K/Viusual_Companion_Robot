@@ -1,4 +1,4 @@
-export const ANIMA_BODY_AREAS = [
+const ANIMA_BODY_AREAS = [
   "face",
   "ear.left",
   "ear.right",
@@ -15,7 +15,7 @@ export const ANIMA_BODY_AREAS = [
 // Directional suffixes are stage-visual left/right, never anatomical sides.
 export type AnimaBodyArea = typeof ANIMA_BODY_AREAS[number];
 
-export type ContactGesture =
+type ContactGesture =
   | "hover-enter"
   | "hover-leave"
   | "contact"

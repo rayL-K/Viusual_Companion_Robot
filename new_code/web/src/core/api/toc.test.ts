@@ -8,6 +8,25 @@ import {
 } from "./toc";
 
 describe("TocApiClient", () => {
+  it("keeps the native fetch receiver when no test transport is injected", async () => {
+    const nativeLikeFetch = vi.fn(function (this: unknown) {
+      if (this !== globalThis) throw new TypeError("Illegal invocation");
+      return Promise.resolve(jsonResponse({
+        tocEnabled: false,
+        anonymousRealtimeEnabled: true,
+      }));
+    });
+    vi.stubGlobal("fetch", nativeLikeFetch);
+    try {
+      await expect(new TocApiClient().capabilities()).resolves.toEqual({
+        tocEnabled: false,
+        anonymousRealtimeEnabled: true,
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("selects ToC, explicit anonymous, and unavailable modes from health only", async () => {
     const tocFetcher = vi
       .fn()
@@ -71,6 +90,63 @@ describe("TocApiClient", () => {
       "/v2/me",
       expect.objectContaining({ credentials: "include" }),
     );
+  });
+
+  it("parses only the public provider catalog contract", async () => {
+    const fetcher = vi.fn().mockResolvedValue(jsonResponse({
+      revision: 7,
+      items: [
+        {
+          capability: "llm",
+          alias: "fast-dialogue",
+          locality: "cloud",
+          models: ["dialogue-v2"],
+          voices: [],
+          streaming: true,
+        },
+        {
+          capability: "tts",
+          alias: "warm-voice",
+          locality: "local",
+          models: ["acoustic-v1"],
+          voices: ["warm.zh"],
+          streaming: false,
+        },
+      ],
+    }));
+    const api = new TocApiClient(fetcher as unknown as typeof fetch);
+
+    await expect(api.providerCatalog()).resolves.toEqual({
+      revision: 7,
+      items: [
+        expect.objectContaining({ capability: "llm", alias: "fast-dialogue" }),
+        expect.objectContaining({ capability: "tts", voices: ["warm.zh"] }),
+      ],
+    });
+    expect(fetcher).toHaveBeenCalledWith(
+      "/v2/providers",
+      expect.objectContaining({ credentials: "include" }),
+    );
+  });
+
+  it("rejects duplicate or malformed provider catalog entries", async () => {
+    const duplicate = {
+      capability: "llm",
+      alias: "dialogue",
+      locality: "cloud",
+      models: ["v1"],
+      voices: [],
+      streaming: true,
+    };
+    const api = new TocApiClient(
+      vi.fn().mockResolvedValue(jsonResponse({
+        revision: 1,
+        items: [duplicate, duplicate],
+      })) as unknown as typeof fetch,
+    );
+    await expect(api.providerCatalog()).rejects.toMatchObject({
+      kind: "invalid-response",
+    });
   });
 
   it("distinguishes 401 from a recoverable network failure", async () => {

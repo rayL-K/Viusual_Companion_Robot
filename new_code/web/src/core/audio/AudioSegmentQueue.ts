@@ -13,13 +13,13 @@ export type AudioFactory = (
   onLevel: (rms: number) => void,
 ) => PlayableAudio;
 
-export type AudioPlaybackErrorCode =
+type AudioPlaybackErrorCode =
   | "playback-blocked"
   | "unsupported-audio-format"
   | "audio-resource-unavailable"
   | "audio-playback-failed";
 
-export class AudioPlaybackError extends Error {
+class AudioPlaybackError extends Error {
   constructor(
     readonly code: AudioPlaybackErrorCode,
     message: string,
