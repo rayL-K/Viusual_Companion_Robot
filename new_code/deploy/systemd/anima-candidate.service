@@ -12,7 +12,7 @@ Group=anima-candidate
 WorkingDirectory=/opt/anima/candidate/backend
 Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=/etc/anima/anima-candidate.env
-ExecStart=/usr/bin/env ANIMA_HOST=127.0.0.1 ANIMA_PORT=8876 ANIMA_WEB_DIST=/opt/anima/candidate/web/dist ANIMA_DATA_ROOT=/var/lib/anima-candidate ANIMA_MEMORY_PATH=/var/lib/anima-candidate/memory/anima.db ANIMA_PERSONA_PATH=/opt/anima/candidate/config/persona.md ANIMA_LLM_API_KEY=candidate ANIMA_ADMISSION_REQUIRED=false ANIMA_ADMISSION_SECRET= ANIMA_ALLOWED_ORIGINS= ANIMA_TELEMETRY_HMAC_KEY= ANIMA_TURNSTILE_SECRET= ANIMA_TURNSTILE_SITE_KEY= PYTHONPATH=/opt/anima/candidate/backend/src /opt/anima/runtime/.venv/bin/python -m veyrasoul.gateway
+ExecStart=/usr/bin/env ANIMA_HOST=127.0.0.1 ANIMA_PORT=8876 ANIMA_WEB_DIST=/opt/anima/candidate/web/dist ANIMA_DATA_ROOT=/var/lib/anima-candidate ANIMA_MEMORY_PATH=/var/lib/anima-candidate/memory/anima.db ANIMA_PERSONA_PATH=/opt/anima/candidate/config/persona.md ANIMA_LLM_API_KEY=candidate ANIMA_AUDIO_API_KEY=candidate ANIMA_ADMISSION_REQUIRED=false ANIMA_ADMISSION_SECRET= ANIMA_ALLOWED_ORIGINS= ANIMA_TELEMETRY_HMAC_KEY= ANIMA_TURNSTILE_SECRET= ANIMA_TURNSTILE_SITE_KEY= PYTHONPATH=/opt/anima/candidate/backend/src /opt/anima/runtime/.venv/bin/python -m veyrasoul.gateway
 Restart=on-failure
 RestartSec=2
 TimeoutStartSec=90

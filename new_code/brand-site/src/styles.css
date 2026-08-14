@@ -994,6 +994,7 @@ img {
 
 .architecture {
   display: grid;
+  min-width: 0;
   min-height: 145svh;
   grid-template-columns: minmax(23rem, 0.88fr) minmax(25rem, 0.72fr);
   align-items: start;
@@ -1015,6 +1016,7 @@ img {
 
 .architecture__copy {
   justify-self: end;
+  min-width: 0;
   width: min(100%, 44rem);
   padding-top: clamp(1rem, 10vh, 7rem);
 }
@@ -1049,62 +1051,232 @@ img {
 .architecture-list dt { font-weight: 760; }
 .architecture-list dd { margin: 0; color: var(--muted); line-height: 1.6; }
 
-.board-figure {
+.runtime-map {
   position: sticky;
   top: clamp(7rem, 12vh, 10rem);
+  min-width: 0;
   width: min(100%, 36rem);
+  max-width: 100%;
   margin: 0;
 }
 
-.board-figure__frame {
+.runtime-map__frame {
   position: relative;
+  isolation: isolate;
+  display: grid;
+  min-width: 0;
+  width: 100%;
+  min-height: 41rem;
   aspect-ratio: 0.82;
+  grid-template-rows: auto 1fr auto;
   overflow: hidden;
+  padding: clamp(1rem, 2.2vw, 1.4rem);
   border: 1px solid color-mix(in oklch, var(--mint) 24%, var(--line-dark));
   border-radius: 1.4rem;
-  background: var(--night-soft);
+  background:
+    radial-gradient(circle at 50% 44%, oklch(64% 0.12 164 / 0.12), transparent 33%),
+    linear-gradient(154deg, oklch(15% 0.035 310 / 0.96), var(--night-soft));
   box-shadow: 0 2rem 7rem oklch(5% 0.02 310 / 0.54);
+  will-change: transform, opacity;
 }
 
-.board-figure__frame::after {
+.runtime-map__frame::after {
   position: absolute;
+  z-index: 5;
   inset: 0;
   content: "";
-  background: linear-gradient(150deg, transparent 46%, oklch(13% 0.03 310 / 0.38));
+  border-radius: inherit;
+  background: linear-gradient(150deg, oklch(98% 0.02 165 / 0.04), transparent 34%, oklch(9% 0.03 310 / 0.24));
   pointer-events: none;
 }
 
-.board-figure__image {
-  width: 100%;
-  height: 112%;
-  object-fit: cover;
-  object-position: center 48%;
+.runtime-map__grid {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  background-image:
+    linear-gradient(oklch(82% 0.1 164 / 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, oklch(82% 0.1 164 / 0.05) 1px, transparent 1px);
+  background-size: 2.6rem 2.6rem;
+  mask-image: linear-gradient(to bottom, transparent 2%, black 20%, black 82%, transparent 100%);
+}
+
+.runtime-map__topline,
+.runtime-map__status {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  color: color-mix(in oklch, var(--ink) 74%, var(--muted));
+  font-size: 0.63rem;
+  font-weight: 760;
+  letter-spacing: 0.12em;
+  overflow-wrap: anywhere;
+}
+
+.runtime-map__health {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.42rem;
+}
+
+.runtime-map__health i,
+.runtime-map__status i {
+  width: 0.38rem;
+  height: 0.38rem;
+  border-radius: 50%;
+  background: var(--mint);
+  box-shadow: 0 0 0.8rem color-mix(in oklch, var(--mint) 72%, transparent);
+}
+
+.runtime-map__topology {
+  position: relative;
+  z-index: 1;
+  min-height: 34rem;
   will-change: transform;
 }
 
-.board-figure__pulse {
+.runtime-map__orbit,
+.runtime-map__axis {
   position: absolute;
-  z-index: 2;
-  width: 0.62rem;
-  height: 0.62rem;
+  top: 50%;
+  left: 50%;
+  pointer-events: none;
+}
+
+.runtime-map__orbit {
+  aspect-ratio: 1;
+  translate: -50% -50%;
+  border-radius: 50%;
+  border: 1px solid oklch(80% 0.1 164 / 0.18);
+}
+
+.runtime-map__orbit::before,
+.runtime-map__orbit::after {
+  position: absolute;
+  width: 0.48rem;
+  height: 0.48rem;
+  content: "";
   border: 1px solid var(--mint);
   border-radius: 50%;
   background: var(--night);
-  box-shadow: 0 0 0 0.45rem oklch(82% 0.12 163 / 0.12), 0 0 1.6rem var(--mint);
+  box-shadow: 0 0 1.2rem color-mix(in oklch, var(--mint) 70%, transparent);
 }
-.board-figure__pulse--core { top: 47%; left: 57%; }
-.board-figure__pulse--edge { top: 24%; left: 30%; }
 
-.board-figure figcaption,
+.runtime-map__orbit::before { top: 8%; left: 18%; }
+.runtime-map__orbit::after { right: 8%; bottom: 20%; }
+.runtime-map__orbit--outer {
+  width: min(82%, 27rem);
+  border-style: dashed;
+  animation: orbit-spin 34s linear infinite;
+}
+.runtime-map__orbit--inner {
+  width: min(51%, 17rem);
+  border-color: oklch(68% 0.15 345 / 0.2);
+  animation: orbit-spin 25s linear infinite reverse;
+}
+
+.runtime-map__axis {
+  z-index: -1;
+  background: linear-gradient(90deg, transparent, oklch(82% 0.1 164 / 0.16), transparent);
+  translate: -50% -50%;
+}
+.runtime-map__axis--horizontal { width: 88%; height: 1px; }
+.runtime-map__axis--vertical { width: 1px; height: 82%; }
+
+.runtime-map__core {
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  width: min(48%, 14.5rem);
+  min-height: 7.6rem;
+  place-content: center;
+  gap: 0.42rem;
+  padding: 1rem;
+  transform: translate(-50%, -50%);
+  border: 1px solid color-mix(in oklch, var(--mint) 48%, var(--line-dark));
+  border-radius: 1.1rem;
+  background: oklch(13% 0.035 310 / 0.92);
+  box-shadow: 0 0 3.5rem oklch(67% 0.13 164 / 0.12), inset 0 1px 0 oklch(98% 0.02 165 / 0.08);
+  text-align: center;
+}
+
+.runtime-map__core small,
+.runtime-map__node small {
+  color: var(--mint);
+  font-size: 0.58rem;
+  font-weight: 780;
+  letter-spacing: 0.12em;
+}
+.runtime-map__core strong { font-size: clamp(0.9rem, 1.5vw, 1.06rem); }
+.runtime-map__core span { color: var(--muted); font-size: 0.65rem; }
+
+.runtime-map__nodes {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.runtime-map__node {
+  position: absolute;
+  z-index: 2;
+  display: grid;
+  width: clamp(7.8rem, 31%, 10.4rem);
+  min-height: 3.8rem;
+  align-content: center;
+  gap: 0.24rem;
+  padding: 0.62rem 0.72rem;
+  border: 1px solid oklch(82% 0.08 164 / 0.13);
+  border-radius: 0.72rem;
+  background: oklch(13% 0.03 310 / 0.78);
+  box-shadow: inset 0 1px 0 oklch(98% 0.02 165 / 0.05), 0 0.8rem 2rem oklch(5% 0.02 310 / 0.2);
+  backdrop-filter: blur(0.7rem);
+}
+.runtime-map__node strong {
+  overflow-wrap: anywhere;
+  color: color-mix(in oklch, var(--ink) 90%, var(--muted));
+  font-size: 0.68rem;
+  line-height: 1.35;
+}
+.runtime-map__node--gateway { top: 3%; left: 50%; transform: translateX(-50%); text-align: center; }
+.runtime-map__node--speech { top: 27%; left: 0; }
+.runtime-map__node--intelligence { top: 27%; right: 0; text-align: right; }
+.runtime-map__node--context { bottom: 2%; left: 4%; }
+.runtime-map__node--vision { right: 4%; bottom: 2%; text-align: right; }
+.runtime-map__node--vision small { color: var(--rose); }
+
+.runtime-map__status {
+  align-items: flex-start;
+  flex-wrap: wrap;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--line-dark);
+  font-size: 0.54rem;
+  letter-spacing: 0.04em;
+}
+.runtime-map__status span { display: inline-flex; align-items: center; gap: 0.35rem; }
+.runtime-map__status .is-pending i {
+  background: var(--rose);
+  box-shadow: 0 0 0.8rem color-mix(in oklch, var(--rose) 62%, transparent);
+}
+
+.runtime-map figcaption,
 .product-visual figcaption {
   display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
   justify-content: space-between;
   gap: 1rem;
   margin-top: 1rem;
   color: var(--muted);
   font-size: 0.76rem;
 }
-.board-figure figcaption span:first-child,
+.runtime-map figcaption span:first-child,
 .product-visual figcaption strong { color: var(--ink); font-weight: 760; }
 
 .products {
@@ -1525,7 +1697,7 @@ img {
   }
   .architecture__copy { justify-self: stretch; padding-top: 0; }
   .architecture-list > div { grid-template-columns: 1fr; gap: 0.45rem; }
-  .board-figure { position: relative; top: auto; justify-self: center; }
+  .runtime-map { position: relative; top: auto; justify-self: center; width: 100%; }
 
   .section-heading--wide { display: grid; grid-template-columns: 1fr; gap: 1.1rem; }
   .section-heading--wide > p { margin: 0; }
@@ -1550,7 +1722,7 @@ img {
   }
   .product-visual { margin-top: 4.5rem; }
   .product-visual figcaption,
-  .board-figure figcaption { display: grid; gap: 0.35rem; }
+  .runtime-map figcaption { display: grid; gap: 0.35rem; }
 
   .closing { min-height: 52rem; }
   .closing__orbit { width: 120vw; }
@@ -1585,7 +1757,7 @@ img {
   }
   .signal-flow__stage { opacity: 1; }
   .architecture { min-height: 62rem; }
-  .board-figure { position: relative; top: auto; }
+  .runtime-map { position: relative; top: auto; }
 }
 
 .is-data-saver .pipeline {
@@ -1616,8 +1788,8 @@ img {
   .manifesto__copy,
   .presence-stream li,
   .architecture__copy,
-  .board-figure__frame,
-  .board-figure__image,
+  .runtime-map__frame,
+  .runtime-map__topology,
   .release-core,
   .release-notes,
   .release-signal,

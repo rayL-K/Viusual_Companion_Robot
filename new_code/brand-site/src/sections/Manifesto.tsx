@@ -10,7 +10,7 @@ export function Manifesto() {
         </p>
       </div>
       <ol class="presence-stream" aria-label="连续陪伴上下文" data-motion-layer="presence-stream" data-motion-behavior="scrub" data-motion-scope="manifesto">
-        <li><span>01</span><strong>看见环境</strong><small>画面语义持续更新</small></li>
+        <li><span>01</span><strong>看见环境</strong><small>视觉 Provider / sidecar 接入中</small></li>
         <li><span>02</span><strong>听懂此刻</strong><small>语音和指代进入上下文</small></li>
         <li><span>03</span><strong>连接过往</strong><small>有界记忆参与理解</small></li>
         <li><span>04</span><strong>同步回应</strong><small>语言、声音与动作一起抵达</small></li>

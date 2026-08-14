@@ -13,8 +13,8 @@ export function Hero({ jumpTo }: { jumpTo: (id: SectionId) => void }) {
           <span class="hero__line hero__line--accent"><span>不再等待。</span></span>
         </h1>
         <p class="hero__support">
-          让视觉、声音、记忆与角色动作在同一条低时延链路上汇合。以 RK3588 为端侧核心，
-          让每一次回应更及时，也更懂此刻的你。
+          让声音、记忆、角色动作与逐步接入的视觉能力在同一条低时延链路上汇合。
+          以 API-first 的通用 Linux 运行时连接不同 Provider，让每一次回应更及时，也更懂此刻的你。
         </p>
         <div class="hero__actions">
           <a
@@ -35,7 +35,7 @@ export function Hero({ jumpTo }: { jumpTo: (id: SectionId) => void }) {
           </a>
         </div>
         <div class="hero__proof" aria-label="系统特征">
-          <span>端侧推理</span><i aria-hidden="true" /><span>实时上下文</span><i aria-hidden="true" /><span>跨端访问</span>
+          <span>API-first</span><i aria-hidden="true" /><span>Provider 可替换</span><i aria-hidden="true" /><span>数据隔离</span>
         </div>
       </div>
 

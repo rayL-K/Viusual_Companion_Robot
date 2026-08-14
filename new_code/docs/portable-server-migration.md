@@ -1,8 +1,8 @@
 # Anima v0.0.1：通用 Linux Server 部署与迁移
 
-本文是 Anima 的**生产部署主路径**。目标主机是可替换的 Ubuntu 22.04/24.04 x86_64 或 aarch64 Server；Web 与未来 App 只连接同源 HTTPS/WSS Gateway，不感知服务器型号。ELF2 不再是部署前提，其旧流程仅见[历史部署参考](./deployment-elf2.md)。
+本文是 Anima 的**生产部署主路径**。目标主机是可替换的 Ubuntu 22.04/24.04 x86_64 或 aarch64 Server；Web 与未来 App 只连接同源 HTTPS/WSS Gateway，不感知服务器型号或硬件品牌。
 
-> 本文只陈述当前仓库实际实现的能力。DeepSeek 是唯一已接入的 LLM；TTS 当前必须是本地 `sherpa-onnx`；ASR 是可选的本地 `sherpa-onnx` streaming Zipformer；视觉是可选的、独立运行并且仅允许 loopback 回源的 `local-vlm`。云 ASR、云 TTS、云 VLM 都只是 `ports` 后的下一步适配目标，**尚不能靠改环境变量启用**。
+> 本文只陈述当前仓库实际实现的能力。LLM 为 DeepSeek SSE；TTS 可选本地 `sherpa-onnx` 或 OpenAI-compatible API；ASR 可选本地 streaming Zipformer、OpenAI-compatible 整段转写或显式禁用；视觉仍是可选的 loopback `local-vlm`。当前环境每种能力至多配置一个实际 binding，不宣称已有多上游路由池。
 >
 > Python 包/导入路径 `veyrasoul` 是兼容性命名，迁移时必须原样保留；对外产品名称仍是 Anima v0.0.1，新主机配置优先使用 `ANIMA_*`。
 
@@ -24,8 +24,7 @@
                  │
        ┌─────────┼─────────┐
        ▼         ▼         ▼
-  sherpa TTS  DeepSeek  local-vlm（可选）
-  sherpa ASR（可选）
+  sherpa / OpenAI-compatible 音频  DeepSeek  local-vlm（可选）
 ```
 
 因此，浏览器/App 只需要稳定域名、HTTPS 与实时协议。Live2D 始终在客户端渲染；Gateway、模型 worker 和第三方 API Provider 都可以在不改客户端协议的前提下替换。
@@ -35,15 +34,15 @@
 | 模态 / 端口 | 现在可运行的实现 | 是否可迁移 | 迁移时的真实边界 |
 |---|---|---:|---|
 | 对话 `ChatProvider` | DeepSeek 非思考 SSE 流 | 是 | 需要新主机独立保存 API Key；配置只接受 `deepseek`。 |
-| 语音合成 `StreamingTtsProvider` | 本地 sherpa-onnx（Matcha/Kokoro/VITS 支持的模型结构） | 是 | **必需**；当前没有云 TTS provider，模型和匹配 ABI 的 wheel 必须在目标主机重新验证。 |
-| 语音识别 `StreamingAsrProvider` | 本地 sherpa-onnx streaming Zipformer | 可选 | 未配置时应显式 `ANIMA_ASR_PROVIDER=disabled`；不可把旧 SenseVoice 目录当 Zipformer 使用。 |
+| 语音合成 `StreamingTtsProvider` | 本地 sherpa-onnx；OpenAI-compatible WAV/显式 opt-in PCM 流 | 是 | 二选一的 binding 为必需；流式开关默认关闭，只能对已验证支持流式 PCM 的上游显式开启。 |
+| 语音识别 `StreamingAsrProvider` | 本地 sherpa-onnx streaming Zipformer；OpenAI-compatible 整段转写 | 可选 | 未配置时应显式 `ANIMA_ASR_PROVIDER=disabled`；OpenAI-compatible 适配器不等于上游真流式 ASR。 |
 | 视觉 `VisionAnalyzer` | 独立 `local-vlm` HTTP 服务 | 可选 | Gateway 只允许回源到 `127.0.0.1` / `::1` / `localhost`，需在目标主机另行部署并验收该服务。 |
 | 记忆 / RAG | SQLite WAL、FTS5、向量候选融合、来源与事实修订 | 是 | 迁的是一致性 SQLite 快照和 User/Anima 数据根，不迁密钥。 |
 | Live2D | 浏览器端 Cubism/Pixi 资源 | 是 | release 的 `web/dist` 必须包含真实 `.model3.json` 与关联纹理/动作资源。 |
 
-`orchestration/ports.py` 已将四类模态隔离出来。新增云端 provider 应新增 adapter、配置校验、超时/取消/隐私测试与真实基准；不得伪装成已支持的 provider 名称。
+`orchestration/ports.py` 已将四类模态隔离出来。登录后的 `/v2/providers` 只公开当前进程真实 binding 的别名与 allowlist，不公开 URL 或凭据；每 Anima 的 Provider snapshot 在实时连接建立时冻结，设置变更从下一连接生效。新增 provider 仍应有配置校验、超时/取消/隐私测试与真实基准。
 
-当前公开发布仍受模型授权证据阻断，且部署安全项需要真机复验；迁移或切流前先阅读[最新差异安全复核](./reviews/differential-security-review-2026-07-24.md)。
+公开发布前仍必须保留 Live2D 模型再分发授权证据，并在目标 Ubuntu 上执行 systemd、权限、备份恢复与回切演练；仓库自动化不能替代这些生产验收。
 
 ## 3. 推荐的低配单机落点
 
@@ -77,7 +76,7 @@
 3. **生成一致性数据库备份**：对每个 SQLite 数据库先 checkpoint，再使用 SQLite `.backup` 生成新文件；不要直接拷贝 WAL 正在写入的 `*.db`。
 4. **校验备份**：在副本上执行 `PRAGMA quick_check;`，并计算 `sha256sum`。保留原始数据为只读，直到新主机长时验收通过。
 5. **导出 release 输入**：只导出 `backend/src`、`backend/pyproject.toml`、`web/dist`、`config/persona.md`；构建产物必须包括 Live2D 模型和纹理。预检脚本是管理工具，可从受信仓库副本单独拷贝，不能混入线上 release。
-6. **模型单独打包**：按实际 Provider 只带 sherpa TTS；若开启 ASR 再带流式 Zipformer；若开启视觉则记录 local-vlm 的独立部署方案。不要把模型、数据或 `/etc/anima` 混在 source tar 内。
+6. **模型单独打包**：仅当实际 Provider 为 sherpa 时携带对应 TTS/ASR 模型；使用云 API 时不把凭据或响应缓存带入 release；若开启视觉则记录 local-vlm 的独立部署方案。不要把模型、数据或 `/etc/anima` 混在 source tar 内。
 7. **准备新的密钥集**：新主机单独创建 admission、telemetry HMAC、DeepSeek、Turnstile/Tunnel 凭据。若需要维持登录/设备 token，会话密钥的迁移与轮转要有明确窗口；不要从备份中顺手复制根目录配置。
 
 推荐的 SQLite 备份形态（每个实际数据库分别执行；路径按主机实际部署替换）：
@@ -100,13 +99,12 @@ sha256sum /srv/anima-export/anima-*.db > /srv/anima-export/SHA256SUMS
 # /path/to/new_code 是已审阅的仓库副本，不是 production release 目录。
 sudo install -m 755 /path/to/new_code/deploy/portable/portable-preflight.sh /usr/local/bin/anima-portable-preflight
 
-# 推荐的最小实际组合：DeepSeek + 本地 sherpa TTS，ASR/VLM 先禁用。
+# API-first 主路径不要求模型资产；先做 release、数据与 Gateway 预检。
 anima-portable-preflight \
   --source /srv/anima/release-input \
-  --tts-model /srv/anima/models/tts/matcha-zh-baker \
-  --profile speech
+  --profile gateway
 
-# 只有在模型已完成 ABI 验证时再打开：
+# 只有本地模型已完成 ABI 与实时性验证时再打开可选 sidecar：
 anima-portable-preflight \
   --source /srv/anima/release-input \
   --tts-model /srv/anima/models/tts/matcha-zh-baker \
@@ -114,25 +112,28 @@ anima-portable-preflight \
   --profile asr
 ```
 
-预检是只读的：它检查 Ubuntu 版本、`x86_64/aarch64`、CPU/RAM/磁盘、构建产物中的真实 Live2D、当前 sherpa 模型所需资产，以及可选 local-vlm URL 必须是 loopback。它不会读取 `.env`，不会泄露任何密钥，也不会声称云端 ASR/TTS/VLM 已可用。
+预检是只读的：它检查 Ubuntu 版本、`x86_64/aarch64`、CPU/RAM/磁盘、构建产物中的真实 Live2D、本地 sherpa 路径所需资产，以及可选 local-vlm URL 必须是 loopback。它不会读取 `.env`、不检测或保证云 API 的真实能力，也不会泄露密钥。
 
 然后在新主机逐项完成：
 
-1. 建立专用服务用户、root-owned runtime 和 models 目录；根据目标 ABI 新建 venv 并安装 `backend` 的 `[gateway,models]` 依赖。**不要复制 ELF2 的 aarch64 venv 到 x86_64。**
+1. 建立专用服务用户、root-owned runtime 和 models 目录；根据目标 OS、CPU 架构和 Python ABI 新建 venv 并安装 `backend` 的 `[gateway,models]` 依赖。**不要跨主机复制已有 venv。**
 2. 复制并校验构建好的 release 输入；将数据恢复到 `/var/lib/anima`，修复为服务用户私有权限。用临时 candidate 数据根做恢复抽样，避免候选版本修改生产数据库。
 3. 在 `/etc/anima` 创建新的最小权限环境文件，生产配置中显式选择：
 
    ```dotenv
    ANIMA_LLM_PROVIDER=deepseek
-   ANIMA_TTS_PROVIDER=sherpa
-   ANIMA_TTS_MODEL_DIR=/srv/anima/models/tts/matcha-zh-baker
-   ANIMA_ASR_PROVIDER=disabled
+   ANIMA_AUDIO_BASE_URL=https://api.openai.com/v1
+   ANIMA_TTS_PROVIDER=openai-compatible
+   ANIMA_TTS_CLOUD_MODEL=gpt-4o-mini-tts
+   ANIMA_TTS_STREAMING_ENABLED=false
+   ANIMA_ASR_PROVIDER=openai-compatible
+   ANIMA_ASR_CLOUD_MODEL=gpt-4o-mini-transcribe
    ANIMA_VISION_PROVIDER=disabled
    ```
 
-   再从独立的 secret store 写入 LLM key、admission secret、telemetry HMAC key、Turnstile key/secret；它们不应出现在该文档、命令历史、release、日志或 Git。
+   再从独立的 secret store 写入 LLM/audio API key、admission secret、telemetry HMAC key、Turnstile key/secret；它们不应出现在该文档、命令历史、release、日志或 Git。`ANIMA_TTS_STREAMING_ENABLED` 只有在该兼容上游已实测支持增量 PCM 时才能开启。
 4. 绑定 Gateway 到 `127.0.0.1:8875`，先通过 candidate 端口、`/v2/health`、真实文本/TTS、Live2D 资源、RAG 读取与恢复的用户数据抽样，再切生产入口。
-5. 若开启 ASR，验证 audio partial/final、打断与 16 kHz PCM 背压；若开启视觉，验证摄像头预览仍保持浏览器端流畅且语义 scheduler 只在 latest-only 采样后回填上下文。
+5. 若开启 ASR，验证 audio partial/final、文字输入/取消后的迟到结果隔离、16 kHz PCM 实时限流，以及云请求的 per-client/global 配额与并发 lease；若开启视觉，验证摄像头预览仍保持浏览器端流畅且语义 scheduler 只在 latest-only 采样后回填上下文。
 
 ### 5.1 systemd 主路径
 
@@ -222,7 +223,7 @@ Cloudflare 对远程管理 Tunnel 的 connector 运行支持 `cloudflared tunnel
 ### Stage A：单机 gateway（现在优先）
 
 - 一个 Gateway + 一个 Cloudflare Tunnel；
-- DeepSeek LLM、sherpa TTS，ASR/VLM 仅在经验证后开启；
+- DeepSeek LLM，TTS 在 sherpa 与已验证的 OpenAI-compatible binding 中选一，ASR/VLM 仅在经验证后开启；
 - SQLite/WAL 仅被该实例写入；
 - 每轮 TurnTrace 记录 provider 时延与队列指标，作为扩容依据。
 
@@ -238,7 +239,7 @@ Cloudflare 对远程管理 Tunnel 的 connector 运行支持 `cloudflared tunnel
 - Gateway 无状态部分可水平扩展，但先引入真正的身份认证、会话路由和共享 rate limit；
 - SQLite per-user 备份可以继续保留，但跨节点写入前需选定单 writer/分片策略，不能把同一 WAL 文件挂在多主机共享目录上；
 - RAG embedding、对象存储、队列、观测与密钥管理独立服务化；
-- 只有在 provider adapter 已实现并有取消、隐私、成本、压测证据后，才切换云端 ASR/TTS/VLM。
+- 只有在目标 provider binding 有取消、隐私、成本、压测证据后，才切换对应 ASR/TTS/VLM；已有通用 Adapter 不等于任意兼容上游已验收。
 
 ## 8. 验收门与回退
 

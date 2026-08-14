@@ -1,6 +1,6 @@
 # Anima v0.0.1 交互时延 SLO
 
-> 下表是发布目标，不是已达成的宣传数据。ELF2 局域网、ELF2 公网、PC 和移动网络必须分别记录 p50/p95/超时率。
+> 下表是发布目标，不是已达成的宣传数据。桌面/移动浏览器、不同网络和每种生产 Provider 组合必须分别记录 p50/p95/超时率。
 
 ## 1. 用户可感知硬指标
 
@@ -79,11 +79,11 @@ reply_completed / cancelled / error
 3. 短句/长句、无视觉/有视觉、热缓存/冷缓存分桶；
 4. PC Wi-Fi、移动网络、注入丢包/高 RTT 各自报告；
 5. 超过硬上限的轮次必须附 trace 分解，不被 p50 掩盖；
-6. ELF2 同时记录 RSS、CPU/NPU、温度、频率和热降频。
+6. 目标服务器同时记录 RSS、CPU/GPU/NPU、温度、频率、热降频与 Provider 限流。
 
 ## 6. 当前证据边界
 
 - `new_code/artifacts/memory-benchmark.json` 只证明运行该脚本的本机 SQLite/FTS/RAG 量级。
 - 本机 Chrome E2E 可证明 Live2D、fake media、协议、同步显字与响应式生命周期，不证明真实 ASR/LLM/TTS/VLM 速度。
 - `frameRate: { ideal: 60, max: 60 }` 只是请求，必须结合 `MediaStreamTrack.getSettings()` 和实际帧回调验证。
-- 只有真实 ELF2/HTTPS/WSS/手机数据能对上表 SLO 给出“通过”结论。
+- 只有真实目标服务器、生产 Provider、HTTPS/WSS 与手机数据能对上表 SLO 给出“通过”结论。

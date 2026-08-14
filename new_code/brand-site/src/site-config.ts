@@ -9,7 +9,7 @@ export const ANIMA_PUBLIC = false;
 export const NAV_ITEMS = [
   { id: "vision", label: "愿景" },
   { id: "pipeline", label: "实时链路" },
-  { id: "architecture", label: "边云协同" },
+  { id: "architecture", label: "系统架构" },
   { id: "products", label: "Anima v0.0.1" },
 ] as const;
 

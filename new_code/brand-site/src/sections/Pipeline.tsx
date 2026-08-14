@@ -1,5 +1,5 @@
 const stages = [
-  { name: "感知", detail: "目标：让画面、声音与文字汇入同一端侧链路" },
+  { name: "感知", detail: "目标：让声音、文字与可选视觉输入汇入统一事件流" },
   { name: "理解", detail: "目标：融合人物、情绪、动作与环境语义" },
   { name: "记忆", detail: "目标：把当下与可检索过往组成有界上下文" },
   { name: "回应", detail: "目标：协同生成语言、语音与角色意图" },
@@ -29,8 +29,8 @@ export function Pipeline() {
         </div>
 
         <div class="pipeline__statement" data-motion="pipeline-statement">
-          <span>不是把云端能力简单搬上开发板。</span>
-          <strong>而是围绕端侧约束重新设计对话链路。</strong>
+          <span>不把体验锁死在某一家模型或某一种部署形态。</span>
+          <strong>用稳定接口，让每项能力都能独立演进。</strong>
         </div>
       </div>
     </section>

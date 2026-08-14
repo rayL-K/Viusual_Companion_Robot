@@ -9,11 +9,11 @@
 
 | 参考方案 | 可借鉴价值 | 不采用部分 | 当前决策 |
 |---|---|---|---|
-| SoulX-Podcast | 中英 TTS、zero-shot 声音克隆、长文本/多说话人、副语言标签 | 当前无流式推理；CUDA/vLLM 依赖；没有 RK3588/RKNN 路径 | **否决进入默认实时主链路**；仅允许在独立 x86_64 NVIDIA 主机上做隔离的高质量 GPU sidecar 试验 |
+| SoulX-Podcast | 中英 TTS、zero-shot 声音克隆、长文本/多说话人、副语言标签 | 当前无流式推理；CUDA/vLLM 依赖；不能运行在通用 CPU Gateway | **否决进入默认实时主链路**；仅允许在独立 x86_64 NVIDIA 主机上做隔离的高质量 GPU sidecar 试验 |
 | Neuro | VTube Studio 动作队列、能力枚举、人工动作控制台的交互模式 | VTube Studio、Steam、虚拟音频线、Windows/NVIDIA 桌面运行时、全局共享 Signals | **不引入其运行时或代码架构**；离散动作思想已 clean-room 落为浏览器 `AvatarActionScheduler` 最小纵切片，仍需真机性能与全资产验收 |
 | AIRI | Web/桌面/移动共享领域包、来源分桶的即时上下文、控制面/高频数据面分离、VAD Worklet、Live2D 资产工具和 Provider 路由 | Vue/Electron/Capacitor 整体迁移；仍处于设计中的通用插件平台；当前近乎空壳的 `memory-pgvector`；计费、游戏和桌面专用模块 | **选择性 clean-room 吸收，不整体迁移**；优先吸收上下文生命周期、模态能力声明和 Live2D 验收方法，保留 Anima 的 Python 实时内核与轻量 Preact 客户端 |
 
-这些结论不改变 Anima v0.0.1 的当前边界：ELF2 可作为受控测试服务器，但 SoulX 仍不进入默认链路；所有公网能力必须经过独立发布门禁。
+这些结论不改变 Anima v0.0.1 的当前边界：生产目标是普通 Linux Server 上的 API-first 服务；SoulX 仍不进入默认实时链路，所有公网能力必须经过独立发布门禁。
 
 ## 2. 证据等级
 
@@ -85,7 +85,7 @@
 **尚未得到证据支持的能力：**
 
 - 官方示例没有覆盖“同一句中频繁中英切换”的 code-switch 质量；
-- 没有仓库级首次可播放音频、热启动 P50/P95、RTF、峰值显存或 RK3588 基准；
+- 没有仓库级首次可播放音频、热启动 P50/P95、RTF 或峰值显存基准；
 - 没有证明其 voice clone 在本项目角色音色、短句和副语言场景中的主观偏好；
 - 没有证明取消请求后 GPU 任务和显存能及时释放。
 
@@ -107,9 +107,9 @@
 
 **架构结论：否决 SoulX-Podcast 进入默认实时主链路。** 当前默认仍保留 sherpa-onnx Matcha/Kokoro/VITS 适配边界，并继续优化真正的首音频和取消路径。
 
-### 3.5 RK3588 aarch64 / 8 GB 可行性
+### 3.5 部署边界
 
-原仓库不能直接部署到 ELF2：
+原仓库不能直接部署到 Anima 的通用 CPU Gateway：
 
 - audio tokenizer、Flow、HiFT 和多个输入均无条件调用 `.cuda()`：
   [soulxpodcast.py L25-L46](https://github.com/Soul-AILab/SoulX-Podcast/blob/5ac9c0e1cfe596396200c7d38e3fd53b7b3fbf4b/soulxpodcast/models/soulxpodcast.py#L25-L46)
@@ -117,13 +117,12 @@
   [requirements.txt](https://github.com/Soul-AILab/SoulX-Podcast/blob/5ac9c0e1cfe596396200c7d38e3fd53b7b3fbf4b/requirements.txt)
 - Docker 基于 NVIDIA vLLM，并替换定制 vLLM fork 文件：
   [runtime/vllm/Dockerfile](https://github.com/Soul-AILab/SoulX-Podcast/blob/5ac9c0e1cfe596396200c7d38e3fd53b7b3fbf4b/runtime/vllm/Dockerfile)
-- 仓库没有 Qwen 主体的 RKNN 导出、Mali 后端或完整的 ARM/NPU 推理图；
 - 官方协作者表示 CPU 理论可通过修改 `.cuda()` 使用，但速度非常慢、不推荐：
   [Issue #18](https://github.com/Soul-AILab/SoulX-Podcast/issues/18)、[Issue #37](https://github.com/Soul-AILab/SoulX-Podcast/issues/37)。
 
-[Issue #26](https://github.com/Soul-AILab/SoulX-Podcast/issues/26) 的第三方日志记录了 vLLM 权重约 3.24 GiB、峰值激活约 1.49 GiB，以及默认 0.9 utilization 下的大量 KV cache 预留。该日志只能证明某个 NVIDIA 环境的行为，不能证明 RK3588 可运行。
+[Issue #26](https://github.com/Soul-AILab/SoulX-Podcast/issues/26) 的第三方日志记录了 vLLM 权重约 3.24 GiB、峰值激活约 1.49 GiB，以及默认 0.9 utilization 下的大量 KV cache 预留。该日志只能证明某个 NVIDIA 环境的行为，不能外推为本项目容量基线。
 
-**架构结论：**不在 Anima v0.0.1 当前阶段把 SoulX 移植 RKNN/NPU；不允许它与 ELF2 上的默认轻量模型争抢内存。真正完成量化、算子替换、ARM/NPU 导出和流式改造属于数周级高风险研发，而不是安装适配。
+**架构结论：**不把 SoulX 及其 CUDA 依赖装入 Gateway 进程；若后续验收，只能作为独立 GPU sidecar 通过稳定的 Provider 边界接入。这样不会让实验性模型污染认证、会话与实时协议的故障域。
 
 ### 3.6 可选 GPU sidecar 试验
 
@@ -141,7 +140,7 @@ flowchart LR
 
 - 独立进程、独立虚拟环境或容器；
 - 不把 SoulX 的 Torch/Transformers/Triton/vLLM 版本带入 Anima Gateway；
-- 不部署到 ELF2；
+- 不部署到 CPU Gateway；
 - 只通过稳定的 `SpeechSynthesizer` adapter 或本地 IPC/HTTP 边界接入；
 - 默认音色仍是轻量实时后端，SoulX 只能由用户主动选择；
 - 参考音频和提取后的说话人特征按用户/Anima 隔离存储。
@@ -203,7 +202,7 @@ Neuro 不是浏览器内 Live2D renderer。其角色层是 Windows 桌面编排�
 作者完整环境是 Windows 11、Python 3.11.9、RTX 4070 12 GB、CUDA 11.8，并依赖 VTube Studio/Steam、虚拟音频线，OBS 为展示层：
 [README L92-L105](https://github.com/kimjammer/Neuro/blob/5e4b4241c41bb40983aee2cb60d65d6bb481842b/README.md#L92-L105)。
 
-这套运行时无法满足 Anima 的任意浏览器、移动端/平板端和 ELF2 服务端边界。
+这套运行时无法满足 Anima 的任意浏览器、移动端/平板端和无桌面依赖的 Linux Server 边界。
 
 ### 4.3 表情、动作与口型事实
 
@@ -343,6 +342,8 @@ AIRI 是成熟度明显高于普通演示项目的多应用 monorepo，但“仓
 4. **浏览器 VAD 放入 Worklet/Worker。** AIRI Web 与 Pocket 的音频采集把实时检测移出 UI 主线程，方向与 Anima 的视频通话式体验一致；后续不能把 VAD、重采样或口型分析重新塞回渲染循环。
 5. **Live2D 工具链以模型能力为准。** AIRI 已拆出眼神跟随、动作管理、表达混合、模型适配、ZIP/OPFS 校验和基于 `wlipsync` 的音素口型。Anima 可借鉴其验收维度，但只有当前模型暴露对应参数时才启用；不为不存在的 AEIOU 参数增加无效依赖。
 6. **多端共享领域能力、外壳按平台拆分。** AIRI 的 Web、Pocket 与 Desktop 共享包，但保留各自权限和原生桥。Anima 继续以响应式 Web 为当前主入口，未来 App 复用协议与领域类型，而不是把浏览器页面原封不动包一层。
+7. **公开目录与真实路由分离。** AIRI 的 Provider Catalog 只公开用户能够选择的能力别名，真实 URL、密钥、轮换和回退池仍属于服务器路由配置。Anima 已采用同一安全边界：Anima Profile 只能保存注册别名及 `model`/`voice`，不能提交或持久化 endpoint、token 或 API key；公开 Catalog 只来自当前进程的真实 binding。当前环境每种能力至多配置一个 binding，Provider 修改在下一条实时连接冻结生效，不将未落地的多上游池描述为已实现。
+8. **语音意图具有可取消时间线。** AIRI 的 speech pipeline 将排队、替换、取消和 TTS 分块作为显式状态，而不是把一次回复当成不可中断的整段 WAV。Anima 吸收其状态语义，但用现有 generation 和二进制音频帧协议实现，不复制其计费或 Flux 依赖。当前 OpenAI-compatible PCM 流式 TTS 默认关闭，只在显式 opt-in 和客户端协商后启用；服务端以约 140 ms 跨 segment 媒体时钟限流，浏览器以 120/200 ms 有界队列播放，其余情况保留 WAV 兼容路径。
 
 ### 5.3 不整体引入 AIRI 的原因
 
@@ -358,7 +359,8 @@ AIRI 是成熟度明显高于普通演示项目的多应用 monorepo，但“仓
 |---|---|---|
 | source-scoped context registry | `orchestration` 的短期感知上下文层 | 引入 `replace`/`append` 生命周期；视觉语义默认 `replace`，不写死到聊天历史 |
 | context compaction | 短期对话窗口 + 长期 RAG | 保留最近成对轮次；摘要与长期记忆分开存储和追踪 |
-| capability model | 现有 `ProviderRegistry` | 扩充 health、data policy、streaming/cancel 能力，不复制插件宿主 |
+| capability model / Provider Catalog | 现有 `ProviderRegistry` + 每 Anima `ProviderSnapshot` | 已实现真实 binding-only/无凭据 Catalog，连接级不可变快照与下一连接生效；当前每能力至多一个环境 binding，继续扩充 health/data policy 后再做多上游池 |
+| speech intent timeline | generation/turn/segment + TTS 音频帧 | clean-room 实现显式 opt-in 的 PCM 分块、跨 segment 媒体时钟和客户端有界队列；未协商时继续 WAV，不引入 AIRI 计费、Flux 或桌面桥 |
 | control/data planes | `/v2` REST + realtime WS 命名空间 | 逻辑分离、共享认证；音视频仍使用有界背压 |
 | VAD worker | 浏览器 MediaSession | 作为语音低时延阶段验收项，不改变服务端 ASR Port |
 | Live2D eye/expression/lipsync tools | `SignalMixer`、`AvatarActionScheduler`、模型能力清单 | 已以 clean-room 方式加入真实语音能量峰驱动的头身节拍和非固定周期微扫视；当前 RMS 口型保留，模型支持音素参数后再评估 `wlipsync` |
@@ -371,7 +373,7 @@ AIRI 是成熟度明显高于普通演示项目的多应用 monorepo，但“仓
 ## 6. 最终架构约束
 
 1. **实时路径优先：**高自然度模型不能以牺牲打断、首音频和稳定性为代价进入默认链路；
-2. **算力隔离：**GPU 高质量 TTS 必须是可关闭的 sidecar，不与 ELF2 核心服务共进程；
+2. **算力隔离：**GPU 高质量 TTS 必须是可关闭的独立 Provider/sidecar，不与 Gateway 核心服务共进程；
 3. **用户显式选择：**昂贵或高延迟声音后端只能由用户主动选择，默认不得自动切换；
 4. **renderer-neutral：**服务端保持通用 AvatarIntent，模型资产名称只在浏览器 capability manifest 内出现；
 5. **连续与离散分层：**SignalMixer/RMS 负责连续生命感和口型，ActionScheduler 负责短时语义动作；

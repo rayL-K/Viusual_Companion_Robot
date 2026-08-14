@@ -4,9 +4,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { chromium } from "playwright-core";
+import { preview } from "vite";
 
 const qaDirectory = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(qaDirectory, "../../..");
+const brandRoot = path.resolve(qaDirectory, "..");
 const artifactDirectory = path.join(repositoryRoot, "output/playwright/brand-motion");
 const baseUrl = new URL(process.env.BASE_URL ?? "http://127.0.0.1:4173/").href;
 const chromePath = process.env.CHROME_PATH ?? "C:/Program Files/Google/Chrome/Application/chrome.exe";
@@ -126,6 +128,12 @@ async function runCase(name, callback) {
   }
 }
 
+const managedPreview = process.env.BASE_URL
+  ? null
+  : await preview({
+      root: brandRoot,
+      preview: { host: "127.0.0.1", port: 4173, strictPort: true },
+    });
 const browser = await chromium.launch({
   headless: true,
   executablePath: chromePath,
@@ -338,7 +346,7 @@ try {
       window.__qaScrollListener = () => window.__qaScrollPositions.push(scrollY);
       addEventListener("scroll", window.__qaScrollListener, { passive: true });
     });
-    await page.getByRole("link", { name: "边云协同" }).click();
+    await page.getByRole("link", { name: "系统架构" }).click();
     await page.waitForTimeout(1_100);
     const anchor = await page.evaluate(() => {
       removeEventListener("scroll", window.__qaScrollListener);
@@ -386,7 +394,7 @@ try {
     assert.equal(policy.hiddenContent, 0, "Reduced motion leaves content hidden");
     assert.equal(policy.animatedLoops, 0, "Reduced motion leaves decorative loops running");
 
-    await page.getByRole("link", { name: "边云协同" }).click();
+    await page.getByRole("link", { name: "系统架构" }).click();
     await page.waitForTimeout(80);
     const anchor = await page.evaluate(() => ({
       header: document.querySelector(".site-header")?.getBoundingClientRect().height ?? 0,
@@ -476,6 +484,14 @@ try {
   });
 } finally {
   await browser.close();
+  if (managedPreview) {
+    await new Promise((resolve, reject) => {
+      managedPreview.httpServer.close((error) => {
+        if (error) reject(error);
+        else resolve();
+      });
+    });
+  }
 }
 
 const report = {

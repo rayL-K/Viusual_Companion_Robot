@@ -1,6 +1,6 @@
 # Anima v0.0.1 实施路线
 
-> 状态以 `new_code/` 源码和可复现测试为准。生产方向为 Linux Server + API-first Provider；ELF2 指标只保留为历史参考。
+> 状态以 `new_code/` 源码和可复现测试为准。生产方向为 Linux Server + API-first Provider，不以特定开发板作为发布前提。
 
 ## P0：可用的单机产品链路
 
@@ -14,13 +14,18 @@
 - 真实 Cubism/Pixi Live2D、口型、视线、表情/动作调度和本地身体交互；
 - PC/手机/平板的响应式结构与本机自动化验证。
 
-### 当前最高优先级
+### 本轮已经落地
 
-1. **API-first Provider Broker**：ASR、Vision、LLM、TTS 均支持服务器预注册 API Adapter、能力声明、健康检查、超时、熔断与受控回退；密钥不下发客户端。
-2. **TurnTrace**：完整打点 ASR final -> context -> LLM first delta/clause -> TTS -> first reply frame -> playback/cancel，并记录实际 Provider/模型/回退深度。
-3. **真流式语音输出**：去掉“LLM 一句 -> 等整段 WAV -> 再继续 LLM”的串行空洞，改为可取消的 TTS 流和 AudioWorklet 排队。
-4. **打断与背压**：控制帧最高优先级，PCM 只允许 120–200 ms 积压，JPEG latest-only；新 `speech_started` 快速静音旧音频。
-5. **ContextPlanner**：为 persona、近期对话、记忆/RAG、视觉和用户输入设定总 token 预算；稳定前缀保持可缓存。
+1. **Provider binding 与公开 Catalog**：ASR、Vision、LLM、TTS 只从服务器预注册 binding 解析；登录后的 Catalog 仅暴露真实可选别名、模型、音色和能力，不下发密钥或上游 URL。当前组合根每种能力至多绑定一个 Provider，不虚报多上游池。
+2. **可协商的流式语音输出**：已实现有界 PCM16 数据面、generation/cancel、分段连续播放、WAV 兼容回退与严格协议校验；生产默认关闭扩展，只有目标上游完成真实 PCM streaming 验收后才启用。
+3. **打断与背压基础**：控制事件不被音频 pacing 锁阻塞，PCM 使用有界队列，JPEG latest-only；新 generation 会清理旧音频和等待中的分块。
+
+### 下一阶段最高优先级
+
+1. **TurnTrace**：完整打点 ASR final -> context -> LLM first delta/clause -> TTS -> first reply frame -> playback/cancel，并记录实际 Provider/模型/回退深度。
+2. **ContextPlanner**：为 persona、近期对话、记忆/RAG、视觉和用户输入设定总 token 预算；稳定前缀保持可缓存。
+3. **多上游生产路由**：在至少两个同能力 Adapter 通过真实验收后，再增加健康检查、熔断、成本预算和受控回退；此前不增加只有一个实现的假 seam。
+4. **真实链路验收**：以选定的生产 ASR/LLM/TTS 组合验证首音频、打断、取消、限流和费用，而不是用 mock E2E 代替供应商结果。
 
 ## P1：感知准确性与连续上下文
 
@@ -50,7 +55,7 @@
 
 ## P2：供应商和容量解耦
 
-- 完成 `ProviderRegistry`：ASR、Vision、LLM、TTS 及可选 RealtimeConversation 各有 capability、data-policy、health、cancel、streaming 和 cost class；
+- 深化 Provider runtime：为 ASR、Vision、LLM、TTS 及可选 RealtimeConversation 补齐 data-policy、health、cancel、streaming 和 cost class；
 - 参考 AIRI Provider Catalog，将用户可见能力别名与服务器真实上游/密钥/回退池分开；
 - API-first 不等于无条件上传：每个 Provider 声明发送的数据类型和保留策略，摄像头/麦克风权限及云处理范围对用户可见；
 - 设置供应商超时、并发上限、circuit breaker 和实际成本指标；

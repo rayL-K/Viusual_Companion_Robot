@@ -1,6 +1,6 @@
 # Anima v0.0.1 系统架构
 
-> 本文以 `new_code/` 当前实现为准。产品入口是 `https://anima.veyralux.org`，生产目标为可替换的 Linux Server。ELF2 只保留历史验证和可复现部署资料，不再是主运行平台。
+> 本文以 `new_code/` 当前实现为准。产品入口是 `https://anima.veyralux.org`，生产目标为可替换的 Linux Server，不以特定开发板作为运行前提。
 
 ## 1. 产品边界
 
@@ -54,12 +54,14 @@ flowchart LR
 
 | 模态 | 稳定能力 | 当前仓库实现 | 尚未实现的替换方向（目标） |
 | --- | --- | --- | --- |
-| ASR | `StreamingAsrProvider` | sherpa-onnx streaming；可显式禁用 | **优先补齐云实时 ASR API**，本地 sherpa 作为隐私/降本选项 |
+| ASR | `StreamingAsrProvider` | sherpa-onnx streaming；OpenAI-compatible 整段语音转写；可显式禁用 | **优先补齐云端真流式 ASR API**，本地 sherpa 作为隐私/降本选项 |
 | Vision | `VisionProvider` | 可选的同机 `local-vlm` HTTP；可显式禁用 | **优先补齐云视觉 API**，再接结构化快路或本地 VLM |
 | LLM | `ChatProvider` | DeepSeek 非思考 SSE | 增加 OpenAI-compatible 与其他流式 LLM Adapter |
-| TTS | `StreamingTtsProvider` | sherpa-onnx 本地 TTS | **优先补齐流式云 TTS API**，本地音色作为可选方案 |
+| TTS | `StreamingTtsProvider` | sherpa-onnx 整段 WAV；OpenAI-compatible 整段 WAV 及显式 opt-in PCM 流 | 增加经真实上游验收的原生流式 TTS Adapter |
 
-组合根根据服务级 Provider Catalog 和 Anima 的已授权别名选择 Adapter。Catalog 借鉴 AIRI 的“用户只看到能力别名、运维配置拥有真实路由”边界：供应商 URL、密钥、并发池和回退链只存在服务器侧；客户端只能选择被公开且已启用的别名。一轮对话冻结不可变 Provider snapshot，中途不切换；失败只按服务器策略进入下一上游，不能由用户 payload 注入地址或密钥。
+组合根根据服务级 Provider Catalog 和 Anima 的已授权别名选择 Adapter。Catalog 借鉴 AIRI 的“用户只看到能力别名、运维配置拥有真实路由”边界：身份验证后的 `/v2/providers` 只枚举本进程实际绑定的别名、允许的模型/音色和流式能力，不含 URL、密钥或 token。当前组合根的环境参数每种能力至多创建一个实际 binding（ASR/Vision 可禁用）；`ProviderResolver` 可容纳更多 binding，但当前部署配置尚未提供多上游同时启用的路由池。
+
+每个 Anima 的选择会先经过服务端别名、模型和音色 allowlist 校验后持久化。兼容字段 `voiceId` 与 TTS snapshot 中的音色必须一致，冲突更新会 fail-closed，运行时不存在两个音色真相。Gateway 在**建立实时连接时**解析并冻结一份不可变 Provider snapshot；当前连接的 ASR/LLM/Vision/TTS 不会中途切换，设置修改只从下一条 WebSocket 连接生效。这不影响人设和回复长度等可在下一轮读取的轻量设置。
 
 Python 包/导入路径 `veyrasoul` 与 `VEYRASOUL_*` 环境变量仅作为已存在的内部兼容名；新部署使用 `ANIMA_*`。这些标识符不是对外产品名，也不代表另一个产品版本。
 
@@ -71,6 +73,7 @@ Python 包/导入路径 `veyrasoul` 与 `VEYRASOUL_*` 环境变量仅作为已�
 
 - `ConversationActor` 是对话的单写者，不把 WebSocket 连接当作所有权。
 - 新发言、挂断或断线递增 `Generation`；旧代 ASR/LLM/TTS/Avatar 事件在写入前再验证。
+- ASR capture 另有独立 `epoch`。取消或文字输入会清空待识别音频、取消云请求或重置本地流，并在回调前后复核 epoch，迟到转写不能启动新轮或覆盖文字轮次。
 - 取消是端到端语义：停止供应商流、丢弃未播音频、静音当前播放并阻止旧代记忆写入。
 - 多标签页/重连不得为同一 Conversation 创建两个同时写入的 actor。
 
@@ -84,7 +87,16 @@ Python 包/导入路径 `veyrasoul` 与 `VEYRASOUL_*` 环境变量仅作为已�
 2. 语音 PCM，只容许约 120–200 ms 有界积压；
 3. 视觉 JPEG，latest-only，拥塞时直接丢弃旧帧。
 
-控制事件不能被图像或回复音频头阻塞。客户端观测 `WebSocket.bufferedAmount`；服务端为各媒体类型使用有界队列。发生拥塞时优先保留打断和最新语义，不保证每帧到达。
+控制事件不能被图像或回复音频头阻塞。客户端观测 `WebSocket.bufferedAmount`；服务端为各媒体类型使用有界队列，每次 WebSocket 下行写入还有独立 deadline（生产默认 5 秒）。发生拥塞时优先保留打断和最新语义，不保证每帧到达；超过 deadline 的慢读连接会被关闭，上游流与 turn lease 随任务退出释放。
+
+上行 16 kHz mono PCM16 使用独立的实时令牌桶：默认 32,000 B/s、最多预借 1 秒、单帧不超过 200 ms。云 ASR 在真正发起付费 HTTP 请求前再取得独立的 per-client/global 分钟配额与全局并发 lease；本地 sherpa 不消耗该云请求配额。它们不与 LLM turn 计数混用，避免攻击者以高速伪造音频绕过对话配额。
+
+回复音频保留两条可协商路径：
+
+- 默认兼容路径仍是整段 `audio/wav` + `reply.segment.ready`；
+- 只有服务端设置 `ANIMA_TTS_STREAMING_ENABLED=true`、当前 TTS binding 声明 PCM streaming，且浏览器在 `session.hello` 中协商 `reply-audio-stream-v1` 时，才使用 24 kHz mono PCM S16LE 流。“OpenAI-compatible”不保证上游实现该扩展，因此开关默认为 `false`。
+
+流式路径中，服务端把 PCM 切为不超过 40 ms 的帧，首帧直接下发，随后以 monotonic 媒体时钟将预发 lead 控制在约 140 ms。该时钟在同一 generation 的多个 segment 间连续，不在每句结尾人为排空；上游本身较慢时不附加等待。浏览器以 120 ms 为起播目标、200 ms 为硬上限连续排程跨 segment 音频；取消、新 generation 或断线会清空队列。
 
 ## 6. 视觉分层
 
@@ -100,7 +112,7 @@ Python 包/导入路径 `veyrasoul` 与 `VEYRASOUL_*` 环境变量仅作为已�
 
 `ContextPlanner` 按总 token 预算组装稳定前缀、近期对话、少量有来源的长期记忆、当前视觉快照和用户本轮输入。稳定内容在前，动态内容在尾部，以利用供应商 prompt cache。
 
-回复链路不允许为了“看起来快”而先显示全文或使用固定死答案。文本在对应音频真正开始播放时呈现；优化手段是流式 LLM、短句切分、流式 TTS、音频预取与 AudioWorklet 排队，不是假进度。
+回复链路不允许为了“看起来快”而先显示全文或使用固定死答案。文本在对应音频真正开始播放时呈现；优化手段是流式 LLM、短句切分、流式 TTS、音频预取与 Web Audio 有界排队，不是假进度。当前预取严格限制为下一分段的首个非空 TTS 块：N 播放时可以准备 N+1，但 N+1 占据单槽位后不会启动 N+2；取消、关闭和合成异常会显式关闭当前与未消费的流。
 
 长期数据按 `UserId/AnimaId` 物理分库。检索候选、`Anima.md`、文档 RAG、声纹/人脸特征和供应商请求都必须经过同一 owner scope。原始音视频默认不进入长期记忆。
 

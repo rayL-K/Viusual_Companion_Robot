@@ -10,7 +10,7 @@ DATA_ROOT="/var/lib/anima"
 TTS_MODEL_DIR=""
 ASR_MODEL_DIR=""
 VISION_URL=""
-PROFILE="speech"
+PROFILE="gateway"
 JSON=false
 STRICT=false
 
@@ -20,16 +20,15 @@ NOTES=()
 
 usage() {
   cat <<'EOF'
-用法：portable-preflight.sh --source <release-input> --tts-model <目录> [选项]
+用法：portable-preflight.sh --source <release-input> [选项]
 
 这是只读预检：不会安装软件、读取密钥、修改服务或请求云端 API。
 
 必填：
   --source DIR        含 backend/、web/dist/、config/persona.md 的构建后 release 输入
-  --tts-model DIR     当前唯一已实现的 TTS（sherpa-onnx）模型目录
-
 可选：
-  --profile NAME      speech（默认）、asr、perception
+  --profile NAME      gateway（默认）、speech、asr、perception
+  --tts-model DIR     sherpa-onnx TTS 模型目录；profile=speech/asr/perception 必填
   --asr-model DIR     sherpa-onnx streaming Zipformer 模型目录；profile=asr/perception 必填
   --vision-url URL    已部署 local-vlm 的 loopback URL；profile=perception 必填
   --data-root DIR     将恢复独立用户数据的文件系统位置（默认 /var/lib/anima）
@@ -38,7 +37,8 @@ usage() {
   -h, --help          显示帮助
 
 profile 仅描述当前已实现的 Provider 组合：
-  speech      DeepSeek 云端 LLM + 本地 sherpa TTS；ASR/VLM 可禁用。
+  gateway     API-first Gateway；ASR/TTS 使用云 Adapter 或显式禁用，不要求本地模型。
+  speech      gateway + 本地 sherpa TTS。
   asr         speech + 本地 sherpa streaming ASR。
   perception  asr + 已独立部署、仅 loopback 可访问的 local-vlm。
 EOF
@@ -89,11 +89,13 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$PROFILE" in
-  speech|asr|perception) ;;
-  *) die_usage "--profile 只能是 speech、asr 或 perception" ;;
+  gateway|speech|asr|perception) ;;
+  *) die_usage "--profile 只能是 gateway、speech、asr 或 perception" ;;
 esac
 [[ -n "$SOURCE_ROOT" ]] || die_usage "缺少 --source"
-[[ -n "$TTS_MODEL_DIR" ]] || die_usage "缺少 --tts-model；当前运行时没有云端 TTS adapter"
+if [[ "$PROFILE" != gateway ]]; then
+  [[ -n "$TTS_MODEL_DIR" ]] || die_usage "profile=${PROFILE} 需要 --tts-model"
+fi
 if [[ "$PROFILE" == asr || "$PROFILE" == perception ]]; then
   [[ -n "$ASR_MODEL_DIR" ]] || die_usage "profile=${PROFILE} 需要 --asr-model"
 fi
@@ -224,7 +226,7 @@ check_os_and_machine() {
   elif (( memory_mb >= 8192 )); then
     pass "内存：${memory_mb} MiB"
   else
-    fail "speech/asr profile 需要至少 8 GiB RAM，当前 ${memory_mb} MiB"
+    fail "gateway/speech/asr profile 需要至少 8 GiB RAM，当前 ${memory_mb} MiB"
   fi
 }
 
@@ -275,7 +277,7 @@ main() {
   check_command sqlite3
   check_source
   check_storage
-  check_tts
+  if [[ "$PROFILE" != gateway ]]; then check_tts; fi
   if [[ "$PROFILE" == asr || "$PROFILE" == perception ]]; then check_asr; fi
   if [[ "$PROFILE" == perception ]]; then check_vision; fi
 

@@ -34,7 +34,7 @@ WebSocket 路径：`/v2/realtime`。
 ```text
 0..3   magic = VSR2
 4      kind: 1=pcm16, 2=jpeg, 3=audio, 4=avatar-viseme
-5      flags: bit0=request media.accepted acknowledgement
+5      flags: kind-specific；上行媒体 bit0=request ACK；下行 AUDIO bit0=PCM stream、bit1=stream start
 6..7   header length = 24 (big endian)
 8..15  sequence (uint64, big endian)
 16..23 timestamp_ms (uint64, big endian)
@@ -42,20 +42,21 @@ WebSocket 路径：`/v2/realtime`。
 ```
 
 - 上行麦克风：PCM16 little-endian、mono、16 kHz，目标每帧 320 samples/20 ms；
+- 上行 PCM 单帧硬限 6,400 bytes（200 ms）；连接预算默认 32,000 B/s、最多预借 1 秒，超过实时速率的帧会以 `pcm_rate_limited` 拒绝；
 - 上行视觉：缩小 JPEG 关键帧，不传本地 60 FPS 原始预览流；
-- 下行 `kind=3`：通用音频容器，实际类型由配对事件的 `contentType` 指定；当前 sherpa TTS 发送 `audio/wav`；
+- 下行 `kind=3`：默认为与 `reply.segment.ready` 配对的整段音频（当前 sherpa 为 `audio/wav`）；协商 `reply-audio-stream-v1` 后为与 `reply.segment.started/chunk` 配对的 24 kHz mono PCM S16LE；
 - `sequence` 在每个方向独立单调递增，用于音频与文本配对或诊断；
-- bit0 默认关闭，避免对每个 20 ms PCM 帧发送 ACK。调试时才按需打开。
+- 上行 PCM/JPEG 的 ACK bit0 默认关闭，避免对每个 20 ms PCM 帧发送 ACK；下行 AUDIO 的 bit0/bit1 按流式协议解释。
 
 ## 4. 客户端事件
 
 ### `session.hello`
 
 ```json
-{"v":2,"type":"session.hello","payload":{"capabilities":["pcm16","jpeg","reply-segments"]}}
+{"v":2,"type":"session.hello","payload":{"capabilities":["pcm16","jpeg","reply-segments","reply-audio-stream-v1"]}}
 ```
 
-当前 Gateway 只返回 `session.hello.ack`，尚未执行能力协商。
+Gateway 在 `session.ready.payload.serverCapabilities` 公布服务端可用能力，并在 `session.hello.ack.payload.capabilities` 仅返回双方完成协商的能力。浏览器只在 Web Audio 低时延 PCM 播放可初始化时才声明 `reply-audio-stream-v1`；未协商时服务端必须使用 WAV 兼容路径。
 
 ### `turn.user_text`
 
@@ -83,7 +84,8 @@ WebSocket 路径：`/v2/realtime`。
 - `personaMarkdown`：1–20000 字符；写入该 User/Anima 的 `Anima.md` 和 SQLite revision；
 - `maxReplyChars`：8–2000，既进入提示约束，也在流式输出端硬截断；
 - `replyDelayMs`：0–10000，用户显式设置的延迟；默认 0，不用于伪造“思考感”；
-- `voiceId`：受限标识符，由当前 TTS Port 验证；不能触发 Vox/SoulX 的隐式自动切换；
+- `voiceId`：受限标识符，由服务端 Catalog allowlist 验证；不能触发 Vox/SoulX 的隐式自动切换，更改后从下一条实时连接生效；
+- `providers.tts.config.voice`：若随 Provider snapshot 提交，必须与兼容字段 `voiceId` 相同；服务端拒绝冲突值，避免界面选择与实际 TTS 音色分叉；
 - `expectedRevision`：必须等于最近一次 `settings.current.revision`；多标签页/多设备旧编辑器会收到 `settings_conflict`，不能静默覆盖新设置；
 - 未知字段、布尔伪装整数或越界值均返回稳定 `invalid_settings` 错误。
 
@@ -97,7 +99,10 @@ WebSocket 路径：`/v2/realtime`。
 | `asr.partial` | 有 ASR 时 | 监听反馈；首次有效 partial 立即取消旧代并进入 listening/barge-in，不开始 LLM |
 | `asr.final` | 有 ASR 时 | 最终文本；自动开始新轮 |
 | `reply.phase` | 是 | 当前发送 `thinking` 和 RAG 是否超时 |
-| `reply.segment.ready` | 是 | 配对文字和 `audioSeq` 已可用 |
+| `reply.segment.ready` | 是 | WAV 兼容路径：整段音频、文字和 `audioSeq` 已可用 |
+| `reply.segment.started` | 协商后 | PCM 流首块元数据、文字、格式和 `audioSeq` |
+| `reply.segment.chunk` | 协商后 | PCM 后续块的 `chunkIndex`、长度和 `audioSeq` |
+| `reply.segment.completed` | 协商后 | 当前 segment 的分块数和字节数校验值 |
 | `reply.completed` | 是 | 服务端本轮生成完成；前端延迟到播放队列空闲后发布 |
 | `turn.cancelled` | 是 | 代际已推进 |
 | `error` | 是 | 稳定错误码，不暴露 Python 异常 |
@@ -148,15 +153,25 @@ WebSocket 路径：`/v2/realtime`。
 
 ## 6. 音频与文字同步
 
-每个回复片段严格按以下顺序发送：
+### 6.1 WAV 兼容路径
 
-1. binary `kind=3`，其 header `sequence=N`；
-2. JSON `reply.segment.ready`，payload 包含 `audioSeq=N`、`text`、`index`、`contentType`；
-3. 浏览器确认两者均存在后加入音频队列；
-4. 该音频实际开始播放时才向 UI 发布 `reply.segment.ready`，从而显示文字；
-5. 新 generation 会清空未播放音频和未配对 map。
+1. 服务端发送 binary `kind=3`，其 header `sequence=N`；
+2. 随后发送 `reply.segment.ready`，payload 包含 `audioSeq=N`、`text`、`index`、`contentType`；
+3. 浏览器配对二者后加入 WAV 队列，只在实际起播时向 UI 发布文字；
+4. 新 generation、取消或断线清空未播放音频和未配对 map。
 
-WebSocket 保序是该策略的当前传输前提。若未来切换 WebRTC data channel 或多连接，必须保留显式 `audioSeq` 配对和代际检查。
+### 6.2 `reply-audio-stream-v1`
+
+此路径默认关闭。只有 OpenAI-compatible TTS binding 在经过真实上游验证后显式设置 `ANIMA_TTS_STREAMING_ENABLED=true`，且客户端成功协商该能力，服务端才请求并下发 PCM 流。未协商、浏览器不支持或服务端开关关闭时，使用 6.1 的 WAV 路径。流式请求已开始后不自动重试或二次计费式切换。
+
+1. 每块仍先发 binary `kind=3`，再发带同一 `audioSeq` 的 JSON；首块使用 `reply.segment.started` 和 `chunkIndex=0`，后续块使用 `reply.segment.chunk`；
+2. 服务端限制单块最多 40 ms，首块直接下发，再以 monotonic 媒体时钟维持约 140 ms 最大预发 lead；时钟跨同 generation 的 segment 连续，慢上游不增加额外等待；
+3. 浏览器对 `generation/turnId/index/chunkIndex/audioSeq`、PCM 格式、flags 和字节数做严格检查。由于 binary 先于 JSON 到达，未配对 map 硬限为 8 帧/1 MiB；
+4. 播放器预缓冲目标为 120 ms、硬上限为 200 ms，同一回复的多个 segment 共用一条连续播放时间线，不会在每句结尾主动排空；
+5. 首块实际起播时才显示对应文字；`reply.segment.completed` 只收尾当前句，`reply.completed` 需等播放尾部真正耗尽后才向 UI 发布；
+6. 新 generation、取消、断线或协议错误会立即停止 PCM 播放并清空未配对帧。
+
+WebSocket 保序是两条路径的当前传输前提。若未来切换 WebRTC data channel 或多连接，必须保留显式 `audioSeq` 配对和代际检查。
 
 ## 7. 可取消代际
 
@@ -164,7 +179,9 @@ WebSocket 保序是该策略的当前传输前提。若未来切换 WebRTC data 
 - 有效 ASR partial 可先用 listening intent 建立更高 generation，从而立刻停止旧音频；
 - 只有匹配 active generation 的音频/文本/完成事件可以生效；
 - 服务端每次新轮先取消旧 `asyncio.Task`，再推进内核 generation；
+- ASR capture 使用独立 epoch；`turn.cancel` 和有效 `turn.user_text` 先使待处理/在途识别失效，ASR 回调在发送事件与启动 turn 前都复核 epoch；
+- 云 ASR 只在取得独立请求 lease 后调用上游；拒绝时返回稳定的 `asr_rate_limited` 或 `server_busy`，且不发起付费 HTTP 请求；
 - 只有当前 generation 能提交记忆；
 - 断开连接会关闭 ASR session 并取消当前轮。
 
-当前协议尚缺 `speech_started`/`speech_ended`、显式 audio playback ACK、断线续传和 backpressure 水位事件；这些属于后续低时延/弱网阶段。
+当前协议尚缺 `speech_started`/`speech_ended`、显式 audio playback ACK、断线续传和 backpressure 水位事件；这些属于后续低时延/弱网阶段。OpenAI-compatible ASR 仍是端点后的整句 HTTP 转写，epoch 和准入只解决取消正确性与成本边界，不代表已经具备供应商原生增量转写。

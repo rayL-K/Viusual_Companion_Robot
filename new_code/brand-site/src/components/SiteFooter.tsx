@@ -7,7 +7,7 @@ export function SiteFooter() {
     <footer class="site-footer">
       <Brand footer />
       <div class="site-footer__about">
-        <p>基于 RK3588 的低时延多模态虚拟陪伴系统</p>
+        <p>API-first 的低时延多模态虚拟陪伴系统</p>
         <small>团队：王文康 · 夏鑫祥</small>
       </div>
       <div class="site-footer__links">

@@ -1,6 +1,6 @@
 # Anima v0.0.1 用户数据隔离与多实例设计
 
-> **文档状态：匿名隔离与个性化纵切片已落地，可信多用户设计仍未完成。** ELF2 可承载受控单机测试；在完成本文验收门槛前，Anima 不得宣称已经具备可信多租户公网能力。
+> **文档状态：匿名隔离与个性化纵切片已落地，可信多用户设计仍未完成。** 当前版本只可承载受控单机测试；在完成本文验收门槛前，Anima 不得宣称已经具备可信多租户公网能力。
 
 > 本文中 `/v2/*` 与 `schema: v1` 分别是网络协议和文件 schema 版本，不是产品代号。
 
@@ -69,7 +69,7 @@ Anima 需要从“一个浏览器会话对应一份共享记忆”的开发原�
 4. 恶意 RAG 文档、对话或 Anima.md 注入指令，诱导模型泄漏系统 prompt、密钥或其他用户数据。
 5. 配置错误导致本应本地处理的音频、图像、文档或生物特征被发送给云端供应商。
 6. 云端模型供应商、代理或本地旁路服务被攻陷，记录请求或返回跨会话内容。
-7. 开发板丢失、备份文件泄漏、服务账号或同机进程越权读取数据。
+7. 服务器磁盘或备份文件泄漏、服务账号或同机进程越权读取数据。
 8. 并发、崩溃、迁移中断、断电或恢复到错误目录造成数据库混用或损坏。
 9. 运维日志、错误响应、指标标签或 trace 记录敏感正文和可枚举 ID。
 
@@ -128,7 +128,7 @@ RequestScope {
 
 ## 5. 程序、配置、密钥与数据完全分离
 
-目标 Linux/ELF2 布局如下；Windows 开发机使用等价 ACL 和独立 data root，但生产边界以 Linux 为准。
+目标 Linux Server 布局如下；Windows 开发机使用等价 ACL 和独立 data root，但生产边界以 Linux 为准。
 
 ```text
 /opt/anima/
@@ -235,8 +235,8 @@ PRAGMA wal_autocheckpoint=1000;
 4. 读连接按请求创建或从只读池取得，不跨线程复用；查询绑定 scope 对应的已打开 Store。
 5. 多个 Session 可以同时访问同一 Anima：短期最近轮次仍按 Session 隔离，长期事实通过 writer 串行合并；generation 仍属于各 Session，不能设为 Anima 全局。
 6. 活跃 Store 使用有界 LRU；淘汰前排空 writer、执行安全 checkpoint 并关闭所有连接。
-7. 不把 SQLite/WAL 放在 SMB/NFS/Cloud Drive。Windows 开发机与 ELF2 都使用本地文件系统。
-8. ELF2 单机优先一个 Gateway 进程维护 Actor/Store 所有权。若未来启用多 worker，必须先引入按 User/Anima 一致性路由或独立 Memory Service，不能让多个进程各自持有冲突的内存状态。
+7. 不把 SQLite/WAL 放在 SMB/NFS/Cloud Drive。Windows 开发机与目标服务器都使用本地文件系统。
+8. 单机部署优先由一个 Gateway 进程维护 Actor/Store 所有权。若未来启用多 worker，必须先引入按 User/Anima 一致性路由或独立 Memory Service，不能让多个进程各自持有冲突的内存状态。
 9. 备份不能直接复制正在写入的 `.db` 文件并漏掉 `-wal/-shm`；必须使用 SQLite Online Backup API 或 `VACUUM INTO` 的受控快照。
 
 ## 8. 认证、Session 与匿名用户升级
@@ -326,7 +326,7 @@ Anima 通用设置至少包括：
 - `SpeechSynthesisPort`
 - `EmbeddingPort` / `RerankerPort`
 - `AvatarIntentPort`（通常本地）
-- `ActionPort`（未来板端设备动作）
+- `ActionPort`（未来可选的实体设备动作）
 
 每个调用由编排器持有 `RequestScope`，但 Adapter 只能收到 `EgressEnvelope`：
 
@@ -475,7 +475,7 @@ schema_migrations(version INTEGER PRIMARY KEY, name TEXT, sha256 TEXT,
 - 派生向量/FTS 可以排除以降低体积，但源文档、切分参数、embedding 模型版本必须存在，以便确定性重建。
 - 每次备份执行 hash 验证；每月至少自动抽样恢复，每个发布候选做一次完整恢复演练。
 
-建议目标（尚未验证）：身份/同意/设置 RPO ≤ 15 分钟，Anima 对话与记忆 RPO ≤ 1 小时，单用户恢复 RTO ≤ 30 分钟，整板灾备 RTO ≤ 4 小时。实际值必须由 ELF2 压测和断网场景确认。
+建议目标（尚未验证）：身份/同意/设置 RPO ≤ 15 分钟，Anima 对话与记忆 RPO ≤ 1 小时，单用户恢复 RTO ≤ 30 分钟，整机灾备 RTO ≤ 4 小时。实际值必须由目标服务器压测、备份恢复演练和断网场景确认。
 
 ### 14.2 恢复
 
@@ -504,34 +504,11 @@ schema_migrations(version INTEGER PRIMARY KEY, name TEXT, sha256 TEXT,
 
 禁止记录：prompt/回复正文、ASR/VLM 原文、原始音视频、文档 chunk、embedding、Anima.md、Cookie/Authorization、API key、绝对用户路径。日志使用 `correlation_id` 和带轮换 salt 的主体摘要；高基数 UserId/SessionId 不作为 metrics label。审计库与业务库分开、追加式写入、权限只写不可改，设置明确保留期和容量上限。
 
-## 16. 实施顺序与当前完成度
+## 16. 实施状态的单一来源
 
-### P0：多用户上线阻断项
+本文件只定义数据隔离不变量和验收门槛，不再复制一份容易过期的开发清单。当前完成度统一维护在 [`implementation-roadmap.md`](implementation-roadmap.md)，架构事实统一维护在 [`architecture.md`](architecture.md)。
 
-1. **部分完成：**服务端 UserId/AnimaId/SessionIdentity 已有；Auth/Directory 和移除 query/localStorage 认证歧义未完成。
-2. **部分完成：**`DataLayout`、每 User/Anima 分库已完成；可信所有权验证和旧全局 facts 人工迁移未完成。
-3. **开发态完成：**RAG/事实/最近轮次从 scope Store 创建，并有匿名/显式用户交叉测试；仍需认证后对象授权测试。
-4. **部分完成：**内部感知/设置异常已使用稳定错误码；WebSocket Origin/鉴权/限流仍未完成。二进制/设置请求已有大小与类型限制，但还不是完整网关策略。
-
-### P1：产品完整性
-
-1. **部分完成：**`Anima.md` revision、回复字数/延迟/音色已完成；多 Anima CRUD 与 provider 选择未完成。
-2. 匿名主体、升级事务、账号/Anima 导出和删除。
-3. Per-Anima writer、WAL checkpoint、LRU Store 生命周期。
-
-### P2：可运维性与供应商切换
-
-1. **部分完成：**核心模态 Port 已建立；`RequestScope`、EgressPolicy、云端同意和 provider registry 未完成。
-2. schema migration runner、加密备份/恢复、审计与隐私指标。
-3. 专用系统用户、程序/数据/密钥目录和 systemd 最小权限。
-
-### P3：增强保护
-
-1. 每用户 DEK/SQLCipher（或经评审的等价方案）、密钥轮换和加密删除。
-2. 生物特征独立 vault、权限和删除流程。
-3. 多进程/多节点一致性路由（只有需要横向扩展时实施）。
-
-**截至本文日期，P0～P3 仍均未完整完成。** 已完成的是匿名物理分区、个性化设置和核心 Port 纵切片；认证、对象授权、完整生命周期、出境策略与可恢复备份仍是发布阻断项。
+目前代码已覆盖 OIDC 会话、精确 Origin、Owner/Anima 对象授权、每 User/Anima 独立状态库、多 Anima CRUD、设置 revision、Provider Catalog/snapshot、实时连接租约和本地自动化越权回归。尚未因此宣称“生产多用户已验收”：真实身份供应商、HTTPS/WSS 入口、加密备份恢复、导出/删除全生命周期、审计保留策略和多实例一致性仍必须在目标 Linux 环境完成证据化验收。
 
 ## 17. 验收测试与发布门禁
 
@@ -578,4 +555,4 @@ schema_migrations(version INTEGER PRIMARY KEY, name TEXT, sha256 TEXT,
 
 ### 17.7 发布结论
 
-只有当以上测试在 Windows 开发环境、ELF2/目标 Linux 本地文件系统和真实 HTTPS/WSS 入口均有可复现报告，并且 P0 全部通过，才允许将 Anima 标记为“支持多用户”。P1/P2 对正式公开服务同样是发布门槛；此前 ELF2 只作为受控测试服务器。
+只有当以上测试在 Windows 开发环境、目标 Linux 本地文件系统和真实 HTTPS/WSS 入口均有可复现报告，并且 P0 全部通过，才允许将 Anima 标记为“支持多用户”。P1/P2 对正式公开服务同样是发布门槛；此前只允许受控测试。

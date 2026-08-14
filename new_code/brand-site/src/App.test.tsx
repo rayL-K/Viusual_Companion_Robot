@@ -21,11 +21,33 @@ describe("VeyraLux brand site", () => {
 
     expect(screen.getByRole("link", { name: "跳到主要内容" }).getAttribute("href")).toBe("#main-content");
     expect(screen.getByRole("navigation", { name: "主要导航" })).toBeTruthy();
-    expect(screen.getByAltText(/ELF 2.*开发板/)).toBeTruthy();
+    expect(screen.getByLabelText("Anima 服务能力边界")).toBeTruthy();
+    expect(screen.getAllByText(/视觉 Provider \/ sidecar 接入中/).length).toBeGreaterThan(0);
     expect(screen.getByAltText(/^Anima v0\.0\.1 桌面端/)).toBeTruthy();
     expect(document.querySelector('[data-motion-layer="living-field"]')).toBeTruthy();
     expect(screen.getByText(/王文康/)).toBeTruthy();
     expect(screen.getAllByRole("link", { name: /GitHub/ })[0]?.getAttribute("href")).toContain("github.com");
+  });
+
+  it("keeps public copy platform-neutral and explicit about unfinished vision integration", () => {
+    const files = [
+      "index.html",
+      "README.md",
+      "src/sections/Hero.tsx",
+      "src/sections/Manifesto.tsx",
+      "src/sections/Pipeline.tsx",
+      "src/sections/Architecture.tsx",
+      "src/sections/Products.tsx",
+      "src/components/SiteFooter.tsx",
+      "src/site-config.ts",
+    ];
+    const publicCopy = files
+      .map((file) => readFileSync(resolve(process.cwd(), file), "utf8"))
+      .join("\n");
+
+    expect(publicCopy).toContain("视觉 Provider / sidecar 接入中");
+    expect(publicCopy).toContain("通用 Linux");
+    expect(publicCopy).toContain("Provider 可替换");
   });
 
   it("keeps every new-window link isolated from the opener", () => {

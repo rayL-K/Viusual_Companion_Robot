@@ -124,13 +124,15 @@ export function useBrandMotion(rootRef: RefObject<HTMLDivElement>, beforeJump: (
           },
         })
           .fromTo(".architecture__copy", { y: 90 }, { y: -30, ease: "none" }, 0)
-          .fromTo(".board-figure__frame", { clipPath: "inset(16% 12% 16% 12% round 9rem)" }, {
-            clipPath: "inset(0% 0% 0% 0% round 1.4rem)",
+          .fromTo(".runtime-map__frame", { scale: 0.94, y: 54, autoAlpha: 0.72 }, {
+            scale: 1,
+            y: 0,
+            autoAlpha: 1,
             ease: "none",
           }, 0)
-          .fromTo(".board-figure__image", { scale: 1.14, yPercent: -4, rotate: -1.6 }, {
-            scale: 1.01,
-            yPercent: 4,
+          .fromTo(".runtime-map__topology", { scale: 0.91, yPercent: -3, rotate: -1.6 }, {
+            scale: 1,
+            yPercent: 3,
             rotate: 0,
             ease: "none",
           }, 0);
